@@ -219,7 +219,7 @@
 
     function loadJscanify() {
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/jscanify@1/dist/jscanify.min.js';
+      script.src = 'vendor/jscanify.js';
       script.onload = () => startCamera();
       script.onerror = () => showScannerUnavailable('Failed to load jscanify');
       document.head.appendChild(script);
