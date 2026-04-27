@@ -49,6 +49,14 @@
           <!-- Corner adjustment on frozen frame -->
           <div id="scanner-corners" style="display:none;">
             <p class="text-sm text-dim text-center mb-1">Drag corners to select document edges</p>
+            <div class="text-center mb-1">
+              <label class="text-xs text-dim" for="scan-crop-looseness">Auto crop looseness</label>
+              <select id="scan-crop-looseness" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
+                <option value="tight">Tight</option>
+                <option value="normal" selected>Normal</option>
+                <option value="wide">Wide</option>
+              </select>
+            </div>
             <div class="scanner-container" id="corner-container">
               <canvas id="corner-canvas"></canvas>
               <div class="corner-handle" data-corner="tl" style="top:10%;left:10%;"></div>
@@ -268,6 +276,7 @@
     let highlightInterval = null;
     let frozenFrame = null;
     let detectedCorners = null;
+    let frameDetectedCorners = null;
     let scanBaseCanvas = null;
 
     document.getElementById('start-camera-btn').addEventListener('click', () => {
@@ -421,28 +430,11 @@
       // Re-detect on the frozen frame (instead of trusting the last live-frame reading)
       // so the initial handles align better with what was actually captured.
       const frameCorners = detectCornersFromCanvas(frozenFrame) || detectedCorners;
+      frameDetectedCorners = frameCorners;
 
       // Read container size after it's visible
       requestAnimationFrame(() => {
-        const container = document.getElementById('corner-container');
-        const w = container.offsetWidth;
-        const h = container.offsetHeight;
-
-        if (frameCorners && frameCorners.topLeftCorner && frameCorners.topRightCorner &&
-            frameCorners.bottomLeftCorner && frameCorners.bottomRightCorner) {
-          const expanded = expandCorners(frameCorners, frozenFrame.width, frozenFrame.height, 0.045);
-          setHandlePos('tl', expanded.topLeftCorner.x / frozenFrame.width * w, expanded.topLeftCorner.y / frozenFrame.height * h);
-          setHandlePos('tr', expanded.topRightCorner.x / frozenFrame.width * w, expanded.topRightCorner.y / frozenFrame.height * h);
-          setHandlePos('bl', expanded.bottomLeftCorner.x / frozenFrame.width * w, expanded.bottomLeftCorner.y / frozenFrame.height * h);
-          setHandlePos('br', expanded.bottomRightCorner.x / frozenFrame.width * w, expanded.bottomRightCorner.y / frozenFrame.height * h);
-        } else {
-          const m = 0.08;
-          setHandlePos('tl', w * m, h * m);
-          setHandlePos('tr', w * (1 - m), h * m);
-          setHandlePos('bl', w * m, h * (1 - m));
-          setHandlePos('br', w * (1 - m), h * (1 - m));
-        }
-        updateCornerOutline();
+        seedCornerHandlesFromCurrentLooseness();
       });
     }
 
@@ -465,7 +457,44 @@
       return Math.max(min, Math.min(max, val));
     }
 
-    function expandCorners(corners, frameWidth, frameHeight, expandRatio) {
+    function getLoosenessProfile() {
+      const value = document.getElementById('scan-crop-looseness').value;
+      if (value === 'tight') return { expandRatio: 0.02, minPadPx: 6 };
+      if (value === 'wide') return { expandRatio: 0.08, minPadPx: 22 };
+      return { expandRatio: 0.045, minPadPx: 14 };
+    }
+
+    function seedCornerHandlesFromCurrentLooseness() {
+      const container = document.getElementById('corner-container');
+      const w = container.offsetWidth;
+      const h = container.offsetHeight;
+
+      if (!frameDetectedCorners || !frozenFrame) {
+        const m = 0.08;
+        setHandlePos('tl', w * m, h * m);
+        setHandlePos('tr', w * (1 - m), h * m);
+        setHandlePos('bl', w * m, h * (1 - m));
+        setHandlePos('br', w * (1 - m), h * (1 - m));
+        updateCornerOutline();
+        return;
+      }
+
+      const profile = getLoosenessProfile();
+      const expanded = expandCornersWithPadding(
+        frameDetectedCorners,
+        frozenFrame.width,
+        frozenFrame.height,
+        profile.expandRatio,
+        profile.minPadPx
+      );
+      setHandlePos('tl', expanded.topLeftCorner.x / frozenFrame.width * w, expanded.topLeftCorner.y / frozenFrame.height * h);
+      setHandlePos('tr', expanded.topRightCorner.x / frozenFrame.width * w, expanded.topRightCorner.y / frozenFrame.height * h);
+      setHandlePos('bl', expanded.bottomLeftCorner.x / frozenFrame.width * w, expanded.bottomLeftCorner.y / frozenFrame.height * h);
+      setHandlePos('br', expanded.bottomRightCorner.x / frozenFrame.width * w, expanded.bottomRightCorner.y / frozenFrame.height * h);
+      updateCornerOutline();
+    }
+
+    function expandCornersWithPadding(corners, frameWidth, frameHeight, expandRatio, minPadPx) {
       const pts = [
         corners.topLeftCorner,
         corners.topRightCorner,
@@ -474,7 +503,6 @@
       ];
       const cx = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
       const cy = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
-      const minPadPx = 14;
 
       function expandPoint(p) {
         const dx = p.x - cx;
@@ -716,6 +744,7 @@
       detectedCorners = null;
       scanBlob = null;
       scanBaseCanvas = null;
+      frameDetectedCorners = null;
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'none';
       document.getElementById('scanner-live').style.display = 'block';
@@ -771,6 +800,11 @@
     });
 
     document.getElementById('scan-document-filter').addEventListener('change', renderScanPreview);
+    document.getElementById('scan-crop-looseness').addEventListener('change', () => {
+      if (document.getElementById('scanner-corners').style.display !== 'none') {
+        seedCornerHandlesFromCurrentLooseness();
+      }
+    });
 
     // ── Load members for owner checkboxes ─────────────────────
 
