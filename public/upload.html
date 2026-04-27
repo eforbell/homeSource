@@ -68,6 +68,13 @@
           <!-- Final preview after crop -->
           <div id="scan-preview" style="display:none;">
             <canvas id="scan-result" style="max-width:100%;border-radius:8px;display:block;margin:0 auto;"></canvas>
+            <div style="margin-top:0.75rem;">
+              <label class="text-sm" style="display:flex;align-items:center;gap:0.5rem;justify-content:center;cursor:pointer;">
+                <input type="checkbox" id="scan-document-filter">
+                Document filter (high contrast)
+              </label>
+              <p class="text-xs text-dim text-center" style="margin-top:0.35rem;">Boosts paper contrast and flattens shadows for easier reading and smaller files.</p>
+            </div>
             <div class="btn-group mt-2" style="justify-content:center;">
               <button id="scan-retake-btn" class="btn">Retake</button>
               <button id="scan-accept-btn" class="btn btn-primary">Use This</button>
@@ -261,6 +268,7 @@
     let highlightInterval = null;
     let frozenFrame = null;
     let detectedCorners = null;
+    let scanBaseCanvas = null;
 
     document.getElementById('start-camera-btn').addEventListener('click', () => {
       document.getElementById('scanner-start').style.display = 'none';
@@ -516,6 +524,78 @@
       return out;
     }
 
+    function percentileFromHistogram(hist, thresholdCount) {
+      let total = 0;
+      for (let i = 0; i < hist.length; i++) {
+        total += hist[i];
+        if (total >= thresholdCount) return i;
+      }
+      return hist.length - 1;
+    }
+
+    function applyDocumentFilter(srcCanvas, outCanvas) {
+      const w = srcCanvas.width;
+      const h = srcCanvas.height;
+      outCanvas.width = w;
+      outCanvas.height = h;
+
+      const srcCtx = srcCanvas.getContext('2d');
+      const outCtx = outCanvas.getContext('2d');
+      const imageData = srcCtx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      const histogram = new Uint32Array(256);
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        histogram[lum]++;
+      }
+
+      const pixelCount = w * h;
+      const low = percentileFromHistogram(histogram, pixelCount * 0.03);
+      const high = percentileFromHistogram(histogram, pixelCount * 0.97);
+      const span = Math.max(1, high - low);
+
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        let normalized = (lum - low) / span;
+        normalized = Math.max(0, Math.min(1, normalized));
+
+        // Slight gamma + soft threshold for "document scanner" effect
+        let value = Math.pow(normalized, 0.82) * 255;
+        if (value <= 42) value = 0;
+        else if (value >= 216) value = 255;
+        else value = ((value - 42) / (216 - 42)) * 255;
+
+        const gray = Math.round(value);
+        data[i] = gray;
+        data[i + 1] = gray;
+        data[i + 2] = gray;
+      }
+
+      outCtx.putImageData(imageData, 0, 0);
+    }
+
+    function setScanPreviewSource(sourceCanvas) {
+      const base = document.createElement('canvas');
+      base.width = sourceCanvas.width;
+      base.height = sourceCanvas.height;
+      base.getContext('2d').drawImage(sourceCanvas, 0, 0);
+      scanBaseCanvas = base;
+      renderScanPreview();
+    }
+
+    function renderScanPreview() {
+      if (!scanBaseCanvas) return;
+      const previewCanvas = document.getElementById('scan-result');
+      const useFilter = document.getElementById('scan-document-filter').checked;
+      if (useFilter) applyDocumentFilter(scanBaseCanvas, previewCanvas);
+      else {
+        previewCanvas.width = scanBaseCanvas.width;
+        previewCanvas.height = scanBaseCanvas.height;
+        previewCanvas.getContext('2d').drawImage(scanBaseCanvas, 0, 0);
+      }
+    }
+
     document.getElementById('corner-crop-btn').addEventListener('click', () => {
       if (!frozenFrame) return;
       const container = document.getElementById('corner-container');
@@ -551,10 +631,7 @@
         return;
       }
 
-      const resultCanvas = document.getElementById('scan-result');
-      resultCanvas.width = result.width;
-      resultCanvas.height = result.height;
-      resultCanvas.getContext('2d').drawImage(result, 0, 0);
+      setScanPreviewSource(result);
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'block';
     });
@@ -563,10 +640,7 @@
 
     document.getElementById('corner-skip-btn').addEventListener('click', () => {
       if (!frozenFrame) return;
-      const resultCanvas = document.getElementById('scan-result');
-      resultCanvas.width = frozenFrame.width;
-      resultCanvas.height = frozenFrame.height;
-      resultCanvas.getContext('2d').drawImage(frozenFrame, 0, 0);
+      setScanPreviewSource(frozenFrame);
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'block';
     });
@@ -585,6 +659,7 @@
       frozenFrame = null;
       detectedCorners = null;
       scanBlob = null;
+      scanBaseCanvas = null;
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'none';
       document.getElementById('scanner-live').style.display = 'block';
@@ -639,6 +714,8 @@
       }, 'image/jpeg', 0.92);
     });
 
+    document.getElementById('scan-document-filter').addEventListener('change', renderScanPreview);
+
     // ── Load members for owner checkboxes ─────────────────────
 
     async function loadMembers() {
@@ -680,6 +757,11 @@
         owner_ids: ownerIds.length ? ownerIds : undefined,
         source_type: activeTab === 'scan' ? 'scan' : activeTab === 'url' ? 'url_import' : 'upload'
       };
+      if (activeTab === 'scan') {
+        metadata.extra_metadata = {
+          scan_filter: document.getElementById('scan-document-filter').checked ? 'document' : 'none'
+        };
+      }
 
       try {
         if (activeTab === 'url') {
