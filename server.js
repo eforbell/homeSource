@@ -20,7 +20,10 @@ const PORT = Number(process.env.PORT || '3008');
 
 ensureDirs();
 
-app.use(express.json({ limit: '1mb' }));
+app.use((req, res, next) => {
+  if (req.headers['content-type']?.startsWith('multipart/')) return next();
+  express.json({ limit: '1mb' })(req, res, next);
+});
 
 // ── Session middleware ──────────────────────────────────────────────────────
 

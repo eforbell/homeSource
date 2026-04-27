@@ -48,8 +48,9 @@
             </div>
           </div>
         </div>
-        <div id="scanner-unavailable" style="display:none;" class="text-center" style="padding:2rem;">
+        <div id="scanner-unavailable" style="display:none; padding:2rem;" class="text-center">
           <p class="text-dim">Camera not available. Use the Upload tab instead.</p>
+          <p id="scanner-error-detail" class="text-xs text-muted mt-1" style="word-break:break-word;"></p>
         </div>
       </div>
     </div>
@@ -209,10 +210,10 @@
             loadJscanify();
           }
         };
-        opencv.onerror = () => showScannerUnavailable();
+        opencv.onerror = () => showScannerUnavailable('Failed to load OpenCV.js');
         document.head.appendChild(opencv);
-      } catch {
-        showScannerUnavailable();
+      } catch (e) {
+        showScannerUnavailable('Init error: ' + e.message);
       }
     }
 
@@ -220,7 +221,7 @@
       const script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/jscanify@1/dist/jscanify.min.js';
       script.onload = () => startCamera();
-      script.onerror = () => showScannerUnavailable();
+      script.onerror = () => showScannerUnavailable('Failed to load jscanify');
       document.head.appendChild(script);
     }
 
@@ -249,14 +250,15 @@
 
       } catch (err) {
         console.error('Camera error:', err);
-        showScannerUnavailable();
+        showScannerUnavailable('Camera: ' + err.message);
       }
     }
 
-    function showScannerUnavailable() {
+    function showScannerUnavailable(reason) {
       document.getElementById('scanner-start').style.display = 'none';
       document.getElementById('scanner-loading').style.display = 'none';
       document.getElementById('scanner-unavailable').style.display = 'block';
+      if (reason) document.getElementById('scanner-error-detail').textContent = reason;
     }
 
     document.getElementById('scan-capture-btn').addEventListener('click', () => {
