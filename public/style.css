@@ -566,8 +566,6 @@ tr:hover td { background: var(--accent-bg); }
 }
 #corner-canvas {
   width: 100%; display: block;
-  max-height: 60vh;
-  object-fit: contain;
 }
 @media (max-width: 768px) {
   .scanner-container video { max-height: 55vh; }
