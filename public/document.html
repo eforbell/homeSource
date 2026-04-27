@@ -216,7 +216,22 @@
           if (previewFile.mime_type === 'application/pdf') {
             preview.innerHTML = `<iframe src="api/documents/${docId}/files/${previewFile.id}/download" class="doc-preview-frame"></iframe>`;
           } else if (previewFile.mime_type.startsWith('image/')) {
-            preview.innerHTML = `<img src="api/documents/${docId}/files/${previewFile.id}/download" class="doc-preview-img">`;
+            preview.innerHTML = `
+              <div class="doc-preview-toolbar">
+                <button class="active" data-zoom="fit">Fit to width</button>
+                <button data-zoom="actual">Full size</button>
+              </div>
+              <div class="doc-preview-wrap fit-width">
+                <img src="api/documents/${docId}/files/${previewFile.id}/download" class="doc-preview-img">
+              </div>`;
+            preview.querySelectorAll('[data-zoom]').forEach(btn => {
+              btn.addEventListener('click', () => {
+                const wrap = preview.querySelector('.doc-preview-wrap');
+                preview.querySelectorAll('[data-zoom]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                wrap.className = 'doc-preview-wrap ' + (btn.dataset.zoom === 'fit' ? 'fit-width' : 'fit-actual');
+              });
+            });
           } else {
             preview.innerHTML = '<div class="text-dim">Preview not available</div>';
           }
