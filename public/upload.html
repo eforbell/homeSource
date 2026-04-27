@@ -59,9 +59,10 @@
                 <polygon id="corner-poly" fill="rgba(217,119,6,0.15)" stroke="#d97706" stroke-width="2"/>
               </svg>
             </div>
-            <div class="btn-group mt-2" style="justify-content:center;">
+            <div class="btn-group mt-2" style="justify-content:center; flex-wrap:wrap;">
               <button id="corner-retake-btn" class="btn">Retake</button>
               <button id="corner-crop-btn" class="btn btn-primary">Crop & Use</button>
+              <button id="corner-skip-btn" class="btn">Use Full Frame</button>
             </div>
           </div>
           <!-- Final preview after crop -->
@@ -309,33 +310,40 @@
 
         const highlightCanvas = document.getElementById('scan-highlight');
         const statusEl = document.getElementById('scan-detect-status');
+        const hlCtx = highlightCanvas.getContext('2d');
         highlightInterval = setInterval(() => {
           try {
             if (!video.videoWidth) return;
             highlightCanvas.width = video.videoWidth;
             highlightCanvas.height = video.videoHeight;
-            const resultCanvas = scanner.highlightPaper(video);
-            if (resultCanvas) {
-              const ctx = highlightCanvas.getContext('2d');
-              ctx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
-              ctx.drawImage(resultCanvas, 0, 0, highlightCanvas.width, highlightCanvas.height);
-            }
+
+            // Single cv.imread — read once, detect contour, draw highlight
             const img = cv.imread(video);
             const contour = scanner.findPaperContour(img);
             if (contour) {
-              statusEl.textContent = 'Document detected — tap to capture';
-              statusEl.style.color = 'var(--accent-light)';
-              detectedCorners = scanner.getCornerPoints(contour);
+              const pts = scanner.getCornerPoints(contour);
+              if (pts.topLeftCorner && pts.topRightCorner && pts.bottomLeftCorner && pts.bottomRightCorner) {
+                detectedCorners = pts;
+                statusEl.textContent = 'Document detected — tap to capture';
+                statusEl.style.color = 'var(--accent-light)';
+                hlCtx.strokeStyle = '#d97706';
+                hlCtx.lineWidth = 4;
+                hlCtx.beginPath();
+                hlCtx.moveTo(pts.topLeftCorner.x, pts.topLeftCorner.y);
+                hlCtx.lineTo(pts.topRightCorner.x, pts.topRightCorner.y);
+                hlCtx.lineTo(pts.bottomRightCorner.x, pts.bottomRightCorner.y);
+                hlCtx.lineTo(pts.bottomLeftCorner.x, pts.bottomLeftCorner.y);
+                hlCtx.closePath();
+                hlCtx.stroke();
+              }
             } else {
               statusEl.textContent = 'Point camera at a document';
               statusEl.style.color = '';
               detectedCorners = null;
             }
             img.delete();
-          } catch (e) {
-            // OpenCV can throw intermittently during detection
-          }
-        }, 200);
+          } catch (e) {}
+        }, 300);
 
       } catch (err) {
         console.error('Camera error:', err);
@@ -352,46 +360,78 @@
 
     // ── Capture: freeze frame → corner adjustment ────────────
 
+    function captureVideoFrame(video) {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+
     document.getElementById('scan-capture-btn').addEventListener('click', () => {
       if (!scanner) return;
       const video = document.getElementById('scan-video');
       if (!video.videoWidth) return;
 
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d').drawImage(video, 0, 0);
-      frozenFrame = canvas;
-
+      // Stop OpenCV processing first — it races with drawImage on iOS
       if (highlightInterval) { clearInterval(highlightInterval); highlightInterval = null; }
 
-      const cornerCanvas = document.getElementById('corner-canvas');
-      cornerCanvas.width = canvas.width;
-      cornerCanvas.height = canvas.height;
-      cornerCanvas.getContext('2d').drawImage(canvas, 0, 0);
+      // Wait a frame for the video pipeline to settle, then capture
+      requestAnimationFrame(() => {
+        frozenFrame = captureVideoFrame(video);
 
-      const container = document.getElementById('corner-container');
-      const w = container.offsetWidth;
-      const h = container.offsetHeight;
+        // Verify we got a real frame (not black)
+        const checkCtx = frozenFrame.getContext('2d');
+        const sample = checkCtx.getImageData(
+          Math.floor(frozenFrame.width / 2), Math.floor(frozenFrame.height / 2), 1, 1
+        ).data;
+        const isBlack = sample[0] === 0 && sample[1] === 0 && sample[2] === 0;
 
-      if (detectedCorners && detectedCorners.topLeftCorner && detectedCorners.topRightCorner &&
-          detectedCorners.bottomLeftCorner && detectedCorners.bottomRightCorner) {
-        setHandlePos('tl', detectedCorners.topLeftCorner.x / canvas.width * w, detectedCorners.topLeftCorner.y / canvas.height * h);
-        setHandlePos('tr', detectedCorners.topRightCorner.x / canvas.width * w, detectedCorners.topRightCorner.y / canvas.height * h);
-        setHandlePos('bl', detectedCorners.bottomLeftCorner.x / canvas.width * w, detectedCorners.bottomLeftCorner.y / canvas.height * h);
-        setHandlePos('br', detectedCorners.bottomRightCorner.x / canvas.width * w, detectedCorners.bottomRightCorner.y / canvas.height * h);
-      } else {
-        const m = 0.08;
-        setHandlePos('tl', w * m, h * m);
-        setHandlePos('tr', w * (1 - m), h * m);
-        setHandlePos('bl', w * m, h * (1 - m));
-        setHandlePos('br', w * (1 - m), h * (1 - m));
-      }
-      updateCornerOutline();
+        if (isBlack) {
+          // Retry once after another frame
+          requestAnimationFrame(() => {
+            frozenFrame = captureVideoFrame(video);
+            showCornerUI();
+          });
+        } else {
+          showCornerUI();
+        }
+      });
+    });
 
+    function showCornerUI() {
+      // Show corners panel first so container has layout dimensions
       document.getElementById('scanner-live').style.display = 'none';
       document.getElementById('scanner-corners').style.display = 'block';
-    });
+
+      const cornerCanvas = document.getElementById('corner-canvas');
+      cornerCanvas.width = frozenFrame.width;
+      cornerCanvas.height = frozenFrame.height;
+      cornerCanvas.getContext('2d').drawImage(frozenFrame, 0, 0);
+
+      // Read container size after it's visible
+      requestAnimationFrame(() => {
+        const container = document.getElementById('corner-container');
+        const w = container.offsetWidth;
+        const h = container.offsetHeight;
+
+        if (detectedCorners && detectedCorners.topLeftCorner && detectedCorners.topRightCorner &&
+            detectedCorners.bottomLeftCorner && detectedCorners.bottomRightCorner) {
+          setHandlePos('tl', detectedCorners.topLeftCorner.x / frozenFrame.width * w, detectedCorners.topLeftCorner.y / frozenFrame.height * h);
+          setHandlePos('tr', detectedCorners.topRightCorner.x / frozenFrame.width * w, detectedCorners.topRightCorner.y / frozenFrame.height * h);
+          setHandlePos('bl', detectedCorners.bottomLeftCorner.x / frozenFrame.width * w, detectedCorners.bottomLeftCorner.y / frozenFrame.height * h);
+          setHandlePos('br', detectedCorners.bottomRightCorner.x / frozenFrame.width * w, detectedCorners.bottomRightCorner.y / frozenFrame.height * h);
+        } else {
+          const m = 0.08;
+          setHandlePos('tl', w * m, h * m);
+          setHandlePos('tr', w * (1 - m), h * m);
+          setHandlePos('bl', w * m, h * (1 - m));
+          setHandlePos('br', w * (1 - m), h * (1 - m));
+        }
+        updateCornerOutline();
+      });
+    }
 
     // ── Draggable corner handles ─────────────────────────────
 
@@ -461,6 +501,21 @@
 
     // ── Crop with perspective correction ─────────────────────
 
+    function canvasCropFallback(src, tl, tr, bl, br) {
+      const minX = Math.min(tl.x, bl.x);
+      const minY = Math.min(tl.y, tr.y);
+      const maxX = Math.max(tr.x, br.x);
+      const maxY = Math.max(bl.y, br.y);
+      const w = Math.round(maxX - minX);
+      const h = Math.round(maxY - minY);
+      if (w < 10 || h < 10) return null;
+      const out = document.createElement('canvas');
+      out.width = w;
+      out.height = h;
+      out.getContext('2d').drawImage(src, minX, minY, w, h, 0, 0, w, h);
+      return out;
+    }
+
     document.getElementById('corner-crop-btn').addEventListener('click', () => {
       if (!frozenFrame) return;
       const container = document.getElementById('corner-container');
@@ -471,26 +526,49 @@
       const tl = getHandlePos('tl'), tr = getHandlePos('tr');
       const bl = getHandlePos('bl'), br = getHandlePos('br');
 
-      const corners = {
-        topLeftCorner: { x: tl.x * scaleX, y: tl.y * scaleY },
-        topRightCorner: { x: tr.x * scaleX, y: tr.y * scaleY },
-        bottomLeftCorner: { x: bl.x * scaleX, y: bl.y * scaleY },
-        bottomRightCorner: { x: br.x * scaleX, y: br.y * scaleY }
-      };
+      const tlS = { x: tl.x * scaleX, y: tl.y * scaleY };
+      const trS = { x: tr.x * scaleX, y: tr.y * scaleY };
+      const blS = { x: bl.x * scaleX, y: bl.y * scaleY };
+      const brS = { x: br.x * scaleX, y: br.y * scaleY };
 
+      let result = null;
       try {
-        const extracted = scanner.extractPaper(frozenFrame, 1000, 1400, corners);
-        if (!extracted) throw new Error('Extraction returned null');
-        const resultCanvas = document.getElementById('scan-result');
-        resultCanvas.width = extracted.width;
-        resultCanvas.height = extracted.height;
-        resultCanvas.getContext('2d').drawImage(extracted, 0, 0);
-        document.getElementById('scanner-corners').style.display = 'none';
-        document.getElementById('scan-preview').style.display = 'block';
+        const corners = {
+          topLeftCorner: tlS, topRightCorner: trS,
+          bottomLeftCorner: blS, bottomRightCorner: brS
+        };
+        result = scanner.extractPaper(frozenFrame, 1000, 1400, corners);
       } catch (err) {
-        toast('Crop failed — try adjusting the corners', 'error');
-        console.error('Crop error:', err);
+        console.warn('OpenCV crop failed, using fallback:', err);
       }
+
+      if (!result) {
+        result = canvasCropFallback(frozenFrame, tlS, trS, blS, brS);
+      }
+
+      if (!result) {
+        toast('Crop failed — try adjusting the corners', 'error');
+        return;
+      }
+
+      const resultCanvas = document.getElementById('scan-result');
+      resultCanvas.width = result.width;
+      resultCanvas.height = result.height;
+      resultCanvas.getContext('2d').drawImage(result, 0, 0);
+      document.getElementById('scanner-corners').style.display = 'none';
+      document.getElementById('scan-preview').style.display = 'block';
+    });
+
+    // ── Skip crop — use full captured frame ────────────────
+
+    document.getElementById('corner-skip-btn').addEventListener('click', () => {
+      if (!frozenFrame) return;
+      const resultCanvas = document.getElementById('scan-result');
+      resultCanvas.width = frozenFrame.width;
+      resultCanvas.height = frozenFrame.height;
+      resultCanvas.getContext('2d').drawImage(frozenFrame, 0, 0);
+      document.getElementById('scanner-corners').style.display = 'none';
+      document.getElementById('scan-preview').style.display = 'block';
     });
 
     // ── Retake from corner view ──────────────────────────────
@@ -515,23 +593,30 @@
       if (video.srcObject) {
         const highlightCanvas = document.getElementById('scan-highlight');
         const statusEl = document.getElementById('scan-detect-status');
+        const hlCtx = highlightCanvas.getContext('2d');
         highlightInterval = setInterval(() => {
           try {
             if (!video.videoWidth) return;
             highlightCanvas.width = video.videoWidth;
             highlightCanvas.height = video.videoHeight;
-            const resultCanvas = scanner.highlightPaper(video);
-            if (resultCanvas) {
-              const ctx = highlightCanvas.getContext('2d');
-              ctx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
-              ctx.drawImage(resultCanvas, 0, 0, highlightCanvas.width, highlightCanvas.height);
-            }
             const img = cv.imread(video);
             const contour = scanner.findPaperContour(img);
             if (contour) {
-              statusEl.textContent = 'Document detected — tap to capture';
-              statusEl.style.color = 'var(--accent-light)';
-              detectedCorners = scanner.getCornerPoints(contour);
+              const pts = scanner.getCornerPoints(contour);
+              if (pts.topLeftCorner && pts.topRightCorner && pts.bottomLeftCorner && pts.bottomRightCorner) {
+                detectedCorners = pts;
+                statusEl.textContent = 'Document detected — tap to capture';
+                statusEl.style.color = 'var(--accent-light)';
+                hlCtx.strokeStyle = '#d97706';
+                hlCtx.lineWidth = 4;
+                hlCtx.beginPath();
+                hlCtx.moveTo(pts.topLeftCorner.x, pts.topLeftCorner.y);
+                hlCtx.lineTo(pts.topRightCorner.x, pts.topRightCorner.y);
+                hlCtx.lineTo(pts.bottomRightCorner.x, pts.bottomRightCorner.y);
+                hlCtx.lineTo(pts.bottomLeftCorner.x, pts.bottomLeftCorner.y);
+                hlCtx.closePath();
+                hlCtx.stroke();
+              }
             } else {
               statusEl.textContent = 'Point camera at a document';
               statusEl.style.color = '';
@@ -539,7 +624,7 @@
             }
             img.delete();
           } catch (e) {}
-        }, 200);
+        }, 300);
       }
     }
 

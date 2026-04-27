@@ -228,7 +228,7 @@
               <div class="doc-preview-toolbar">
                 <button class="active" data-zoom="fit">Fit to width</button>
                 <button data-zoom="actual">Full size</button>
-                ${downloadFile ? `<a href="api/documents/${docId}/files/${downloadFile.id}/download" class="btn btn-sm" target="_blank" rel="noopener">Open File</a>` : ''}
+                ${downloadFile ? `<a href="api/documents/${docId}/files/${downloadFile.id}/download" class="btn btn-sm" download>Download</a>` : ''}
               </div>
               <div class="doc-preview-wrap fit-width">
                 <img src="api/documents/${docId}/files/${imgFile.id}/download" class="doc-preview-img">
@@ -245,7 +245,7 @@
             preview.innerHTML = `
               <div style="text-align:center; padding:2rem;">
                 ${thumbnail ? `<img src="api/documents/${docId}/files/${thumbnail.id}/download" class="doc-preview-img" style="margin-bottom:1rem;">` : '<div style="font-size:3rem; margin-bottom:1rem;">📄</div>'}
-                <a href="api/documents/${docId}/files/${previewFile.id}/download" class="btn btn-primary" target="_blank" rel="noopener">Open PDF</a>
+                <a href="api/documents/${docId}/files/${previewFile.id}/download" class="btn btn-primary" download>Download PDF</a>
               </div>`;
           } else {
             preview.innerHTML = '<div class="text-dim">Preview not available</div>';
