@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Upload</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="upload">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Add Document</h1>
+    </div>
+
+    <!-- Mode tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="scan">Scan</button>
+      <button class="tab" data-tab="upload">Upload File</button>
+      <button class="tab" data-tab="url">Import URL</button>
+    </div>
+
+    <!-- ── Scan tab ───────────────────────────────────────────── -->
+    <div class="tab-panel active" id="tab-scan">
+      <div class="card">
+        <div id="scanner-loading" class="text-center text-dim" style="padding:2rem;">
+          Loading scanner...
+        </div>
+        <div id="scanner-area" style="display:none;">
+          <div class="scanner-container">
+            <video id="scan-video" autoplay playsinline></video>
+            <canvas id="scan-highlight"></canvas>
+          </div>
+          <div class="scanner-controls">
+            <button id="scan-capture-btn" class="scanner-capture-btn" title="Capture"></button>
+          </div>
+          <div id="scan-preview" style="display:none;">
+            <canvas id="scan-result" style="max-width:100%;border-radius:8px;"></canvas>
+            <div class="btn-group mt-2" style="justify-content:center;">
+              <button id="scan-retake-btn" class="btn">Retake</button>
+              <button id="scan-accept-btn" class="btn btn-primary">Use This</button>
+            </div>
+          </div>
+        </div>
+        <div id="scanner-unavailable" style="display:none;" class="text-center" style="padding:2rem;">
+          <p class="text-dim">Camera not available. Use the Upload tab instead.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Upload tab ─────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-upload">
+      <div class="card">
+        <div class="upload-zone" id="drop-zone">
+          <div class="upload-zone-icon">📤</div>
+          <div class="upload-zone-text">
+            <strong>Drop files here</strong> or click to browse<br>
+            <span class="text-xs text-muted">PDF, JPEG, PNG, WEBP, HEIC, TIFF — up to 50MB</span>
+          </div>
+          <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tiff" style="display:none;">
+        </div>
+        <div id="file-preview-area" style="display:none; margin-top:1rem; text-align:center;">
+          <img id="file-thumb" style="max-height:200px; border-radius:8px;">
+          <div id="file-name" class="text-sm text-dim mt-1"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── URL tab ────────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-url">
+      <div class="card">
+        <div class="form-group">
+          <label class="form-label">Document URL</label>
+          <input type="url" id="import-url" class="form-input" placeholder="https://example.com/manual.pdf">
+          <div class="form-hint">PDF, image, or any downloadable document URL</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Metadata (shared) ──────────────────────────────────── -->
+    <div class="card mt-2" id="metadata-form">
+      <h3 style="margin-bottom:1rem;">Document Details</h3>
+      <div class="form-group">
+        <label class="form-label">Title *</label>
+        <input type="text" id="meta-title" class="form-input" placeholder="e.g. Kitchen Fridge Warranty" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <textarea id="meta-desc" class="form-textarea" placeholder="Optional notes about this document"></textarea>
+      </div>
+      <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+        <div class="form-group" style="flex:1; min-width:180px;">
+          <label class="form-label">Type *</label>
+          <select id="meta-type" class="form-select" required>
+            <option value="warranty">Warranty</option>
+            <option value="insurance">Insurance</option>
+            <option value="certificate">Certificate</option>
+            <option value="manual">Manual</option>
+            <option value="receipt">Receipt</option>
+            <option value="contract">Contract</option>
+            <option value="medical">Medical</option>
+            <option value="legal">Legal</option>
+            <option value="tax">Tax</option>
+            <option value="identification">ID</option>
+            <option value="property">Property</option>
+            <option value="vehicle">Vehicle</option>
+            <option value="other" selected>Other</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1; min-width:140px;">
+          <label class="form-label">Issued Date</label>
+          <input type="date" id="meta-issued" class="form-input">
+        </div>
+        <div class="form-group" style="flex:1; min-width:140px;">
+          <label class="form-label">Expiry Date</label>
+          <input type="date" id="meta-expiry" class="form-input">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Owners</label>
+        <div id="owner-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
+      </div>
+
+      <button id="submit-btn" class="btn btn-primary" style="width:100%; margin-top:0.5rem;">Save Document</button>
+      <div id="submit-status" class="text-sm mt-1" style="display:none;"></div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    let selectedFile = null;
+    let activeTab = 'scan';
+    let scanBlob = null;
+
+    // ── Tabs ──────────────────────────────────────────────────
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        activeTab = tab.dataset.tab;
+      });
+    });
+
+    // ── File upload ───────────────────────────────────────────
+
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault(); dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+    function handleFile(file) {
+      selectedFile = file;
+      document.getElementById('file-name').textContent = `${file.name} (${formatBytes(file.size)})`;
+      const preview = document.getElementById('file-preview-area');
+      const thumb = document.getElementById('file-thumb');
+      if (file.type.startsWith('image/')) {
+        thumb.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+      } else {
+        thumb.src = '';
+        preview.style.display = 'block';
+      }
+      if (!document.getElementById('meta-title').value) {
+        document.getElementById('meta-title').value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+      }
+    }
+
+    // ── Scanner ───────────────────────────────────────────────
+
+    let scanner = null;
+    let videoStream = null;
+    let highlightInterval = null;
+
+    async function initScanner() {
+      try {
+        const opencv = document.createElement('script');
+        opencv.src = 'https://docs.opencv.org/4.x/opencv.js';
+        opencv.onload = () => {
+          if (typeof cv !== 'undefined' && cv.then) {
+            cv.then(() => loadJscanify());
+          } else {
+            loadJscanify();
+          }
+        };
+        opencv.onerror = () => showScannerUnavailable();
+        document.head.appendChild(opencv);
+      } catch {
+        showScannerUnavailable();
+      }
+    }
+
+    function loadJscanify() {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/jscanify@1/dist/jscanify.min.js';
+      script.onload = () => startCamera();
+      script.onerror = () => showScannerUnavailable();
+      document.head.appendChild(script);
+    }
+
+    async function startCamera() {
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
+
+        const video = document.getElementById('scan-video');
+        video.srcObject = videoStream;
+        await video.play();
+
+        scanner = new jscanify();
+        document.getElementById('scanner-loading').style.display = 'none';
+        document.getElementById('scanner-area').style.display = 'block';
+
+        const highlightCanvas = document.getElementById('scan-highlight');
+        highlightInterval = setInterval(() => {
+          try {
+            highlightCanvas.width = video.videoWidth;
+            highlightCanvas.height = video.videoHeight;
+            scanner.highlightPaper(video, highlightCanvas);
+          } catch {}
+        }, 100);
+
+      } catch (err) {
+        console.error('Camera error:', err);
+        showScannerUnavailable();
+      }
+    }
+
+    function showScannerUnavailable() {
+      document.getElementById('scanner-loading').style.display = 'none';
+      document.getElementById('scanner-unavailable').style.display = 'block';
+    }
+
+    document.getElementById('scan-capture-btn').addEventListener('click', () => {
+      if (!scanner) return;
+      const video = document.getElementById('scan-video');
+      const resultCanvas = document.getElementById('scan-result');
+
+      try {
+        const extracted = scanner.extractPaper(video, 1000, 1400);
+        resultCanvas.width = extracted.width;
+        resultCanvas.height = extracted.height;
+        resultCanvas.getContext('2d').drawImage(extracted, 0, 0);
+
+        document.querySelector('.scanner-container').style.display = 'none';
+        document.querySelector('.scanner-controls').style.display = 'none';
+        document.getElementById('scan-preview').style.display = 'block';
+      } catch (err) {
+        toast('Could not detect document edges. Try again.', 'error');
+      }
+    });
+
+    document.getElementById('scan-retake-btn').addEventListener('click', () => {
+      document.querySelector('.scanner-container').style.display = 'block';
+      document.querySelector('.scanner-controls').style.display = 'flex';
+      document.getElementById('scan-preview').style.display = 'none';
+      scanBlob = null;
+    });
+
+    document.getElementById('scan-accept-btn').addEventListener('click', () => {
+      const canvas = document.getElementById('scan-result');
+      canvas.toBlob(blob => {
+        scanBlob = blob;
+        selectedFile = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
+        toast('Scan captured! Fill in details and save.', 'success');
+      }, 'image/jpeg', 0.92);
+    });
+
+    // ── Load members for owner checkboxes ─────────────────────
+
+    async function loadMembers() {
+      try {
+        const members = await API.get('api/members');
+        const container = document.getElementById('owner-checkboxes');
+        for (const m of members) {
+          const label = document.createElement('label');
+          label.className = 'flex gap-1';
+          label.style.alignItems = 'center';
+          label.style.cursor = 'pointer';
+          label.innerHTML = `<input type="checkbox" value="${m.id}" class="owner-cb"> ${m.avatar_emoji} ${m.name}`;
+          container.appendChild(label);
+        }
+      } catch {}
+    }
+
+    // ── Submit ────────────────────────────────────────────────
+
+    document.getElementById('submit-btn').addEventListener('click', async () => {
+      const title = document.getElementById('meta-title').value.trim();
+      if (!title) { toast('Title is required', 'error'); return; }
+
+      const btn = document.getElementById('submit-btn');
+      const status = document.getElementById('submit-status');
+      btn.disabled = true;
+      status.style.display = 'block';
+      status.textContent = 'Saving...';
+      status.style.color = 'var(--text-dim)';
+
+      const ownerIds = [...document.querySelectorAll('.owner-cb:checked')].map(cb => Number(cb.value));
+
+      const metadata = {
+        title,
+        description: document.getElementById('meta-desc').value.trim() || undefined,
+        document_type: document.getElementById('meta-type').value,
+        issued_date: document.getElementById('meta-issued').value || undefined,
+        expiry_date: document.getElementById('meta-expiry').value || undefined,
+        owner_ids: ownerIds.length ? ownerIds : undefined,
+        source_type: activeTab === 'scan' ? 'scan' : activeTab === 'url' ? 'url_import' : 'upload'
+      };
+
+      try {
+        if (activeTab === 'url') {
+          const url = document.getElementById('import-url').value.trim();
+          if (!url) { toast('URL is required', 'error'); btn.disabled = false; status.style.display = 'none'; return; }
+          const doc = await API.post('api/import/url', { url, ...metadata });
+          toast('Document imported!', 'success');
+          location.href = `document.html?id=${doc.id}`;
+        } else {
+          if (!selectedFile) { toast('No file selected', 'error'); btn.disabled = false; status.style.display = 'none'; return; }
+          const doc = await API.upload('api/documents', selectedFile, metadata);
+          toast('Document saved!', 'success');
+          location.href = `document.html?id=${doc.id}`;
+        }
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = 'var(--danger)';
+        btn.disabled = false;
+      }
+    });
+
+    function formatBytes(b) {
+      if (b < 1024) return b + ' B';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+      return (b / 1048576).toFixed(1) + ' MB';
+    }
+
+    function toast(msg, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
+
+    loadMembers();
+    initScanner();
+  </script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Settings</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="settings">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Settings</h1>
+    </div>
+
+    <!-- Theme -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Appearance</span></div>
+      <div class="form-group">
+        <label class="form-label">Theme</label>
+        <select id="theme-select" class="form-select" style="width:auto;">
+          <option value="system">System</option>
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Family members -->
+    <div class="card mt-2">
+      <div class="card-header">
+        <span class="card-title">Household Members</span>
+        <button id="add-member-btn" class="btn btn-sm">+ Add Member</button>
+      </div>
+      <div id="members-list"></div>
+    </div>
+
+    <!-- Tags management -->
+    <div class="card mt-2">
+      <div class="card-header">
+        <span class="card-title">Tags</span>
+        <button id="add-tag-btn" class="btn btn-sm">+ Add Tag</button>
+      </div>
+      <div id="tags-list"></div>
+    </div>
+
+    <!-- Audit log -->
+    <div class="card mt-2">
+      <div class="card-header"><span class="card-title">Recent Activity</span></div>
+      <div class="table-wrap">
+        <table id="audit-table">
+          <thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody id="audit-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Account -->
+    <div class="card mt-2">
+      <div class="card-header"><span class="card-title">Account</span></div>
+      <button id="logout-btn" class="btn btn-danger">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- Add member modal -->
+  <div class="modal-backdrop hidden" id="member-modal">
+    <div class="modal">
+      <div class="modal-title">Add Member</div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="new-member-name" class="form-input">
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <div class="form-group" style="flex:1;">
+          <label class="form-label">Role</label>
+          <select id="new-member-role" class="form-select">
+            <option value="parent">Parent</option>
+            <option value="kid">Kid</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label class="form-label">Avatar</label>
+          <select id="new-member-avatar" class="form-select">
+            <option>👨</option><option>👩</option><option>🧑</option><option>👦</option><option>👧</option><option>🧒</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Passphrase (optional)</label>
+        <input type="password" id="new-member-pass" class="form-input">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('member-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-member-btn">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add tag modal -->
+  <div class="modal-backdrop hidden" id="tag-modal">
+    <div class="modal">
+      <div class="modal-title" id="tag-modal-title">Add Tag</div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="tag-name" class="form-input">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Color</label>
+        <input type="color" id="tag-color" value="#d97706" class="form-input" style="height:40px; padding:4px;">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('tag-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-tag-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    // Theme
+    const themeSelect = document.getElementById('theme-select');
+    themeSelect.value = window.SourceTheme?.getPreference() || 'system';
+    themeSelect.addEventListener('change', () => window.SourceTheme?.setPreference(themeSelect.value));
+
+    // Members
+    async function loadMembers() {
+      try {
+        const members = await API.get('api/members');
+        document.getElementById('members-list').innerHTML = members.map(m =>
+          `<div class="flex-between mb-1" style="padding:0.5rem 0; border-bottom:1px solid var(--border);">
+            <div class="flex gap-1" style="align-items:center;">
+              <span style="font-size:1.3rem;">${m.avatar_emoji}</span>
+              <div>
+                <strong>${esc(m.name)}</strong>
+                <span class="text-xs text-muted">${m.role}</span>
+                ${m.has_passphrase ? '<span class="text-xs" style="color:var(--good);">🔑</span>' : ''}
+              </div>
+            </div>
+          </div>`
+        ).join('');
+      } catch {}
+    }
+
+    document.getElementById('add-member-btn').addEventListener('click', () => {
+      document.getElementById('member-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('save-member-btn').addEventListener('click', async () => {
+      try {
+        await API.post('api/members', {
+          name: document.getElementById('new-member-name').value,
+          role: document.getElementById('new-member-role').value,
+          avatar_emoji: document.getElementById('new-member-avatar').value,
+          passphrase: document.getElementById('new-member-pass').value || undefined
+        });
+        document.getElementById('member-modal').classList.add('hidden');
+        toast('Member added', 'success');
+        loadMembers();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    // Tags
+    async function loadTags() {
+      try {
+        const tags = await API.get('api/tags');
+        document.getElementById('tags-list').innerHTML = tags.length
+          ? tags.map(t =>
+            `<div class="flex-between mb-1" style="padding:0.4rem 0;">
+              <span class="tag" style="background:${t.color}22;color:${t.color};">${esc(t.name)}</span>
+              <div class="flex gap-1">
+                <span class="text-xs text-muted">${t.document_count} docs</span>
+                <button class="btn btn-sm btn-danger" onclick="deleteTag(${t.id})">&times;</button>
+              </div>
+            </div>`).join('')
+          : '<span class="text-dim text-sm">No tags yet</span>';
+      } catch {}
+    }
+
+    document.getElementById('add-tag-btn').addEventListener('click', () => {
+      document.getElementById('tag-name').value = '';
+      document.getElementById('tag-color').value = '#d97706';
+      document.getElementById('tag-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('save-tag-btn').addEventListener('click', async () => {
+      try {
+        await API.post('api/tags', {
+          name: document.getElementById('tag-name').value,
+          color: document.getElementById('tag-color').value
+        });
+        document.getElementById('tag-modal').classList.add('hidden');
+        toast('Tag created', 'success');
+        loadTags();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    async function deleteTag(id) {
+      if (!confirm('Delete this tag?')) return;
+      try {
+        await API.del(`api/tags/${id}`);
+        toast('Tag deleted', 'success');
+        loadTags();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+    window.deleteTag = deleteTag;
+
+    // Audit log
+    async function loadAudit() {
+      try {
+        const logs = await API.get('api/audit?limit=30');
+        document.getElementById('audit-tbody').innerHTML = logs.map(l =>
+          `<tr>
+            <td class="text-sm text-dim">${new Date(l.created_at).toLocaleString()}</td>
+            <td>${l.actor_avatar || ''} ${esc(l.actor_name || 'System')}</td>
+            <td>${l.action}</td>
+            <td class="text-sm text-dim">${l.entity_type ? `${l.entity_type} #${l.entity_id}` : ''}</td>
+          </tr>`
+        ).join('') || '<tr><td colspan="4" class="text-dim text-center">No activity yet</td></tr>';
+      } catch {}
+    }
+
+    // Logout
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await API.post('api/auth/logout', {});
+      location.href = './login';
+    });
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function toast(msg, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
+
+    loadMembers();
+    loadTags();
+    loadAudit();
+  </script>
+</body>
+</html>

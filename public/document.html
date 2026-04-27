@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Document</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="documents">
+  <div class="page-content">
+    <div class="page-header">
+      <div>
+        <a href="documents.html" class="text-dim text-sm">&larr; Back to Documents</a>
+        <h1 id="doc-title" style="margin-top:0.25rem;">Loading...</h1>
+      </div>
+      <div class="btn-group" id="doc-actions"></div>
+    </div>
+
+    <div class="grid-2" style="grid-template-columns:1fr 320px;">
+      <!-- Main content -->
+      <div>
+        <!-- File preview -->
+        <div class="card" id="preview-card">
+          <div id="file-preview" style="min-height:300px;" class="flex-center">
+            <span class="text-dim">Loading...</span>
+          </div>
+        </div>
+
+        <!-- Files list -->
+        <div class="card mt-2">
+          <div class="card-header">
+            <span class="card-title">Files</span>
+            <button id="add-file-btn" class="btn btn-sm" style="display:none;">+ Add File</button>
+          </div>
+          <div class="table-wrap">
+            <table id="files-table"><tbody></tbody></table>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="card mt-2" id="desc-card" style="display:none;">
+          <div class="card-header"><span class="card-title">Description</span></div>
+          <p id="doc-description" class="text-dim"></p>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div>
+        <!-- Metadata -->
+        <div class="card">
+          <div class="card-header"><span class="card-title">Details</span></div>
+          <div id="doc-meta"></div>
+        </div>
+
+        <!-- Owners -->
+        <div class="card mt-2">
+          <div class="card-header">
+            <span class="card-title">Owners</span>
+            <button id="add-owner-btn" class="btn btn-sm" style="display:none;">+ Add</button>
+          </div>
+          <div id="owners-list"></div>
+        </div>
+
+        <!-- Tags -->
+        <div class="card mt-2">
+          <div class="card-header">
+            <span class="card-title">Tags</span>
+            <button id="edit-tags-btn" class="btn btn-sm" style="display:none;">Edit</button>
+          </div>
+          <div id="tags-list" class="tags-list"></div>
+        </div>
+
+        <!-- Share links -->
+        <div class="card mt-2" id="share-card" style="display:none;">
+          <div class="card-header">
+            <span class="card-title">Share Links</span>
+            <button id="create-share-btn" class="btn btn-sm">+ Share</button>
+          </div>
+          <div id="shares-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit modal -->
+  <div class="modal-backdrop hidden" id="edit-modal">
+    <div class="modal">
+      <div class="modal-title">Edit Document</div>
+      <div class="form-group">
+        <label class="form-label">Title</label>
+        <input type="text" id="edit-title" class="form-input">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <textarea id="edit-desc" class="form-textarea"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Type</label>
+        <select id="edit-type" class="form-select">
+          <option value="warranty">Warranty</option>
+          <option value="insurance">Insurance</option>
+          <option value="certificate">Certificate</option>
+          <option value="manual">Manual</option>
+          <option value="receipt">Receipt</option>
+          <option value="contract">Contract</option>
+          <option value="medical">Medical</option>
+          <option value="legal">Legal</option>
+          <option value="tax">Tax</option>
+          <option value="identification">ID</option>
+          <option value="property">Property</option>
+          <option value="vehicle">Vehicle</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <div class="form-group" style="flex:1;">
+          <label class="form-label">Issued Date</label>
+          <input type="date" id="edit-issued" class="form-input">
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label class="form-label">Expiry Date</label>
+          <input type="date" id="edit-expiry" class="form-input">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('edit-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-edit-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Owner modal -->
+  <div class="modal-backdrop hidden" id="owner-modal">
+    <div class="modal">
+      <div class="modal-title">Add Owner</div>
+      <div class="form-group">
+        <label class="form-label">Member</label>
+        <select id="owner-member" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Type</label>
+        <select id="owner-type" class="form-select">
+          <option value="owner">Owner</option>
+          <option value="joint">Joint</option>
+          <option value="beneficiary">Beneficiary</option>
+          <option value="custodian">Custodian</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('owner-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-owner-btn">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share modal -->
+  <div class="modal-backdrop hidden" id="share-modal">
+    <div class="modal">
+      <div class="modal-title">Create Share Link</div>
+      <div class="form-group">
+        <label class="form-label">Access Level</label>
+        <select id="share-level" class="form-select">
+          <option value="view">View Only</option>
+          <option value="download">Download</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">PIN Protection (optional)</label>
+        <input type="text" id="share-pin" class="form-input" placeholder="4-8 digit PIN">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Expires After (days, optional)</label>
+        <input type="number" id="share-expires" class="form-input" placeholder="e.g. 7">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('share-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-share-btn">Create Link</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    const docId = new URLSearchParams(location.search).get('id');
+    if (!docId) location.href = 'documents.html';
+
+    let currentDoc = null;
+
+    async function loadDocument() {
+      try {
+        const doc = await API.get(`api/documents/${docId}`);
+        currentDoc = doc;
+
+        document.getElementById('doc-title').textContent = doc.title;
+        document.title = `Home Source — ${doc.title}`;
+
+        // Actions
+        const actions = document.getElementById('doc-actions');
+        actions.innerHTML = `
+          <button class="btn btn-sm" onclick="openEditModal()">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
+        `;
+
+        // File preview
+        const files = doc.files || [];
+        const previewFile = files.find(f => f.file_type === 'processed' || (f.file_type === 'original' && f.mime_type === 'application/pdf')) || files.find(f => f.file_type === 'original');
+        const preview = document.getElementById('file-preview');
+        if (previewFile) {
+          if (previewFile.mime_type === 'application/pdf') {
+            preview.innerHTML = `<iframe src="api/documents/${docId}/files/${previewFile.id}/download" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
+          } else if (previewFile.mime_type.startsWith('image/')) {
+            preview.innerHTML = `<img src="api/documents/${docId}/files/${previewFile.id}/download" style="max-width:100%;border-radius:8px;">`;
+          } else {
+            preview.innerHTML = '<div class="text-dim">Preview not available</div>';
+          }
+        }
+
+        // Files table
+        const tbody = document.querySelector('#files-table tbody');
+        tbody.innerHTML = files.filter(f => f.file_type !== 'thumbnail').map(f =>
+          `<tr>
+            <td>${esc(f.original_filename)}</td>
+            <td class="text-dim text-sm">${f.file_type}</td>
+            <td class="text-dim text-sm">${formatBytes(f.file_size_bytes)}</td>
+            <td><a href="api/documents/${docId}/files/${f.id}/download" class="btn btn-sm" target="_blank">Download</a></td>
+          </tr>`
+        ).join('');
+
+        document.getElementById('add-file-btn').style.display = 'inline-flex';
+
+        // Description
+        if (doc.description) {
+          document.getElementById('desc-card').style.display = 'block';
+          document.getElementById('doc-description').textContent = doc.description;
+        }
+
+        // Metadata
+        const meta = document.getElementById('doc-meta');
+        const rows = [
+          ['Type', `<span class="doc-card-type">${doc.document_type}</span>`],
+          ['Source', doc.source_type],
+          ['Status', doc.status],
+          ['Created', new Date(doc.created_at).toLocaleDateString()]
+        ];
+        if (doc.issued_date) rows.push(['Issued', new Date(doc.issued_date).toLocaleDateString()]);
+        if (doc.expiry_date) rows.push(['Expires', `<span style="color:var(--warn);">${new Date(doc.expiry_date).toLocaleDateString()}</span>`]);
+        if (doc.source_url) rows.push(['Source URL', `<a href="${esc(doc.source_url)}" target="_blank" class="text-sm">Link</a>`]);
+        if (doc.metadata && Object.keys(doc.metadata).length) {
+          for (const [k, v] of Object.entries(doc.metadata)) {
+            rows.push([k.replace(/_/g, ' '), esc(String(v))]);
+          }
+        }
+        meta.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td class="text-dim text-sm" style="white-space:nowrap;">${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+
+        // Owners
+        renderOwners(doc.owners || []);
+        document.getElementById('add-owner-btn').style.display = 'inline-flex';
+
+        // Tags
+        renderTags(doc.tags || []);
+        document.getElementById('edit-tags-btn').style.display = 'inline-flex';
+
+        // Share links
+        document.getElementById('share-card').style.display = 'block';
+        loadShares();
+
+      } catch (err) {
+        document.getElementById('doc-title').textContent = 'Document not found';
+        console.error(err);
+      }
+    }
+
+    function renderOwners(owners) {
+      document.getElementById('owners-list').innerHTML = owners.length
+        ? owners.map(o => `<div class="flex gap-1 mb-1" style="align-items:center;">
+            <span style="font-size:1.2rem;">${o.avatar_emoji}</span>
+            <span>${esc(o.name)}</span>
+            <span class="text-xs text-muted">${o.ownership_type}</span>
+            <button class="btn btn-sm btn-danger" style="margin-left:auto;" onclick="removeOwner(${o.id})">&times;</button>
+          </div>`).join('')
+        : '<span class="text-dim text-sm">No owners assigned</span>';
+    }
+
+    function renderTags(tags) {
+      document.getElementById('tags-list').innerHTML = tags.length
+        ? tags.map(t => `<span class="tag" style="background:${t.color}22;color:${t.color};">${esc(t.name)}</span>`).join('')
+        : '<span class="text-dim text-sm">No tags</span>';
+    }
+
+    async function loadShares() {
+      try {
+        const shares = await API.get(`api/documents/${docId}/shares`);
+        const list = document.getElementById('shares-list');
+        if (!shares.length) {
+          list.innerHTML = '<span class="text-dim text-sm">No share links</span>';
+          return;
+        }
+        list.innerHTML = shares.map(s => {
+          const url = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}share/${s.token}`;
+          const expired = s.expires_at && new Date(s.expires_at) < new Date();
+          return `<div class="flex-between mb-1" style="font-size:0.85rem;">
+            <div>
+              <span class="text-dim">${s.access_level}</span>
+              ${s.pin_hash ? '<span class="tag">PIN</span>' : ''}
+              ${expired ? '<span style="color:var(--danger);">Expired</span>' : ''}
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-sm" onclick="copyToClipboard('${url}')">Copy</button>
+              <button class="btn btn-sm btn-danger" onclick="revokeShare(${s.id})">&times;</button>
+            </div>
+          </div>`;
+        }).join('');
+      } catch {}
+    }
+
+    function openEditModal() {
+      if (!currentDoc) return;
+      document.getElementById('edit-title').value = currentDoc.title;
+      document.getElementById('edit-desc').value = currentDoc.description || '';
+      document.getElementById('edit-type').value = currentDoc.document_type;
+      document.getElementById('edit-issued').value = currentDoc.issued_date || '';
+      document.getElementById('edit-expiry').value = currentDoc.expiry_date || '';
+      document.getElementById('edit-modal').classList.remove('hidden');
+    }
+
+    document.getElementById('save-edit-btn').addEventListener('click', async () => {
+      try {
+        await API.put(`api/documents/${docId}`, {
+          title: document.getElementById('edit-title').value,
+          description: document.getElementById('edit-desc').value,
+          document_type: document.getElementById('edit-type').value,
+          issued_date: document.getElementById('edit-issued').value || null,
+          expiry_date: document.getElementById('edit-expiry').value || null
+        });
+        document.getElementById('edit-modal').classList.add('hidden');
+        toast('Document updated', 'success');
+        loadDocument();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    async function archiveDoc() {
+      if (!confirm('Archive this document?')) return;
+      try {
+        await API.del(`api/documents/${docId}`);
+        location.href = 'documents.html';
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // Owner management
+    document.getElementById('add-owner-btn').addEventListener('click', async () => {
+      const select = document.getElementById('owner-member');
+      select.innerHTML = '';
+      try {
+        const members = await API.get('api/members');
+        for (const m of members) {
+          select.innerHTML += `<option value="${m.id}">${m.avatar_emoji} ${m.name}</option>`;
+        }
+      } catch {}
+      document.getElementById('owner-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('save-owner-btn').addEventListener('click', async () => {
+      try {
+        await API.post(`api/documents/${docId}/owners`, {
+          member_id: Number(document.getElementById('owner-member').value),
+          ownership_type: document.getElementById('owner-type').value
+        });
+        document.getElementById('owner-modal').classList.add('hidden');
+        toast('Owner added', 'success');
+        loadDocument();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    async function removeOwner(memberId) {
+      try {
+        await API.del(`api/documents/${docId}/owners/${memberId}`);
+        toast('Owner removed', 'success');
+        loadDocument();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // Share management
+    document.getElementById('create-share-btn').addEventListener('click', () => {
+      document.getElementById('share-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('save-share-btn').addEventListener('click', async () => {
+      try {
+        const days = Number(document.getElementById('share-expires').value);
+        const body = {
+          access_level: document.getElementById('share-level').value,
+          pin: document.getElementById('share-pin').value || undefined,
+          expires_at: days ? new Date(Date.now() + days * 86400000).toISOString() : undefined
+        };
+        const link = await API.post(`api/documents/${docId}/share`, body);
+        document.getElementById('share-modal').classList.add('hidden');
+        const url = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}share/${link.token}`;
+        copyToClipboard(url);
+        toast('Share link created and copied!', 'success');
+        loadShares();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    async function revokeShare(id) {
+      try {
+        await API.del(`api/shares/${id}`);
+        toast('Share link revoked', 'success');
+        loadShares();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+
+    // File upload
+    document.getElementById('add-file-btn').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tiff';
+      input.addEventListener('change', async () => {
+        if (!input.files[0]) return;
+        try {
+          await API.upload(`api/documents/${docId}/files`, input.files[0]);
+          toast('File added', 'success');
+          loadDocument();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+      input.click();
+    });
+
+    // Utils
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function formatBytes(b) {
+      if (b < 1024) return b + ' B';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+      return (b / 1048576).toFixed(1) + ' MB';
+    }
+    function toast(msg, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
+
+    loadDocument();
+  </script>
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Backup</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="backup">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Backup & Export</h1>
+    </div>
+
+    <!-- Posture overview -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Backup Posture</span>
+        <div id="posture-badge" class="posture-badge posture-none">
+          <span class="posture-dot"></span>
+          <span id="posture-label">Loading...</span>
+        </div>
+      </div>
+      <div id="posture-details" class="text-dim text-sm"></div>
+    </div>
+
+    <!-- Export actions -->
+    <div class="card mt-2">
+      <div class="card-header"><span class="card-title">Create Backup</span></div>
+      <p class="text-dim text-sm mb-2">Export all documents and metadata as a compressed archive. Save to USB drive or external media for offline storage.</p>
+
+      <div class="form-group">
+        <label class="flex gap-1" style="align-items:center; cursor:pointer;">
+          <input type="checkbox" id="encrypt-backup">
+          <span>Encrypt backup (AES-256-GCM)</span>
+        </label>
+      </div>
+      <div id="passphrase-group" class="form-group" style="display:none;">
+        <label class="form-label">Encryption Passphrase</label>
+        <input type="password" id="backup-passphrase" class="form-input" placeholder="Strong passphrase for encryption">
+        <div class="form-hint">You will need this passphrase to decrypt the backup. Store it securely.</div>
+      </div>
+
+      <button id="export-btn" class="btn btn-primary">Create Backup</button>
+      <div id="export-status" class="text-sm mt-1" style="display:none;"></div>
+    </div>
+
+    <!-- Backup policy -->
+    <div class="card mt-2">
+      <div class="card-header"><span class="card-title">Backup Policy</span></div>
+      <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+        <div class="form-group" style="flex:1; min-width:180px;">
+          <label class="form-label">Expected Frequency</label>
+          <select id="policy-frequency" class="form-select">
+            <option value="7">Weekly</option>
+            <option value="14">Every 2 weeks</option>
+            <option value="30">Monthly</option>
+            <option value="90">Quarterly</option>
+            <option value="180">Every 6 months</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1; min-width:180px;">
+          <label class="form-label">Warn Overdue After (days)</label>
+          <input type="number" id="policy-warn" class="form-input" value="7" min="1" max="30">
+        </div>
+      </div>
+      <button id="save-policy-btn" class="btn">Save Policy</button>
+    </div>
+
+    <!-- Backup history -->
+    <div class="card mt-2">
+      <div class="card-header"><span class="card-title">Backup History</span></div>
+      <div class="table-wrap">
+        <table id="backup-table">
+          <thead><tr><th>Date</th><th>Type</th><th>Status</th><th>Size</th><th>Docs</th><th></th></tr></thead>
+          <tbody id="backup-tbody"></tbody>
+        </table>
+      </div>
+      <div id="no-backups" class="text-dim text-sm text-center mt-1" style="display:none;">No backups yet</div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    document.getElementById('encrypt-backup').addEventListener('change', e => {
+      document.getElementById('passphrase-group').style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    async function loadStatus() {
+      try {
+        const status = await API.get('api/backup/status');
+
+        const badge = document.getElementById('posture-badge');
+        const label = document.getElementById('posture-label');
+        const cls = status.posture === 'due_soon' ? 'due-soon' : status.posture;
+        badge.className = `posture-badge posture-${cls}`;
+        const labels = { good: 'On Track', due_soon: 'Due Soon', overdue: 'Overdue', none: 'No Backups' };
+        label.textContent = labels[status.posture] || 'Unknown';
+
+        const details = document.getElementById('posture-details');
+        if (status.last_backup) {
+          const last = new Date(status.last_backup.completed_at);
+          const next = status.next_expected ? new Date(status.next_expected) : null;
+          details.innerHTML = `Last backup: <strong>${last.toLocaleDateString()}</strong> (${status.last_backup.document_count} docs, ${formatBytes(status.last_backup.file_size_bytes)})${next ? `<br>Next expected: <strong>${next.toLocaleDateString()}</strong>` : ''}`;
+        } else {
+          details.textContent = 'No backups have been created yet. Create your first backup to protect your documents.';
+        }
+
+        // Policy
+        document.getElementById('policy-frequency').value = status.policy.frequency_days;
+        document.getElementById('policy-warn').value = status.policy.notify_overdue_days;
+
+      } catch (err) { console.error(err); }
+    }
+
+    async function loadHistory() {
+      try {
+        const logs = await API.get('api/backup/log');
+        const tbody = document.getElementById('backup-tbody');
+        const noBackups = document.getElementById('no-backups');
+
+        if (!logs.length) {
+          tbody.innerHTML = '';
+          noBackups.style.display = 'block';
+          return;
+        }
+        noBackups.style.display = 'none';
+
+        tbody.innerHTML = logs.map(l => {
+          const statusCls = l.status === 'completed' ? 'color:var(--good)' : l.status === 'failed' ? 'color:var(--danger)' : 'color:var(--warn)';
+          return `<tr>
+            <td class="text-sm">${new Date(l.started_at).toLocaleString()}</td>
+            <td>${l.backup_type}${l.encrypted ? ' 🔒' : ''}</td>
+            <td style="${statusCls}">${l.status}</td>
+            <td class="text-sm">${l.file_size_bytes ? formatBytes(l.file_size_bytes) : '—'}</td>
+            <td class="text-sm">${l.document_count ?? '—'}</td>
+            <td>${l.status === 'completed' && l.file_path ? `<a href="api/backup/download/${encodeURIComponent(l.file_path)}" class="btn btn-sm">Download</a>` : (l.error_message || '')}</td>
+          </tr>`;
+        }).join('');
+      } catch {}
+    }
+
+    document.getElementById('export-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('export-btn');
+      const status = document.getElementById('export-status');
+      const encrypted = document.getElementById('encrypt-backup').checked;
+      const passphrase = document.getElementById('backup-passphrase').value;
+
+      if (encrypted && !passphrase) { toast('Passphrase required for encrypted backup', 'error'); return; }
+
+      btn.disabled = true;
+      status.style.display = 'block';
+      status.textContent = 'Creating backup... this may take a moment.';
+      status.style.color = 'var(--text-dim)';
+
+      try {
+        const result = await API.post('api/backup/export', { encrypted, passphrase: encrypted ? passphrase : undefined });
+        status.textContent = `Backup created: ${result.file} (${formatBytes(result.size_bytes)}, ${result.document_count} docs)`;
+        status.style.color = 'var(--good)';
+        toast('Backup created successfully!', 'success');
+        loadStatus();
+        loadHistory();
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = 'var(--danger)';
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('save-policy-btn').addEventListener('click', async () => {
+      try {
+        await API.put('api/backup/policy', {
+          frequency_days: Number(document.getElementById('policy-frequency').value),
+          notify_overdue_days: Number(document.getElementById('policy-warn').value)
+        });
+        toast('Policy saved', 'success');
+        loadStatus();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    function formatBytes(b) {
+      if (!b) return '0 B';
+      if (b < 1024) return b + ' B';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+      return (b / 1048576).toFixed(1) + ' MB';
+    }
+
+    function toast(msg, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
+
+    loadStatus();
+    loadHistory();
+  </script>
+</body>
+</html>

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Shared Document</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <div class="page-content" style="max-width:700px; margin:2rem auto;">
+    <div style="text-align:center; margin-bottom:1.5rem;">
+      <span style="font-size:2rem;">📁</span>
+      <h2 style="margin-top:0.25rem;">Home Source</h2>
+      <p class="text-dim text-sm">Shared Document</p>
+    </div>
+
+    <!-- PIN gate -->
+    <div class="card" id="pin-gate" style="display:none;">
+      <div class="text-center">
+        <h3 id="pin-title">Protected Document</h3>
+        <p class="text-dim text-sm mt-1">Enter the PIN to view this document.</p>
+      </div>
+      <div class="form-group mt-2">
+        <input type="password" id="pin-input" class="form-input" placeholder="Enter PIN" style="text-align:center; font-size:1.2rem; letter-spacing:0.3em;" maxlength="8" autofocus>
+      </div>
+      <button id="pin-submit" class="btn btn-primary" style="width:100%;">Verify</button>
+      <div id="pin-error" class="text-sm mt-1" style="color:var(--danger); display:none;"></div>
+    </div>
+
+    <!-- Document view -->
+    <div id="doc-view" style="display:none;">
+      <div class="card">
+        <h2 id="share-doc-title"></h2>
+        <div class="flex gap-1 mt-1">
+          <span id="share-doc-type" class="doc-card-type"></span>
+          <span id="share-access-badge" class="tag"></span>
+        </div>
+        <p id="share-doc-desc" class="text-dim mt-1"></p>
+      </div>
+
+      <div class="card mt-2" id="share-preview-card">
+        <div id="share-file-preview" class="flex-center" style="min-height:300px;"></div>
+      </div>
+
+      <div id="share-download-area" class="mt-2" style="display:none;">
+        <div class="card">
+          <h3>Files</h3>
+          <div class="table-wrap mt-1">
+            <table id="share-files"><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Not found -->
+    <div id="not-found" class="empty-state" style="display:none;">
+      <div class="empty-state-icon">🔗</div>
+      <div class="empty-state-title">Link Not Found</div>
+      <p class="text-dim">This share link may have expired, been revoked, or reached its usage limit.</p>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script>
+    'use strict';
+
+    const token = location.pathname.split('/share/')[1] || new URLSearchParams(location.search).get('token');
+    if (!token) showNotFound();
+
+    let shareData = null;
+
+    async function loadShare() {
+      try {
+        const data = await API.get(`api/share/${token}`);
+
+        if (data.needs_pin) {
+          document.getElementById('pin-gate').style.display = 'block';
+          document.getElementById('pin-title').textContent = data.document_title || 'Protected Document';
+          return;
+        }
+
+        showDocument(data);
+      } catch {
+        showNotFound();
+      }
+    }
+
+    function showDocument(data) {
+      shareData = data;
+      const doc = data.document;
+
+      document.getElementById('doc-view').style.display = 'block';
+      document.getElementById('pin-gate').style.display = 'none';
+      document.getElementById('share-doc-title').textContent = doc.title;
+      document.getElementById('share-doc-type').textContent = doc.document_type;
+      document.getElementById('share-access-badge').textContent = data.access_level === 'download' ? 'Download allowed' : 'View only';
+      document.getElementById('share-doc-desc').textContent = doc.description || '';
+      document.title = `Home Source — ${doc.title}`;
+
+      const files = doc.files || [];
+      const previewFile = files.find(f => f.file_type === 'processed' || (f.file_type === 'original' && f.mime_type === 'application/pdf')) || files.find(f => f.file_type === 'original');
+
+      const preview = document.getElementById('share-file-preview');
+      if (data.access_level === 'download' && previewFile) {
+        if (previewFile.mime_type === 'application/pdf') {
+          preview.innerHTML = `<iframe src="api/share/${token}/files/${previewFile.id}/download" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
+        } else if (previewFile.mime_type.startsWith('image/')) {
+          preview.innerHTML = `<img src="api/share/${token}/files/${previewFile.id}/download" style="max-width:100%;border-radius:8px;">`;
+        }
+      } else {
+        const thumbFile = files.find(f => f.file_type === 'thumbnail');
+        if (thumbFile && data.access_level === 'download') {
+          preview.innerHTML = `<img src="api/share/${token}/files/${thumbFile.id}/download" style="max-width:300px;border-radius:8px;">`;
+        } else {
+          preview.innerHTML = '<div class="text-dim" style="font-size:4rem;">📄</div>';
+        }
+      }
+
+      if (data.access_level === 'download' && files.length) {
+        document.getElementById('share-download-area').style.display = 'block';
+        const tbody = document.querySelector('#share-files tbody');
+        tbody.innerHTML = files.filter(f => f.file_type !== 'thumbnail').map(f =>
+          `<tr>
+            <td>${esc(f.original_filename)}</td>
+            <td class="text-sm text-dim">${formatBytes(f.file_size_bytes)}</td>
+            <td><a href="api/share/${token}/files/${f.id}/download" class="btn btn-sm btn-primary" download>Download</a></td>
+          </tr>`
+        ).join('');
+      }
+    }
+
+    function showNotFound() {
+      document.getElementById('not-found').style.display = 'block';
+    }
+
+    document.getElementById('pin-submit')?.addEventListener('click', async () => {
+      const pin = document.getElementById('pin-input').value;
+      try {
+        const data = await API.post(`api/share/${token}/verify`, { pin });
+        showDocument(data);
+      } catch {
+        const el = document.getElementById('pin-error');
+        el.textContent = 'Invalid PIN. Try again.';
+        el.style.display = 'block';
+      }
+    });
+
+    document.getElementById('pin-input')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('pin-submit').click();
+    });
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function formatBytes(b) {
+      if (!b) return '0 B';
+      if (b < 1024) return b + ' B';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+      return (b / 1048576).toFixed(1) + ' MB';
+    }
+
+    if (token) loadShare();
+  </script>
+</body>
+</html>

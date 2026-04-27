@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Login</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <div class="page-content" style="max-width:400px; margin:5rem auto; padding:1.5rem;">
+    <div style="text-align:center; margin-bottom:2rem;">
+      <div style="font-size:3rem;">📁</div>
+      <h1 style="margin-top:0.5rem;">Home Source</h1>
+      <p class="text-dim">Sign in to your document vault</p>
+    </div>
+
+    <div class="card">
+      <div id="member-picker" style="display:none;">
+        <p class="form-label" style="margin-bottom:0.5rem;">Who are you?</p>
+        <div id="member-list" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;"></div>
+      </div>
+
+      <form id="login-form">
+        <input type="hidden" id="login-name" value="">
+
+        <div class="form-group">
+          <label class="form-label" for="login-pass">Passphrase</label>
+          <input type="password" id="login-pass" class="form-input" placeholder="Enter your passphrase" required autofocus>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width:100%;">Sign In</button>
+
+        <div id="login-error" class="text-sm" style="color:var(--danger); margin-top:0.75rem; display:none;"></div>
+      </form>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script>
+    'use strict';
+
+    let selectedName = '';
+
+    async function loadMembers() {
+      try {
+        const members = await API.get('api/members');
+        if (members.length <= 1) {
+          selectedName = members[0]?.name || '';
+          document.getElementById('login-name').value = selectedName;
+          return;
+        }
+
+        const picker = document.getElementById('member-picker');
+        const list = document.getElementById('member-list');
+        picker.style.display = 'block';
+
+        for (const m of members) {
+          if (!m.has_passphrase) continue;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm';
+          btn.textContent = `${m.avatar_emoji} ${m.name}`;
+          btn.addEventListener('click', () => {
+            list.querySelectorAll('.btn').forEach(b => b.classList.remove('btn-primary'));
+            btn.classList.add('btn-primary');
+            selectedName = m.name;
+            document.getElementById('login-name').value = m.name;
+            document.getElementById('login-pass').focus();
+          });
+          list.appendChild(btn);
+        }
+
+        if (members.filter(m => m.has_passphrase).length === 1) {
+          list.querySelector('.btn')?.click();
+        }
+      } catch {}
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('login-name').value || selectedName;
+      const passphrase = document.getElementById('login-pass').value;
+
+      if (!name) { showError('Select a member first.'); return; }
+
+      try {
+        await API.post('api/auth/login', { name, passphrase });
+        window.location.href = './';
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    function showError(msg) {
+      const el = document.getElementById('login-error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    loadMembers();
+  </script>
+</body>
+</html>

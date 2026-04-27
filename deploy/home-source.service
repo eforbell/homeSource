@@ -1,0 +1,19 @@
+[Unit]
+Description=Home Source — Sovereign Document Vault
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=sovereign
+Group=sovereign
+WorkingDirectory=/opt/sovereign-home/apps/home-source
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/etc/sovereign-home/home-source.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

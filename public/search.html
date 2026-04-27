@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Search</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="search">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Search Documents</h1>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; gap:0.5rem;">
+        <input type="search" id="search-input" class="form-input" placeholder="Search titles, descriptions, metadata..." autofocus style="flex:1;">
+        <button id="search-btn" class="btn btn-primary">Search</button>
+      </div>
+
+      <div class="filters-bar mt-2">
+        <select id="search-type" class="form-select">
+          <option value="">All Types</option>
+          <option value="warranty">Warranty</option>
+          <option value="insurance">Insurance</option>
+          <option value="certificate">Certificate</option>
+          <option value="manual">Manual</option>
+          <option value="receipt">Receipt</option>
+          <option value="contract">Contract</option>
+          <option value="medical">Medical</option>
+          <option value="legal">Legal</option>
+          <option value="tax">Tax</option>
+          <option value="identification">ID</option>
+          <option value="property">Property</option>
+          <option value="vehicle">Vehicle</option>
+          <option value="other">Other</option>
+        </select>
+        <select id="search-owner" class="form-select">
+          <option value="">All Owners</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="search-results" class="mt-2"></div>
+    <div id="search-empty" class="empty-state mt-2" style="display:none;">
+      <div class="empty-state-icon">🔍</div>
+      <div class="empty-state-title">No results found</div>
+      <p class="text-dim">Try different search terms or filters.</p>
+    </div>
+    <div id="search-initial" class="empty-state mt-2">
+      <div class="empty-state-icon">🔍</div>
+      <div class="empty-state-title">Search your vault</div>
+      <p class="text-dim">Full-text search across all document titles, descriptions, and metadata.</p>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    async function loadFilters() {
+      try {
+        const members = await API.get('api/members');
+        const select = document.getElementById('search-owner');
+        for (const m of members) {
+          select.innerHTML += `<option value="${m.id}">${m.avatar_emoji} ${m.name}</option>`;
+        }
+      } catch {}
+    }
+
+    async function doSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      if (!q) return;
+
+      document.getElementById('search-initial').style.display = 'none';
+
+      const params = new URLSearchParams({ q });
+      const type = document.getElementById('search-type').value;
+      const owner = document.getElementById('search-owner').value;
+      if (type) params.set('type', type);
+      if (owner) params.set('owner', owner);
+
+      try {
+        const { results, total } = await API.get('api/search?' + params);
+        const container = document.getElementById('search-results');
+        const empty = document.getElementById('search-empty');
+
+        if (!results.length) {
+          container.innerHTML = '';
+          empty.style.display = 'block';
+          return;
+        }
+
+        empty.style.display = 'none';
+        container.innerHTML = `<p class="text-dim text-sm mb-2">${total} result${total === 1 ? '' : 's'}</p>` +
+          results.map(r => {
+            const owners = (r.owners || []).map(o => `<span title="${esc(o.name)}">${o.avatar_emoji}</span>`).join(' ');
+            return `<div class="card" style="cursor:pointer;" onclick="location.href='document.html?id=${r.id}'">
+              <div class="flex-between">
+                <div>
+                  <strong>${esc(r.title)}</strong>
+                  <span class="doc-card-type" style="margin-left:0.5rem;">${r.document_type}</span>
+                </div>
+                <span class="text-sm text-dim">${new Date(r.created_at).toLocaleDateString()}</span>
+              </div>
+              <div class="text-sm mt-1">${r.headline}</div>
+              <div class="flex gap-1 mt-1 text-sm">
+                <span>${owners}</span>
+                ${(r.tags || []).map(t => `<span class="tag" style="background:${t.color}22;color:${t.color};">${esc(t.name)}</span>`).join('')}
+              </div>
+            </div>`;
+          }).join('');
+      } catch (err) {
+        console.error('Search error:', err);
+      }
+    }
+
+    document.getElementById('search-btn').addEventListener('click', doSearch);
+    document.getElementById('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    // Pre-fill from URL param
+    const urlQ = new URLSearchParams(location.search).get('q');
+    if (urlQ) {
+      document.getElementById('search-input').value = urlQ;
+      doSearch();
+    }
+
+    loadFilters();
+  </script>
+</body>
+</html>

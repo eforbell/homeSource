@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Documents</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="documents">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Documents</h1>
+      <a href="upload.html" class="btn btn-primary">+ Upload</a>
+    </div>
+
+    <div class="filters-bar">
+      <input type="search" id="filter-search" class="form-input" placeholder="Search..." style="min-width:200px;">
+      <select id="filter-type" class="form-select">
+        <option value="">All Types</option>
+        <option value="warranty">Warranty</option>
+        <option value="insurance">Insurance</option>
+        <option value="certificate">Certificate</option>
+        <option value="manual">Manual</option>
+        <option value="receipt">Receipt</option>
+        <option value="contract">Contract</option>
+        <option value="medical">Medical</option>
+        <option value="legal">Legal</option>
+        <option value="tax">Tax</option>
+        <option value="identification">ID</option>
+        <option value="property">Property</option>
+        <option value="vehicle">Vehicle</option>
+        <option value="other">Other</option>
+      </select>
+      <select id="filter-owner" class="form-select">
+        <option value="">All Owners</option>
+      </select>
+      <select id="filter-tag" class="form-select">
+        <option value="">All Tags</option>
+      </select>
+    </div>
+
+    <div id="doc-grid" class="doc-grid"></div>
+    <div id="doc-empty" class="empty-state" style="display:none;">
+      <div class="empty-state-icon">📂</div>
+      <div class="empty-state-title">No documents found</div>
+      <p class="text-dim">Try adjusting your filters or upload a new document.</p>
+    </div>
+
+    <div id="pagination" class="flex-center gap-1 mt-2" style="display:none;">
+      <button id="prev-btn" class="btn btn-sm" disabled>Previous</button>
+      <span id="page-info" class="text-dim text-sm"></span>
+      <button id="next-btn" class="btn btn-sm">Next</button>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    const PAGE_SIZE = 24;
+    let currentOffset = 0;
+
+    async function loadDocuments() {
+      const params = new URLSearchParams();
+      const q = document.getElementById('filter-search').value.trim();
+      const type = document.getElementById('filter-type').value;
+      const owner = document.getElementById('filter-owner').value;
+      const tag = document.getElementById('filter-tag').value;
+
+      if (q) params.set('q', q);
+      if (type) params.set('type', type);
+      if (owner) params.set('owner', owner);
+      if (tag) params.set('tag', tag);
+      params.set('limit', PAGE_SIZE);
+      params.set('offset', currentOffset);
+
+      try {
+        const { documents, total } = await API.get('api/documents?' + params);
+        const grid = document.getElementById('doc-grid');
+        const empty = document.getElementById('doc-empty');
+        const pag = document.getElementById('pagination');
+
+        if (!documents.length) {
+          grid.innerHTML = '';
+          empty.style.display = 'block';
+          pag.style.display = 'none';
+          return;
+        }
+
+        empty.style.display = 'none';
+        grid.innerHTML = documents.map(d => {
+          const thumb = d.thumbnail ? `<img src="api/thumbnails/${d.thumbnail.stored_filename.split('/').pop()}" alt="">` : `<div class="doc-placeholder">📄</div>`;
+          const owners = (d.owners || []).map(o => `<span class="avatar" title="${esc(o.name)}">${o.avatar_emoji}</span>`).join('');
+          const tags = (d.tags || []).map(t => `<span class="tag" style="background:${t.color}22; color:${t.color};">${esc(t.name)}</span>`).join('');
+
+          return `<div class="doc-card" onclick="location.href='document.html?id=${d.id}'">
+            <div class="doc-card-thumb">${thumb}</div>
+            <div class="doc-card-body">
+              <div class="doc-card-title">${esc(d.title)}</div>
+              <span class="doc-card-type">${d.document_type}</span>
+              ${tags ? '<div class="tags-list mt-1">' + tags + '</div>' : ''}
+              <div class="doc-card-meta">
+                <div class="doc-card-owners">${owners}</div>
+                <span>${new Date(d.created_at).toLocaleDateString()}</span>
+              </div>
+            </div>
+          </div>`;
+        }).join('');
+
+        // Pagination
+        if (total > PAGE_SIZE) {
+          pag.style.display = 'flex';
+          document.getElementById('prev-btn').disabled = currentOffset === 0;
+          document.getElementById('next-btn').disabled = currentOffset + PAGE_SIZE >= total;
+          document.getElementById('page-info').textContent = `${currentOffset + 1}–${Math.min(currentOffset + PAGE_SIZE, total)} of ${total}`;
+        } else {
+          pag.style.display = 'none';
+        }
+      } catch (err) {
+        console.error('Load error:', err);
+      }
+    }
+
+    async function loadFilters() {
+      try {
+        const [members, tags] = await Promise.all([API.get('api/members'), API.get('api/tags')]);
+        const ownerSelect = document.getElementById('filter-owner');
+        for (const m of members) {
+          ownerSelect.innerHTML += `<option value="${m.id}">${m.avatar_emoji} ${esc(m.name)}</option>`;
+        }
+        const tagSelect = document.getElementById('filter-tag');
+        for (const t of tags) {
+          tagSelect.innerHTML += `<option value="${t.id}">${esc(t.name)}</option>`;
+        }
+      } catch {}
+    }
+
+    let searchTimeout;
+    document.getElementById('filter-search').addEventListener('input', () => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => { currentOffset = 0; loadDocuments(); }, 300);
+    });
+
+    for (const id of ['filter-type', 'filter-owner', 'filter-tag']) {
+      document.getElementById(id).addEventListener('change', () => { currentOffset = 0; loadDocuments(); });
+    }
+
+    document.getElementById('prev-btn').addEventListener('click', () => { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadDocuments(); });
+    document.getElementById('next-btn').addEventListener('click', () => { currentOffset += PAGE_SIZE; loadDocuments(); });
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    loadFilters();
+    loadDocuments();
+  </script>
+</body>
+</html>

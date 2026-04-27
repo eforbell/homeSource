@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="dashboard">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Dashboard</h1>
+      <a href="upload.html" class="btn btn-primary">+ New Document</a>
+    </div>
+
+    <!-- Stats row -->
+    <div class="grid-4" id="stats-row">
+      <div class="stat-card"><div class="stat-value" id="stat-total">—</div><div class="stat-label">Documents</div></div>
+      <div class="stat-card"><div class="stat-value" id="stat-types">—</div><div class="stat-label">Categories</div></div>
+      <div class="stat-card"><div class="stat-value" id="stat-expiring">—</div><div class="stat-label">Expiring Soon</div></div>
+      <div class="stat-card">
+        <div id="backup-posture-badge" class="posture-badge posture-none" style="margin:0 auto;">
+          <span class="posture-dot"></span>
+          <span id="backup-posture-text">No backups</span>
+        </div>
+        <div class="stat-label mt-1">Backup Posture</div>
+      </div>
+    </div>
+
+    <!-- Recent documents -->
+    <div class="card mt-2">
+      <div class="card-header">
+        <span class="card-title">Recent Documents</span>
+        <a href="documents.html" class="btn btn-sm">View All</a>
+      </div>
+      <div id="recent-docs"></div>
+    </div>
+
+    <!-- Expiring soon -->
+    <div class="card mt-2" id="expiring-card" style="display:none;">
+      <div class="card-header">
+        <span class="card-title" style="color:var(--warn);">Expiring Soon</span>
+      </div>
+      <div id="expiring-docs"></div>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    async function loadDashboard() {
+      try {
+        const stats = await API.get('api/stats');
+
+        document.getElementById('stat-total').textContent = stats.total_documents;
+        document.getElementById('stat-types').textContent = stats.by_type.length;
+        document.getElementById('stat-expiring').textContent = stats.expiring_soon.length;
+
+        // Backup posture
+        const bp = stats.backup;
+        const badge = document.getElementById('backup-posture-badge');
+        const bpText = document.getElementById('backup-posture-text');
+        badge.className = 'posture-badge posture-' + (bp.posture === 'due_soon' ? 'due-soon' : bp.posture).replace('_', '-');
+        const postureLabels = { good: 'Backed Up', due_soon: 'Due Soon', overdue: 'Overdue', none: 'No Backups' };
+        bpText.textContent = postureLabels[bp.posture] || 'Unknown';
+
+        // Recent docs
+        const recentEl = document.getElementById('recent-docs');
+        if (!stats.recent.length) {
+          recentEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📄</div><div class="empty-state-title">No documents yet</div><p class="text-dim">Upload your first document to get started.</p></div>';
+        } else {
+          recentEl.innerHTML = '<table><thead><tr><th>Title</th><th>Type</th><th>Added</th></tr></thead><tbody>' +
+            stats.recent.map(d => `<tr style="cursor:pointer" onclick="location.href='document.html?id=${d.id}'">
+              <td>${esc(d.title)}</td>
+              <td><span class="doc-card-type">${d.document_type}</span></td>
+              <td class="text-dim text-sm">${new Date(d.created_at).toLocaleDateString()}</td>
+            </tr>`).join('') + '</tbody></table>';
+        }
+
+        // Expiring
+        if (stats.expiring_soon.length) {
+          document.getElementById('expiring-card').style.display = 'block';
+          document.getElementById('expiring-docs').innerHTML = '<table><thead><tr><th>Title</th><th>Type</th><th>Expires</th></tr></thead><tbody>' +
+            stats.expiring_soon.map(d => `<tr style="cursor:pointer" onclick="location.href='document.html?id=${d.id}'">
+              <td>${esc(d.title)}</td>
+              <td><span class="doc-card-type">${d.document_type}</span></td>
+              <td style="color:var(--warn);">${new Date(d.expiry_date).toLocaleDateString()}</td>
+            </tr>`).join('') + '</tbody></table>';
+        }
+      } catch (err) {
+        console.error('Dashboard load error:', err);
+      }
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>

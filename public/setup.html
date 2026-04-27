@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Setup</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <div class="page-content" style="max-width:520px; margin:3rem auto; padding:1.5rem;">
+    <div style="text-align:center; margin-bottom:2rem;">
+      <div style="font-size:3rem;">📁</div>
+      <h1 style="margin-top:0.5rem;">Welcome to Home Source</h1>
+      <p class="text-dim" style="margin-top:0.5rem;">Sovereign document vault for your family. Let's set up your household.</p>
+    </div>
+
+    <div class="card">
+      <div id="members-list">
+        <div class="member-row" data-idx="0">
+          <div class="form-group">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-input member-name" placeholder="e.g. Eric" required>
+          </div>
+          <div style="display:flex; gap:0.5rem;">
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">Role</label>
+              <select class="form-select member-role">
+                <option value="parent">Parent</option>
+                <option value="kid">Kid</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label class="form-label">Avatar</label>
+              <select class="form-select member-avatar">
+                <option value="👨">👨</option>
+                <option value="👩">👩</option>
+                <option value="🧑">🧑</option>
+                <option value="👦">👦</option>
+                <option value="👧">👧</option>
+                <option value="🧒">🧒</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Passphrase (optional)</label>
+            <input type="password" class="form-input member-pass" placeholder="For login protection">
+          </div>
+          <hr style="border-color:var(--border); margin:1rem 0;">
+        </div>
+      </div>
+
+      <button type="button" id="add-member-btn" class="btn btn-sm" style="margin-bottom:1rem;">+ Add member</button>
+
+      <button type="button" id="setup-btn" class="btn btn-primary" style="width:100%;">Create Household</button>
+
+      <div id="setup-error" class="text-sm" style="color:var(--danger); margin-top:0.75rem; display:none;"></div>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script>
+    'use strict';
+
+    const memberTemplate = document.querySelector('.member-row').outerHTML;
+    let memberIdx = 1;
+
+    document.getElementById('add-member-btn').addEventListener('click', () => {
+      const list = document.getElementById('members-list');
+      const div = document.createElement('div');
+      div.innerHTML = memberTemplate.replace('data-idx="0"', `data-idx="${memberIdx++}"`);
+      list.appendChild(div.firstElementChild);
+    });
+
+    document.getElementById('setup-btn').addEventListener('click', async () => {
+      const rows = document.querySelectorAll('.member-row');
+      const members = [];
+      for (const row of rows) {
+        const name = row.querySelector('.member-name').value.trim();
+        if (!name) continue;
+        members.push({
+          name,
+          role: row.querySelector('.member-role').value,
+          avatar_emoji: row.querySelector('.member-avatar').value,
+          passphrase: row.querySelector('.member-pass').value || undefined
+        });
+      }
+
+      if (!members.length) {
+        showError('Add at least one household member.');
+        return;
+      }
+
+      try {
+        document.getElementById('setup-btn').disabled = true;
+        await API.post('api/bootstrap/household', { members });
+        window.location.href = './';
+      } catch (err) {
+        showError(err.message);
+        document.getElementById('setup-btn').disabled = false;
+      }
+    });
+
+    function showError(msg) {
+      const el = document.getElementById('setup-error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+  </script>
+</body>
+</html>
