@@ -181,6 +181,26 @@
     </div>
   </div>
 
+  <!-- Tags modal -->
+  <div class="modal-backdrop hidden" id="tags-modal">
+    <div class="modal">
+      <div class="modal-title">Edit Tags</div>
+      <div id="tags-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;"></div>
+      <div class="form-group">
+        <label class="form-label text-xs">Quick add new tag</label>
+        <div style="display:flex; gap:0.5rem;">
+          <input type="text" id="new-tag-name" class="form-input" placeholder="Tag name" style="flex:1;">
+          <input type="color" id="new-tag-color" value="#d97706" style="width:44px; height:40px; padding:2px; border-radius:6px; border:1px solid var(--border);">
+          <button id="quick-add-tag-btn" class="btn btn-sm">Add</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('tags-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-tags-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
@@ -458,6 +478,57 @@
     function copyToClipboard(text) {
       navigator.clipboard.writeText(text).catch(() => {});
     }
+
+    // Tags management
+    document.getElementById('edit-tags-btn').addEventListener('click', async () => {
+      const container = document.getElementById('tags-checkboxes');
+      container.innerHTML = '<span class="text-dim text-sm">Loading...</span>';
+      document.getElementById('tags-modal').classList.remove('hidden');
+      try {
+        const allTags = await API.get('api/tags');
+        const currentTagIds = (currentDoc.tags || []).map(t => t.id);
+        container.innerHTML = allTags.length ? allTags.map(t => `
+          <label style="display:flex; align-items:center; gap:0.4rem; padding:0.3rem 0.6rem; border-radius:6px; background:${t.color}11; cursor:pointer;">
+            <input type="checkbox" value="${t.id}" ${currentTagIds.includes(t.id) ? 'checked' : ''}>
+            <span class="tag" style="background:${t.color}22;color:${t.color};">${esc(t.name)}</span>
+          </label>
+        `).join('') : '<span class="text-dim text-sm">No tags yet — create one below</span>';
+      } catch (err) {
+        container.innerHTML = '<span style="color:var(--danger);">Failed to load tags</span>';
+      }
+    });
+
+    document.getElementById('save-tags-btn').addEventListener('click', async () => {
+      const checked = [...document.querySelectorAll('#tags-checkboxes input[type=checkbox]:checked')];
+      const tagIds = checked.map(el => Number(el.value));
+      try {
+        await API.put(`api/documents/${docId}/tags`, { tag_ids: tagIds });
+        document.getElementById('tags-modal').classList.add('hidden');
+        toast('Tags updated', 'success');
+        loadDocument();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    document.getElementById('quick-add-tag-btn').addEventListener('click', async () => {
+      const nameInput = document.getElementById('new-tag-name');
+      const colorInput = document.getElementById('new-tag-color');
+      const name = nameInput.value.trim();
+      if (!name) return;
+      try {
+        const tag = await API.post('api/tags', { name, color: colorInput.value });
+        nameInput.value = '';
+        const container = document.getElementById('tags-checkboxes');
+        const noTagsMsg = container.querySelector('.text-dim');
+        if (noTagsMsg) noTagsMsg.remove();
+        container.insertAdjacentHTML('beforeend', `
+          <label style="display:flex; align-items:center; gap:0.4rem; padding:0.3rem 0.6rem; border-radius:6px; background:${tag.color}11; cursor:pointer;">
+            <input type="checkbox" value="${tag.id}" checked>
+            <span class="tag" style="background:${tag.color}22;color:${tag.color};">${esc(tag.name)}</span>
+          </label>
+        `);
+        toast('Tag created', 'success');
+      } catch (err) { toast(err.message, 'error'); }
+    });
 
     // File upload
     document.getElementById('add-file-btn').addEventListener('click', () => {

@@ -66,6 +66,7 @@
   <script>
     'use strict';
 
+    const basePath = location.pathname.substring(0, location.pathname.indexOf('/share/') + 1);
     const token = location.pathname.split('/share/')[1] || new URLSearchParams(location.search).get('token');
     if (!token) showNotFound();
 
@@ -73,7 +74,7 @@
 
     async function loadShare() {
       try {
-        const data = await API.get(`api/share/${token}`);
+        const data = await API.get(`${basePath}api/share/${token}`);
 
         if (data.needs_pin) {
           document.getElementById('pin-gate').style.display = 'block';
@@ -105,14 +106,14 @@
       const preview = document.getElementById('share-file-preview');
       if (data.access_level === 'download' && previewFile) {
         if (previewFile.mime_type === 'application/pdf') {
-          preview.innerHTML = `<iframe src="api/share/${token}/files/${previewFile.id}/download" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
+          preview.innerHTML = `<iframe src="${basePath}api/share/${token}/files/${previewFile.id}/download" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
         } else if (previewFile.mime_type.startsWith('image/')) {
-          preview.innerHTML = `<img src="api/share/${token}/files/${previewFile.id}/download" style="max-width:100%;border-radius:8px;">`;
+          preview.innerHTML = `<img src="${basePath}api/share/${token}/files/${previewFile.id}/download" style="max-width:100%;border-radius:8px;">`;
         }
       } else {
         const thumbFile = files.find(f => f.file_type === 'thumbnail');
         if (thumbFile && data.access_level === 'download') {
-          preview.innerHTML = `<img src="api/share/${token}/files/${thumbFile.id}/download" style="max-width:300px;border-radius:8px;">`;
+          preview.innerHTML = `<img src="${basePath}api/share/${token}/files/${thumbFile.id}/download" style="max-width:300px;border-radius:8px;">`;
         } else {
           preview.innerHTML = '<div class="text-dim" style="font-size:4rem;">📄</div>';
         }
@@ -125,7 +126,7 @@
           `<tr>
             <td>${esc(f.original_filename)}</td>
             <td class="text-sm text-dim">${formatBytes(f.file_size_bytes)}</td>
-            <td><a href="api/share/${token}/files/${f.id}/download" class="btn btn-sm btn-primary" download>Download</a></td>
+            <td><a href="${basePath}api/share/${token}/files/${f.id}/download" class="btn btn-sm btn-primary" download>Download</a></td>
           </tr>`
         ).join('');
       }
@@ -138,7 +139,7 @@
     document.getElementById('pin-submit')?.addEventListener('click', async () => {
       const pin = document.getElementById('pin-input').value;
       try {
-        const data = await API.post(`api/share/${token}/verify`, { pin });
+        const data = await API.post(`${basePath}api/share/${token}/verify`, { pin });
         showDocument(data);
       } catch {
         const el = document.getElementById('pin-error');
