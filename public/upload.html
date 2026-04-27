@@ -24,7 +24,12 @@
     <!-- ── Scan tab ───────────────────────────────────────────── -->
     <div class="tab-panel active" id="tab-scan">
       <div class="card">
-        <div id="scanner-loading" class="text-center text-dim" style="padding:2rem;">
+        <div id="scanner-start" class="text-center" style="padding:2rem;">
+          <div style="font-size:2.5rem; margin-bottom:0.75rem;">📷</div>
+          <p class="text-dim mb-2">Scan a document using your camera with auto-detection and perspective correction.</p>
+          <button id="start-camera-btn" class="btn btn-primary">Start Camera</button>
+        </div>
+        <div id="scanner-loading" class="text-center text-dim" style="padding:2rem; display:none;">
           Loading scanner...
         </div>
         <div id="scanner-area" style="display:none;">
@@ -187,6 +192,12 @@
     let videoStream = null;
     let highlightInterval = null;
 
+    document.getElementById('start-camera-btn').addEventListener('click', () => {
+      document.getElementById('scanner-start').style.display = 'none';
+      document.getElementById('scanner-loading').style.display = 'block';
+      initScanner();
+    });
+
     async function initScanner() {
       try {
         const opencv = document.createElement('script');
@@ -216,7 +227,7 @@
     async function startCamera() {
       try {
         videoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
         });
 
         const video = document.getElementById('scan-video');
@@ -243,6 +254,7 @@
     }
 
     function showScannerUnavailable() {
+      document.getElementById('scanner-start').style.display = 'none';
       document.getElementById('scanner-loading').style.display = 'none';
       document.getElementById('scanner-unavailable').style.display = 'block';
     }
@@ -359,7 +371,6 @@
     }
 
     loadMembers();
-    initScanner();
   </script>
 </body>
 </html>
