@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { pool } = require('./lib/db');
 const { hashPassphrase, verifyPassphrase, createSession, validateSession, destroySession, cleanExpiredSessions, authEnabled, parseCookie, requireAuth, requireParent } = require('./lib/auth');
-const { listDocuments, getDocument, createDocument, updateDocument, archiveDocument, addOwner, removeOwner, listMembers, getMember, memberCount } = require('./lib/documents');
+const { listDocuments, getDocument, createDocument, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount } = require('./lib/documents');
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags } = require('./lib/tags');
@@ -351,6 +351,13 @@ app.put('/api/documents/:id', requireAuth, async (req, res) => {
 
 app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) => {
   try {
+    if (req.query.permanent === 'true') {
+      const doc = await getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      await audit.log('document.deleted', 'document', doc.id, req.member.id, { title: doc.title });
+      await permanentDeleteDocument(req.params.id);
+      return res.json({ ok: true, deleted: true });
+    }
     const doc = await archiveDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     await audit.log('document.archived', 'document', doc.id, req.member.id);

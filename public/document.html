@@ -206,6 +206,7 @@
         actions.innerHTML = `
           <button class="btn btn-sm" onclick="openEditModal()">Edit</button>
           <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>
         `;
 
         // File preview
@@ -379,6 +380,14 @@
       if (!confirm('Archive this document?')) return;
       try {
         await API.del(`api/documents/${docId}`);
+        location.href = 'documents.html';
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function deleteDoc() {
+      if (!confirm('Permanently delete this document and all its files? This cannot be undone.')) return;
+      try {
+        await API.del(`api/documents/${docId}?permanent=true`);
         location.href = 'documents.html';
       } catch (err) { toast(err.message, 'error'); }
     }
