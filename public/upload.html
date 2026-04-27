@@ -52,6 +52,7 @@
             <div class="text-center mb-1">
               <label class="text-xs text-dim" for="scan-crop-looseness">Auto crop looseness</label>
               <select id="scan-crop-looseness" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
+                <option value="extra-tight">Extra tight (marginless)</option>
                 <option value="tight">Tight</option>
                 <option value="normal" selected>Normal</option>
                 <option value="wide">Wide</option>
@@ -459,6 +460,7 @@
 
     function getLoosenessProfile() {
       const value = document.getElementById('scan-crop-looseness').value;
+      if (value === 'extra-tight') return { expandRatio: -0.006, minPadPx: -3 };
       if (value === 'tight') return { expandRatio: 0.02, minPadPx: 6 };
       if (value === 'wide') return { expandRatio: 0.08, minPadPx: 22 };
       return { expandRatio: 0.045, minPadPx: 14 };
