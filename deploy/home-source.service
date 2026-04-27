@@ -12,6 +12,7 @@ ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
 EnvironmentFile=/etc/sovereign-home/home-source.env
+StateDirectory=sovereign-home/home-source/data
 StandardOutput=journal
 StandardError=journal
 
