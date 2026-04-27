@@ -50,8 +50,14 @@ window.API = {
     form.append('file', file);
     form.append('metadata', JSON.stringify(metadata));
 
-    const res = await fetch(path, { method: 'POST', body: form });
+    let res;
+    try {
+      res = await fetch(path, { method: 'POST', body: form });
+    } catch (e) {
+      throw new Error('Upload failed — check your connection and try again');
+    }
     if (!res.ok) {
+      if (res.status === 413) throw new Error('File too large — server rejected the upload (check nginx client_max_body_size)');
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || res.statusText);
     }
