@@ -581,6 +581,22 @@ tr:hover td { background: var(--accent-bg); }
 }
 .scanner-capture-btn:hover { transform: scale(1.1); }
 
+.corner-handle {
+  position: absolute;
+  width: 28px; height: 28px;
+  margin: -14px 0 0 -14px;
+  background: var(--accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  cursor: grab;
+  touch-action: none;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+.corner-handle:active { cursor: grabbing; transform: scale(1.2); }
+#corner-container { touch-action: none; }
+#corner-canvas { width: 100%; display: block; }
+
 /* ── Utility ─────────────────────────────────────────────────── */
 
 .text-dim { color: var(--text-dim); }

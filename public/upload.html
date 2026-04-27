@@ -33,15 +33,40 @@
           Loading scanner...
         </div>
         <div id="scanner-area" style="display:none;">
-          <div class="scanner-container">
-            <video id="scan-video" autoplay playsinline></video>
-            <canvas id="scan-highlight"></canvas>
+          <!-- Live camera feed -->
+          <div id="scanner-live">
+            <div class="scanner-container">
+              <video id="scan-video" autoplay playsinline></video>
+              <canvas id="scan-highlight"></canvas>
+            </div>
+            <div id="scan-detect-status" class="text-center text-xs text-dim" style="padding:0.4rem;">
+              Point camera at a document
+            </div>
+            <div class="scanner-controls">
+              <button id="scan-capture-btn" class="scanner-capture-btn" title="Capture"></button>
+            </div>
           </div>
-          <div class="scanner-controls">
-            <button id="scan-capture-btn" class="scanner-capture-btn" title="Capture"></button>
+          <!-- Corner adjustment on frozen frame -->
+          <div id="scanner-corners" style="display:none;">
+            <p class="text-sm text-dim text-center mb-1">Drag corners to select document edges</p>
+            <div class="scanner-container" id="corner-container">
+              <canvas id="corner-canvas"></canvas>
+              <div class="corner-handle" data-corner="tl" style="top:10%;left:10%;"></div>
+              <div class="corner-handle" data-corner="tr" style="top:10%;right:10%;"></div>
+              <div class="corner-handle" data-corner="bl" style="bottom:10%;left:10%;"></div>
+              <div class="corner-handle" data-corner="br" style="bottom:10%;right:10%;"></div>
+              <svg id="corner-outline" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;">
+                <polygon id="corner-poly" fill="rgba(217,119,6,0.15)" stroke="#d97706" stroke-width="2"/>
+              </svg>
+            </div>
+            <div class="btn-group mt-2" style="justify-content:center;">
+              <button id="corner-retake-btn" class="btn">Retake</button>
+              <button id="corner-crop-btn" class="btn btn-primary">Crop & Use</button>
+            </div>
           </div>
+          <!-- Final preview after crop -->
           <div id="scan-preview" style="display:none;">
-            <canvas id="scan-result" style="max-width:100%;border-radius:8px;"></canvas>
+            <canvas id="scan-result" style="max-width:100%;border-radius:8px;display:block;margin:0 auto;"></canvas>
             <div class="btn-group mt-2" style="justify-content:center;">
               <button id="scan-retake-btn" class="btn">Retake</button>
               <button id="scan-accept-btn" class="btn btn-primary">Use This</button>
@@ -156,6 +181,40 @@
       });
     });
 
+    // ── Client-side image compression ────────────────────────
+
+    const MAX_UPLOAD_DIM = 2400;
+    const JPEG_QUALITY = 0.85;
+
+    function compressImage(file) {
+      return new Promise((resolve, reject) => {
+        if (file.type === 'application/pdf') return resolve(file);
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width <= MAX_UPLOAD_DIM && height <= MAX_UPLOAD_DIM && file.size < 2 * 1024 * 1024) {
+            URL.revokeObjectURL(img.src);
+            return resolve(file);
+          }
+          const scale = Math.min(MAX_UPLOAD_DIM / width, MAX_UPLOAD_DIM / height, 1);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          URL.revokeObjectURL(img.src);
+          canvas.toBlob(blob => {
+            if (!blob) return reject(new Error('Compression failed'));
+            const name = file.name.replace(/\.[^.]+$/, '.jpg');
+            resolve(new File([blob], name, { type: 'image/jpeg' }));
+          }, 'image/jpeg', JPEG_QUALITY);
+        };
+        img.onerror = () => resolve(file);
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
     // ── File upload ───────────────────────────────────────────
 
     const dropZone = document.getElementById('drop-zone');
@@ -170,9 +229,16 @@
     });
     fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
 
-    function handleFile(file) {
+    async function handleFile(file) {
+      const originalSize = file.size;
+      if (file.type.startsWith('image/') && file.type !== 'image/heic' && file.type !== 'image/heif') {
+        file = await compressImage(file);
+      }
       selectedFile = file;
-      document.getElementById('file-name').textContent = `${file.name} (${formatBytes(file.size)})`;
+      const sizeNote = file.size < originalSize
+        ? `${formatBytes(originalSize)} → ${formatBytes(file.size)}`
+        : formatBytes(file.size);
+      document.getElementById('file-name').textContent = `${file.name} (${sizeNote})`;
       const preview = document.getElementById('file-preview-area');
       const thumb = document.getElementById('file-thumb');
       if (file.type.startsWith('image/')) {
@@ -192,6 +258,8 @@
     let scanner = null;
     let videoStream = null;
     let highlightInterval = null;
+    let frozenFrame = null;
+    let detectedCorners = null;
 
     document.getElementById('start-camera-btn').addEventListener('click', () => {
       document.getElementById('scanner-start').style.display = 'none';
@@ -240,13 +308,34 @@
         document.getElementById('scanner-area').style.display = 'block';
 
         const highlightCanvas = document.getElementById('scan-highlight');
+        const statusEl = document.getElementById('scan-detect-status');
         highlightInterval = setInterval(() => {
           try {
+            if (!video.videoWidth) return;
             highlightCanvas.width = video.videoWidth;
             highlightCanvas.height = video.videoHeight;
-            scanner.highlightPaper(video, highlightCanvas);
-          } catch {}
-        }, 100);
+            const resultCanvas = scanner.highlightPaper(video);
+            if (resultCanvas) {
+              const ctx = highlightCanvas.getContext('2d');
+              ctx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
+              ctx.drawImage(resultCanvas, 0, 0, highlightCanvas.width, highlightCanvas.height);
+            }
+            const img = cv.imread(video);
+            const contour = scanner.findPaperContour(img);
+            if (contour) {
+              statusEl.textContent = 'Document detected — tap to capture';
+              statusEl.style.color = 'var(--accent-light)';
+              detectedCorners = scanner.getCornerPoints(contour);
+            } else {
+              statusEl.textContent = 'Point camera at a document';
+              statusEl.style.color = '';
+              detectedCorners = null;
+            }
+            img.delete();
+          } catch (e) {
+            // OpenCV can throw intermittently during detection
+          }
+        }, 200);
 
       } catch (err) {
         console.error('Camera error:', err);
@@ -261,31 +350,200 @@
       if (reason) document.getElementById('scanner-error-detail').textContent = reason;
     }
 
+    // ── Capture: freeze frame → corner adjustment ────────────
+
     document.getElementById('scan-capture-btn').addEventListener('click', () => {
       if (!scanner) return;
       const video = document.getElementById('scan-video');
-      const resultCanvas = document.getElementById('scan-result');
+      if (!video.videoWidth) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      frozenFrame = canvas;
+
+      if (highlightInterval) { clearInterval(highlightInterval); highlightInterval = null; }
+
+      const cornerCanvas = document.getElementById('corner-canvas');
+      cornerCanvas.width = canvas.width;
+      cornerCanvas.height = canvas.height;
+      cornerCanvas.getContext('2d').drawImage(canvas, 0, 0);
+
+      const container = document.getElementById('corner-container');
+      const w = container.offsetWidth;
+      const h = container.offsetHeight;
+
+      if (detectedCorners && detectedCorners.topLeftCorner && detectedCorners.topRightCorner &&
+          detectedCorners.bottomLeftCorner && detectedCorners.bottomRightCorner) {
+        setHandlePos('tl', detectedCorners.topLeftCorner.x / canvas.width * w, detectedCorners.topLeftCorner.y / canvas.height * h);
+        setHandlePos('tr', detectedCorners.topRightCorner.x / canvas.width * w, detectedCorners.topRightCorner.y / canvas.height * h);
+        setHandlePos('bl', detectedCorners.bottomLeftCorner.x / canvas.width * w, detectedCorners.bottomLeftCorner.y / canvas.height * h);
+        setHandlePos('br', detectedCorners.bottomRightCorner.x / canvas.width * w, detectedCorners.bottomRightCorner.y / canvas.height * h);
+      } else {
+        const m = 0.08;
+        setHandlePos('tl', w * m, h * m);
+        setHandlePos('tr', w * (1 - m), h * m);
+        setHandlePos('bl', w * m, h * (1 - m));
+        setHandlePos('br', w * (1 - m), h * (1 - m));
+      }
+      updateCornerOutline();
+
+      document.getElementById('scanner-live').style.display = 'none';
+      document.getElementById('scanner-corners').style.display = 'block';
+    });
+
+    // ── Draggable corner handles ─────────────────────────────
+
+    function setHandlePos(corner, x, y) {
+      const el = document.querySelector(`.corner-handle[data-corner="${corner}"]`);
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
+    }
+
+    function getHandlePos(corner) {
+      const el = document.querySelector(`.corner-handle[data-corner="${corner}"]`);
+      return { x: parseFloat(el.style.left), y: parseFloat(el.style.top) };
+    }
+
+    function updateCornerOutline() {
+      const tl = getHandlePos('tl'), tr = getHandlePos('tr');
+      const bl = getHandlePos('bl'), br = getHandlePos('br');
+      document.getElementById('corner-poly').setAttribute('points',
+        `${tl.x},${tl.y} ${tr.x},${tr.y} ${br.x},${br.y} ${bl.x},${bl.y}`);
+    }
+
+    (function initCornerDrag() {
+      let active = null;
+      let offset = { x: 0, y: 0 };
+
+      function getPos(e) {
+        const t = e.touches ? e.touches[0] : e;
+        return { x: t.clientX, y: t.clientY };
+      }
+
+      function onStart(e) {
+        if (!e.target.classList.contains('corner-handle')) return;
+        e.preventDefault();
+        active = e.target;
+        const p = getPos(e);
+        const rect = active.parentElement.getBoundingClientRect();
+        offset.x = p.x - parseFloat(active.style.left);
+        offset.y = p.y - parseFloat(active.style.top);
+      }
+
+      function onMove(e) {
+        if (!active) return;
+        e.preventDefault();
+        const p = getPos(e);
+        const container = active.parentElement;
+        const rect = container.getBoundingClientRect();
+        let x = p.x - offset.x;
+        let y = p.y - offset.y;
+        x = Math.max(0, Math.min(x, rect.width));
+        y = Math.max(0, Math.min(y, rect.height));
+        active.style.left = x + 'px';
+        active.style.top = y + 'px';
+        updateCornerOutline();
+      }
+
+      function onEnd() { active = null; }
+
+      document.addEventListener('mousedown', onStart);
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onEnd);
+      document.addEventListener('touchstart', onStart, { passive: false });
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
+    })();
+
+    // ── Crop with perspective correction ─────────────────────
+
+    document.getElementById('corner-crop-btn').addEventListener('click', () => {
+      if (!frozenFrame) return;
+      const container = document.getElementById('corner-container');
+      const cw = container.offsetWidth, ch = container.offsetHeight;
+      const fw = frozenFrame.width, fh = frozenFrame.height;
+      const scaleX = fw / cw, scaleY = fh / ch;
+
+      const tl = getHandlePos('tl'), tr = getHandlePos('tr');
+      const bl = getHandlePos('bl'), br = getHandlePos('br');
+
+      const corners = {
+        topLeftCorner: { x: tl.x * scaleX, y: tl.y * scaleY },
+        topRightCorner: { x: tr.x * scaleX, y: tr.y * scaleY },
+        bottomLeftCorner: { x: bl.x * scaleX, y: bl.y * scaleY },
+        bottomRightCorner: { x: br.x * scaleX, y: br.y * scaleY }
+      };
 
       try {
-        const extracted = scanner.extractPaper(video, 1000, 1400);
+        const extracted = scanner.extractPaper(frozenFrame, 1000, 1400, corners);
+        if (!extracted) throw new Error('Extraction returned null');
+        const resultCanvas = document.getElementById('scan-result');
         resultCanvas.width = extracted.width;
         resultCanvas.height = extracted.height;
         resultCanvas.getContext('2d').drawImage(extracted, 0, 0);
-
-        document.querySelector('.scanner-container').style.display = 'none';
-        document.querySelector('.scanner-controls').style.display = 'none';
+        document.getElementById('scanner-corners').style.display = 'none';
         document.getElementById('scan-preview').style.display = 'block';
       } catch (err) {
-        toast('Could not detect document edges. Try again.', 'error');
+        toast('Crop failed — try adjusting the corners', 'error');
+        console.error('Crop error:', err);
       }
     });
 
-    document.getElementById('scan-retake-btn').addEventListener('click', () => {
-      document.querySelector('.scanner-container').style.display = 'block';
-      document.querySelector('.scanner-controls').style.display = 'flex';
-      document.getElementById('scan-preview').style.display = 'none';
-      scanBlob = null;
+    // ── Retake from corner view ──────────────────────────────
+
+    document.getElementById('corner-retake-btn').addEventListener('click', () => {
+      goBackToLive();
     });
+
+    document.getElementById('scan-retake-btn').addEventListener('click', () => {
+      goBackToLive();
+    });
+
+    function goBackToLive() {
+      frozenFrame = null;
+      detectedCorners = null;
+      scanBlob = null;
+      document.getElementById('scanner-corners').style.display = 'none';
+      document.getElementById('scan-preview').style.display = 'none';
+      document.getElementById('scanner-live').style.display = 'block';
+
+      const video = document.getElementById('scan-video');
+      if (video.srcObject) {
+        const highlightCanvas = document.getElementById('scan-highlight');
+        const statusEl = document.getElementById('scan-detect-status');
+        highlightInterval = setInterval(() => {
+          try {
+            if (!video.videoWidth) return;
+            highlightCanvas.width = video.videoWidth;
+            highlightCanvas.height = video.videoHeight;
+            const resultCanvas = scanner.highlightPaper(video);
+            if (resultCanvas) {
+              const ctx = highlightCanvas.getContext('2d');
+              ctx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
+              ctx.drawImage(resultCanvas, 0, 0, highlightCanvas.width, highlightCanvas.height);
+            }
+            const img = cv.imread(video);
+            const contour = scanner.findPaperContour(img);
+            if (contour) {
+              statusEl.textContent = 'Document detected — tap to capture';
+              statusEl.style.color = 'var(--accent-light)';
+              detectedCorners = scanner.getCornerPoints(contour);
+            } else {
+              statusEl.textContent = 'Point camera at a document';
+              statusEl.style.color = '';
+              detectedCorners = null;
+            }
+            img.delete();
+          } catch (e) {}
+        }, 200);
+      }
+    }
+
+    // ── Accept scan result ───────────────────────────────────
 
     document.getElementById('scan-accept-btn').addEventListener('click', () => {
       const canvas = document.getElementById('scan-result');
@@ -347,6 +605,11 @@
           location.href = `document.html?id=${doc.id}`;
         } else {
           if (!selectedFile) { toast('No file selected', 'error'); btn.disabled = false; status.style.display = 'none'; return; }
+          if (selectedFile.type.startsWith('image/') && activeTab === 'upload') {
+            status.textContent = 'Compressing...';
+            selectedFile = await compressImage(selectedFile);
+          }
+          status.textContent = `Uploading ${formatBytes(selectedFile.size)}...`;
           const doc = await API.upload('api/documents', selectedFile, metadata);
           toast('Document saved!', 'success');
           location.href = `document.html?id=${doc.id}`;
