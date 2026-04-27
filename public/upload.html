@@ -418,18 +418,23 @@
       cornerCanvas.height = frozenFrame.height;
       cornerCanvas.getContext('2d').drawImage(frozenFrame, 0, 0);
 
+      // Re-detect on the frozen frame (instead of trusting the last live-frame reading)
+      // so the initial handles align better with what was actually captured.
+      const frameCorners = detectCornersFromCanvas(frozenFrame) || detectedCorners;
+
       // Read container size after it's visible
       requestAnimationFrame(() => {
         const container = document.getElementById('corner-container');
         const w = container.offsetWidth;
         const h = container.offsetHeight;
 
-        if (detectedCorners && detectedCorners.topLeftCorner && detectedCorners.topRightCorner &&
-            detectedCorners.bottomLeftCorner && detectedCorners.bottomRightCorner) {
-          setHandlePos('tl', detectedCorners.topLeftCorner.x / frozenFrame.width * w, detectedCorners.topLeftCorner.y / frozenFrame.height * h);
-          setHandlePos('tr', detectedCorners.topRightCorner.x / frozenFrame.width * w, detectedCorners.topRightCorner.y / frozenFrame.height * h);
-          setHandlePos('bl', detectedCorners.bottomLeftCorner.x / frozenFrame.width * w, detectedCorners.bottomLeftCorner.y / frozenFrame.height * h);
-          setHandlePos('br', detectedCorners.bottomRightCorner.x / frozenFrame.width * w, detectedCorners.bottomRightCorner.y / frozenFrame.height * h);
+        if (frameCorners && frameCorners.topLeftCorner && frameCorners.topRightCorner &&
+            frameCorners.bottomLeftCorner && frameCorners.bottomRightCorner) {
+          const expanded = expandCorners(frameCorners, frozenFrame.width, frozenFrame.height, 0.045);
+          setHandlePos('tl', expanded.topLeftCorner.x / frozenFrame.width * w, expanded.topLeftCorner.y / frozenFrame.height * h);
+          setHandlePos('tr', expanded.topRightCorner.x / frozenFrame.width * w, expanded.topRightCorner.y / frozenFrame.height * h);
+          setHandlePos('bl', expanded.bottomLeftCorner.x / frozenFrame.width * w, expanded.bottomLeftCorner.y / frozenFrame.height * h);
+          setHandlePos('br', expanded.bottomRightCorner.x / frozenFrame.width * w, expanded.bottomRightCorner.y / frozenFrame.height * h);
         } else {
           const m = 0.08;
           setHandlePos('tl', w * m, h * m);
@@ -439,6 +444,57 @@
         }
         updateCornerOutline();
       });
+    }
+
+    function detectCornersFromCanvas(canvas) {
+      if (!scanner || typeof cv === 'undefined') return null;
+      try {
+        const img = cv.imread(canvas);
+        const contour = scanner.findPaperContour(img);
+        img.delete();
+        if (!contour) return null;
+        const pts = scanner.getCornerPoints(contour);
+        if (!pts || !pts.topLeftCorner || !pts.topRightCorner || !pts.bottomLeftCorner || !pts.bottomRightCorner) return null;
+        return pts;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function clamp(val, min, max) {
+      return Math.max(min, Math.min(max, val));
+    }
+
+    function expandCorners(corners, frameWidth, frameHeight, expandRatio) {
+      const pts = [
+        corners.topLeftCorner,
+        corners.topRightCorner,
+        corners.bottomLeftCorner,
+        corners.bottomRightCorner
+      ];
+      const cx = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
+      const cy = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+      const minPadPx = 14;
+
+      function expandPoint(p) {
+        const dx = p.x - cx;
+        const dy = p.y - cy;
+        const nx = dx === 0 ? 0 : dx / Math.abs(dx);
+        const ny = dy === 0 ? 0 : dy / Math.abs(dy);
+        const ex = p.x + dx * expandRatio + nx * minPadPx;
+        const ey = p.y + dy * expandRatio + ny * minPadPx;
+        return {
+          x: clamp(ex, 0, frameWidth),
+          y: clamp(ey, 0, frameHeight)
+        };
+      }
+
+      return {
+        topLeftCorner: expandPoint(corners.topLeftCorner),
+        topRightCorner: expandPoint(corners.topRightCorner),
+        bottomLeftCorner: expandPoint(corners.bottomLeftCorner),
+        bottomRightCorner: expandPoint(corners.bottomRightCorner)
+      };
     }
 
     // ── Draggable corner handles ─────────────────────────────
