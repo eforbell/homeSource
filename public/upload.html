@@ -169,6 +169,11 @@
         <label class="form-label">Owners</label>
         <div id="owner-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
       </div>
+      <div class="form-group">
+        <label class="form-label">MagicIndex</label>
+        <label style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
+        <div class="form-hint" id="magicindex-hint">Loading MagicIndex config...</div>
+      </div>
 
       <button id="submit-btn" class="btn btn-primary" style="width:100%; margin-top:0.5rem;">Save Document</button>
       <div id="submit-status" class="text-sm mt-1" style="display:none;"></div>
@@ -185,6 +190,18 @@
     let selectedFile = null;
     let activeTab = 'scan';
     let scanBlob = null;
+
+    async function loadMagicIndexConfig() {
+      try {
+        const cfg = await API.get('api/import/config');
+        const mi = cfg.magicindex || {};
+        document.getElementById('magicindex-enabled').checked = !!mi.default_enabled;
+        const privacy = mi.provider_private ? 'private provider: defaults on' : 'not marked private: defaults off';
+        document.getElementById('magicindex-hint').textContent = `Provider ${mi.provider || 'off'} (${privacy}).`;
+      } catch (err) {
+        document.getElementById('magicindex-hint').textContent = err.message || 'MagicIndex config unavailable';
+      }
+    }
 
     // ── Tabs ──────────────────────────────────────────────────
 
@@ -847,6 +864,7 @@
         issued_date: document.getElementById('meta-issued').value || undefined,
         expiry_date: document.getElementById('meta-expiry').value || undefined,
         owner_ids: ownerIds.length ? ownerIds : undefined,
+        magicindex_enabled: document.getElementById('magicindex-enabled').checked,
         source_type: activeTab === 'scan' ? 'scan' : activeTab === 'url' ? 'url_import' : 'upload'
       };
       if (activeTab === 'scan') {
@@ -895,6 +913,7 @@
     }
 
     loadMembers();
+    loadMagicIndexConfig();
   </script>
 </body>
 </html>
