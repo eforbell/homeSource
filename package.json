@@ -7,7 +7,10 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "migrate": "node db/migrate.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 --require ./test/bootstrap.js test/*.test.js",
+    "test:fast": "node --test --test-concurrency=1 --require ./test/bootstrap.js test/*.test.js",
+    "test:unit": "node --test --require ./test/bootstrap.js test/auth.test.js test/test-env.test.js test/files.test.js",
+    "test:prepare": "DATABASE_URL=postgresql://homesource:homesource@localhost:5438/homesource_test node db/migrate.js"
   },
   "dependencies": {
     "archiver": "^7.0.0",

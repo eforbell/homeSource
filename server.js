@@ -681,7 +681,8 @@ app.get('/share/:token', (_req, res) => res.sendFile(path.join(__dirname, 'publi
 
 // ── Periodic cleanup ────────────────────────────────────────────────────────
 
-setInterval(() => cleanExpiredSessions().catch(() => {}), 60 * 60 * 1000);
+const _cleanupInterval = setInterval(() => cleanExpiredSessions().catch(() => {}), 60 * 60 * 1000);
+if (process.env.NODE_ENV === 'test') _cleanupInterval.unref();
 
 // ── Start ───────────────────────────────────────────────────────────────────
 
