@@ -300,8 +300,8 @@
           ['Status', doc.status],
           ['Created', new Date(doc.created_at).toLocaleDateString()]
         ];
-        if (doc.issued_date) rows.push(['Issued', new Date(doc.issued_date).toLocaleDateString()]);
-        if (doc.expiry_date) rows.push(['Expires', `<span style="color:var(--warn);">${new Date(doc.expiry_date).toLocaleDateString()}</span>`]);
+        if (doc.issued_date) rows.push(['Issued', formatDateForDisplay(doc.issued_date)]);
+        if (doc.expiry_date) rows.push(['Expires', `<span style="color:var(--warn);">${formatDateForDisplay(doc.expiry_date)}</span>`]);
         if (doc.source_url) rows.push(['Source URL', `<a href="${esc(doc.source_url)}" target="_blank" class="text-sm">Link</a>`]);
         if (doc.metadata && Object.keys(doc.metadata).length) {
           for (const [k, v] of Object.entries(doc.metadata)) {
@@ -415,9 +415,20 @@
       document.getElementById('edit-title').value = currentDoc.title;
       document.getElementById('edit-desc').value = currentDoc.description || '';
       document.getElementById('edit-type').value = currentDoc.document_type;
-      document.getElementById('edit-issued').value = currentDoc.issued_date || '';
-      document.getElementById('edit-expiry').value = currentDoc.expiry_date || '';
+      document.getElementById('edit-issued').value = normalizeDateInputValue(currentDoc.issued_date);
+      document.getElementById('edit-expiry').value = normalizeDateInputValue(currentDoc.expiry_date);
       document.getElementById('edit-modal').classList.remove('hidden');
+    }
+
+    function normalizeDateInputValue(value) {
+      if (!value) return '';
+      return String(value).slice(0, 10);
+    }
+
+    function formatDateForDisplay(value) {
+      const ymd = normalizeDateInputValue(value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return esc(String(value));
+      return new Date(`${ymd}T12:00:00`).toLocaleDateString();
     }
 
     document.getElementById('save-edit-btn').addEventListener('click', async () => {
