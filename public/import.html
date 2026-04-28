@@ -32,7 +32,7 @@
         <label style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
         <div class="form-hint" id="magicindex-hint">Loading MagicIndex config...</div>
       </div>
-      <button class="btn btn-primary" id="create-batch-btn">Stage selected files</button>
+      <button class="btn btn-primary" id="create-batch-btn">Start import</button>
       <span id="stage-status" class="text-sm text-dim" style="margin-left:.75rem;"></span>
     </div>
 
@@ -43,7 +43,7 @@
       </div>
       <div class="grid-4" id="batch-counts"></div>
       <div id="batch-items" class="mt-2"></div>
-      <p class="text-sm text-dim mt-2">Processing requires the import worker: <code>npm run worker:import</code>. In tests/dev, <code>npm run worker:import:once</code> processes one queued job.</p>
+      <p class="text-sm text-dim mt-2">Import progress updates automatically while a batch is running.</p>
     </div>
 
     <div class="card mt-2">
@@ -57,6 +57,8 @@
   <script>
     'use strict';
     let currentBatchId = null;
+    let batchRefreshTimer = null;
+    let batchRefreshInFlight = false;
 
     async function init() {
       await loadConfig();
@@ -95,28 +97,34 @@
     }
 
     async function refreshBatch() {
-      if (!currentBatchId) return;
-      const [batch, items] = await Promise.all([
-        API.get(`api/import/batches/${currentBatchId}`),
-        API.get(`api/import/batches/${currentBatchId}/items?limit=200`)
-      ]);
-      document.getElementById('current-batch-title').textContent = `${batch.name} — ${batch.status}`;
-      const counts = batch.item_counts || {};
-      document.getElementById('batch-counts').innerHTML = ['queued','imported','review_ready','skipped_duplicate','failed'].map(k =>
-        `<div class="stat-card"><div class="stat-value">${counts[k] || 0}</div><div class="stat-label">${k.replace('_',' ')}</div></div>`
-      ).join('');
-      const el = document.getElementById('batch-items');
-      if (!items.length) { el.innerHTML = '<p class="text-dim">No items staged.</p>'; return; }
-      el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th><th></th></tr></thead><tbody>' + items.map(i => {
-        const mi = i.magicindex_result;
-        const autoFields = mi && mi.auto_applied && typeof mi.auto_applied === 'object' ? Object.keys(mi.auto_applied).length : 0;
-        const source = mi?.extraction_evidence?.source ? ` · ${mi.extraction_evidence.source}` : '';
-        const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%${autoFields ? ` · applied ${autoFields}` : ''}${source}` : '—';
-        const doc = i.document_id ? `<a href="document.html?id=${i.document_id}">${esc(i.document_title || 'Open')}</a>` : '—';
-        const canApply = i.status === 'review_ready' && mi && (!autoFields || mi.applied_by_user !== true);
-        const action = canApply ? `<button class="btn btn-sm" onclick="applyMagicIndex(${i.id})">Apply</button>` : '';
-        return `<tr><td><div>${esc(i.original_filename)}</div><div class="text-xs text-dim">${esc(i.relative_path || '')}</div></td><td>${esc(i.status)}${i.error_message ? `<div class="text-xs" style="color:var(--danger);">${esc(i.error_message)}</div>` : ''}</td><td>${doc}</td><td>${confidence}</td><td>${action}</td></tr>`;
-      }).join('') + '</tbody></table>';
+      if (!currentBatchId || batchRefreshInFlight) return;
+      batchRefreshInFlight = true;
+      try {
+        const [batch, items] = await Promise.all([
+          API.get(`api/import/batches/${currentBatchId}`),
+          API.get(`api/import/batches/${currentBatchId}/items?limit=200`)
+        ]);
+        document.getElementById('current-batch-title').textContent = `${batch.name} — ${batch.status}`;
+        const counts = batch.item_counts || {};
+        document.getElementById('batch-counts').innerHTML = ['queued','imported','review_ready','skipped_duplicate','failed'].map(k =>
+          `<div class="stat-card"><div class="stat-value">${counts[k] || 0}</div><div class="stat-label">${k.replace('_',' ')}</div></div>`
+        ).join('');
+        const el = document.getElementById('batch-items');
+        if (!items.length) { el.innerHTML = '<p class="text-dim">No items staged.</p>'; return; }
+        el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th><th></th></tr></thead><tbody>' + items.map(i => {
+          const mi = i.magicindex_result;
+          const autoFields = mi && mi.auto_applied && typeof mi.auto_applied === 'object' ? Object.keys(mi.auto_applied).length : 0;
+          const source = mi?.extraction_evidence?.source ? ` · ${mi.extraction_evidence.source}` : '';
+          const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%${autoFields ? ` · applied ${autoFields}` : ''}${source}` : '—';
+          const doc = i.document_id ? `<a href="document.html?id=${i.document_id}">${esc(i.document_title || 'Open')}</a>` : '—';
+          const canApply = i.status === 'review_ready' && mi && (!autoFields || mi.applied_by_user !== true);
+          const action = canApply ? `<button class="btn btn-sm" onclick="applyMagicIndex(${i.id})">Apply</button>` : '';
+          return `<tr><td><div>${esc(i.original_filename)}</div><div class="text-xs text-dim">${esc(i.relative_path || '')}</div></td><td>${esc(i.status)}${i.error_message ? `<div class="text-xs" style="color:var(--danger);">${esc(i.error_message)}</div>` : ''}</td><td>${doc}</td><td>${confidence}</td><td>${action}</td></tr>`;
+        }).join('') + '</tbody></table>';
+        ensureAutoRefresh(batch.status);
+      } finally {
+        batchRefreshInFlight = false;
+      }
     }
 
     document.getElementById('create-batch-btn').addEventListener('click', async () => {
@@ -163,6 +171,21 @@
     });
 
     document.getElementById('refresh-btn').addEventListener('click', refreshBatch);
+
+    function ensureAutoRefresh(batchStatus) {
+      const active = ['queued', 'running'].includes(String(batchStatus || ''));
+      if (active) {
+        if (!batchRefreshTimer) {
+          batchRefreshTimer = setInterval(() => {
+            refreshBatch().catch(() => {});
+            loadBatches().catch(() => {});
+          }, 3000);
+        }
+      } else if (batchRefreshTimer) {
+        clearInterval(batchRefreshTimer);
+        batchRefreshTimer = null;
+      }
+    }
 
     async function applyMagicIndex(itemId) {
       try {
