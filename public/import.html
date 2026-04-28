@@ -107,12 +107,14 @@
       ).join('');
       const el = document.getElementById('batch-items');
       if (!items.length) { el.innerHTML = '<p class="text-dim">No items staged.</p>'; return; }
-      el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th></tr></thead><tbody>' + items.map(i => {
+      el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th><th></th></tr></thead><tbody>' + items.map(i => {
         const mi = i.magicindex_result;
         const autoFields = mi && mi.auto_applied && typeof mi.auto_applied === 'object' ? Object.keys(mi.auto_applied).length : 0;
         const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%${autoFields ? ` · applied ${autoFields}` : ''}` : '—';
         const doc = i.document_id ? `<a href="document.html?id=${i.document_id}">${esc(i.document_title || 'Open')}</a>` : '—';
-        return `<tr><td><div>${esc(i.original_filename)}</div><div class="text-xs text-dim">${esc(i.relative_path || '')}</div></td><td>${esc(i.status)}${i.error_message ? `<div class="text-xs" style="color:var(--danger);">${esc(i.error_message)}</div>` : ''}</td><td>${doc}</td><td>${confidence}</td></tr>`;
+        const canApply = i.status === 'review_ready' && mi && (!autoFields || mi.applied_by_user !== true);
+        const action = canApply ? `<button class="btn btn-sm" onclick="applyMagicIndex(${i.id})">Apply</button>` : '';
+        return `<tr><td><div>${esc(i.original_filename)}</div><div class="text-xs text-dim">${esc(i.relative_path || '')}</div></td><td>${esc(i.status)}${i.error_message ? `<div class="text-xs" style="color:var(--danger);">${esc(i.error_message)}</div>` : ''}</td><td>${doc}</td><td>${confidence}</td><td>${action}</td></tr>`;
       }).join('') + '</tbody></table>';
     }
 
@@ -161,6 +163,17 @@
 
     document.getElementById('refresh-btn').addEventListener('click', refreshBatch);
 
+    async function applyMagicIndex(itemId) {
+      try {
+        toastStatus(`Applying MagicIndex suggestions for item ${itemId}...`);
+        await API.post(`api/import/items/${itemId}/apply-magicindex`, {});
+        await refreshBatch();
+        toastStatus(`Applied MagicIndex suggestions for item ${itemId}.`);
+      } catch (err) {
+        toastStatus(err.message);
+      }
+    }
+
     function isIgnoredImportPath(input) {
       const normalized = String(input || '').replace(/\\/g, '/');
       return !normalized || normalized.split('/').some(part => part.startsWith('.') || part === '__MACOSX') || /(^|\/)Thumbs\.db$/i.test(normalized);
@@ -169,6 +182,7 @@
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
     init();
     window.selectBatch = selectBatch;
+    window.applyMagicIndex = applyMagicIndex;
   </script>
 </body>
 </html>

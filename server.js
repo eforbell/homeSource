@@ -15,6 +15,7 @@ const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
 const { importFromUrl, processUpload } = require('./lib/import');
 const importBatches = require('./lib/import-batches');
 const { getMagicIndexConfig } = require('./lib/magic-index/config');
+const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -644,6 +645,38 @@ app.post('/api/import/items/:id/retry', requireAuth, requireParent, async (req, 
     const item = await importBatches.retryItem(req.params.id);
     if (!item) return res.status(404).json({ error: 'Retryable import item not found' });
     res.json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/import/items/:id/apply-magicindex', requireAuth, requireParent, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT ii.*, b.options AS batch_options, b.created_by AS batch_created_by
+      FROM import_items ii
+      JOIN import_batches b ON b.id = ii.batch_id
+      WHERE ii.id = $1
+    `, [req.params.id]);
+    const item = rows[0];
+    if (!item) return res.status(404).json({ error: 'Import item not found' });
+    if (!item.document_id) return res.status(400).json({ error: 'Import item has no document' });
+    if (!item.magicindex_result || typeof item.magicindex_result !== 'object') {
+      return res.status(400).json({ error: 'No MagicIndex result available to apply' });
+    }
+
+    const threshold = Number(req.body?.threshold ?? item.batch_options?.auto_apply_confidence ?? process.env.MAGICINDEX_AUTO_APPLY_CONFIDENCE ?? 0.85);
+    const autoApplied = await applyMagicIndexToDocument({
+      documentId: item.document_id,
+      result: item.magicindex_result.suggestions || item.magicindex_result,
+      threshold,
+      provider: item.magicindex_result.provider || item.batch_options?.magicindex_provider || 'openai',
+      model: item.magicindex_result.model || null,
+      force: true
+    });
+
+    const nextResult = { ...item.magicindex_result, auto_applied: autoApplied, applied_by_user: true, applied_at: new Date().toISOString() };
+    const updated = await importBatches.updateItemStatus(item.id, 'review_ready', { magicindex_result: nextResult });
+    await audit.log('magicindex.applied', 'document', item.document_id, req.member.id, { import_item_id: item.id, fields: Object.keys(autoApplied) });
+    res.json({ ok: true, item: updated, auto_applied: autoApplied });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
