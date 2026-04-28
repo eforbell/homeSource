@@ -154,6 +154,23 @@ async function markMagicIndexWarning(item, err, config) {
       provider: config.provider,
       model: config.provider === 'openai_compatible' ? config.compatible.model : config.openai.model,
       confidence: 0,
+      field_confidence: {
+        title: 0,
+        document_type: 0,
+        summary: 0,
+        issued_date: 0,
+        expiry_date: 0,
+        amount: 0,
+        suggested_tags: 0,
+        suggested_owners: 0
+      },
+      extraction_evidence: {
+        source: 'filename_only',
+        text_preview_chars: 0,
+        used_input_file: false,
+        used_input_image: false,
+        used_fallback_without_file: false
+      },
       auto_applied: {},
       error: err.message,
       needs_review_reasons: ['MagicIndex failed; document imported with filename metadata']

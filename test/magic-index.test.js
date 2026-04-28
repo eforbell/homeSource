@@ -35,6 +35,17 @@ describe('MagicIndex schema normalization', () => {
     assert.equal(result.confidence, 1);
     assert.equal(result.suggested_tags[0].name, 'HVAC');
   });
+
+  it('fills field-level confidence and diagnostics defaults', () => {
+    const result = normalizeMagicIndexResult({
+      title: 'Receipt',
+      confidence: 0.6
+    });
+    assert.equal(result.field_confidence.title, 0.6);
+    assert.equal(result.field_confidence.issued_date, 0.6);
+    assert.equal(result.extraction_evidence, null);
+    assert.equal(result.request_diagnostics, null);
+  });
 });
 
 const { inferMimeType, clampConfidence, isIgnoredImportPath } = require('../lib/import-batches');
@@ -65,7 +76,7 @@ describe('import hardening helpers', () => {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { buildResponseBody, canSendPdfFile } = require('../lib/magic-index/providers/openai-responses');
+const { buildResponseBody, buildUserContent, canSendPdfFile } = require('../lib/magic-index/providers/openai-responses');
 
 describe('OpenAI PDF MagicIndex requests', () => {
   it('attaches PDF bytes as Responses input_file content', () => {
@@ -87,5 +98,17 @@ describe('OpenAI PDF MagicIndex requests', () => {
   it('can disable direct PDF sending for cloud tests', () => {
     const config = { openai: { model: 'gpt-5.4-nano', api_key: 'test', send_pdf_input: false } };
     assert.equal(canSendPdfFile({ filePath: __filename, filename: 'x.pdf', mimeType: 'application/pdf' }, config), false);
+  });
+
+  it('attaches image input payload for native images', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hs-img-'));
+    const imagePath = path.join(dir, 'sample.jpg');
+    fs.writeFileSync(imagePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const config = { openai: { model: 'gpt-5.4-nano', api_key: 'test', send_pdf_input: true } };
+    const content = buildUserContent({ filePath: imagePath, filename: 'sample.jpg', mimeType: 'image/jpeg', textPreview: '' }, config);
+    const imagePart = content.find((part) => part.type === 'input_image');
+    assert.ok(imagePart);
+    assert.equal(imagePart.detail, 'high');
+    assert.match(imagePart.image_url, /^data:image\/jpeg;base64,/);
   });
 });

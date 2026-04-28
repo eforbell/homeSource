@@ -354,8 +354,13 @@
         const provider = value.provider || 'unknown';
         const confidence = Number(value.confidence);
         const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '—';
+        const importItemId = Number(currentDoc?.metadata?.import_item_id || 0);
+        const canApply = importItemId > 0 && value.state === 'complete' && value.applied_by_user !== true;
+        const evidence = value.extraction_evidence?.source ? `<span class="text-xs text-dim">source: ${esc(value.extraction_evidence.source)}</span>` : '';
         return `<div style="display:flex; flex-direction:column; gap:0.25rem;">
           <span><strong>${esc(state)}</strong> · ${esc(provider)} · ${confidenceLabel}</span>
+          ${evidence}
+          ${canApply ? `<div><button class="btn btn-sm" onclick="applyMagicIndexFromDocument(${importItemId})">Apply suggestions</button></div>` : ''}
           <details>
             <summary class="text-sm text-dim" style="cursor:pointer;">View raw MagicIndex JSON</summary>
             <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
@@ -367,6 +372,16 @@
         <summary class="text-sm text-dim" style="cursor:pointer;">View JSON</summary>
         <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
       </details>`;
+    }
+
+    async function applyMagicIndexFromDocument(importItemId) {
+      try {
+        await API.post(`api/import/items/${importItemId}/apply-magicindex`, {});
+        toast('MagicIndex suggestions applied', 'success');
+        await loadDocument();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     }
 
     async function loadShares() {

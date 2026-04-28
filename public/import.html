@@ -110,7 +110,8 @@
       el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th><th></th></tr></thead><tbody>' + items.map(i => {
         const mi = i.magicindex_result;
         const autoFields = mi && mi.auto_applied && typeof mi.auto_applied === 'object' ? Object.keys(mi.auto_applied).length : 0;
-        const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%${autoFields ? ` · applied ${autoFields}` : ''}` : '—';
+        const source = mi?.extraction_evidence?.source ? ` · ${mi.extraction_evidence.source}` : '';
+        const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%${autoFields ? ` · applied ${autoFields}` : ''}${source}` : '—';
         const doc = i.document_id ? `<a href="document.html?id=${i.document_id}">${esc(i.document_title || 'Open')}</a>` : '—';
         const canApply = i.status === 'review_ready' && mi && (!autoFields || mi.applied_by_user !== true);
         const action = canApply ? `<button class="btn btn-sm" onclick="applyMagicIndex(${i.id})">Apply</button>` : '';
