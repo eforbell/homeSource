@@ -305,7 +305,7 @@
         if (doc.source_url) rows.push(['Source URL', `<a href="${esc(doc.source_url)}" target="_blank" class="text-sm">Link</a>`]);
         if (doc.metadata && Object.keys(doc.metadata).length) {
           for (const [k, v] of Object.entries(doc.metadata)) {
-            rows.push([k.replace(/_/g, ' '), esc(String(v))]);
+            rows.push([k.replace(/_/g, ' '), formatMetadataValue(k, v)]);
           }
         }
         meta.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td class="text-dim text-sm" style="white-space:nowrap;">${k}</td><td>${v}</td></tr>`).join('') + '</table>';
@@ -343,6 +343,30 @@
       document.getElementById('tags-list').innerHTML = tags.length
         ? tags.map(t => `<span class="tag" style="background:${t.color}22;color:${t.color};">${esc(t.name)}</span>`).join('')
         : '<span class="text-dim text-sm">No tags</span>';
+    }
+
+    function formatMetadataValue(key, value) {
+      if (value === null || value === undefined) return '<span class="text-dim">—</span>';
+      if (typeof value !== 'object') return esc(String(value));
+
+      if (key === 'magicindex') {
+        const state = value.state || 'unknown';
+        const provider = value.provider || 'unknown';
+        const confidence = Number(value.confidence);
+        const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '—';
+        return `<div style="display:flex; flex-direction:column; gap:0.25rem;">
+          <span><strong>${esc(state)}</strong> · ${esc(provider)} · ${confidenceLabel}</span>
+          <details>
+            <summary class="text-sm text-dim" style="cursor:pointer;">View raw MagicIndex JSON</summary>
+            <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; max-width:320px;">${esc(JSON.stringify(value, null, 2))}</pre>
+          </details>
+        </div>`;
+      }
+
+      return `<details>
+        <summary class="text-sm text-dim" style="cursor:pointer;">View JSON</summary>
+        <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; max-width:320px;">${esc(JSON.stringify(value, null, 2))}</pre>
+      </details>`;
     }
 
     async function loadShares() {
