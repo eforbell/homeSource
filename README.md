@@ -118,6 +118,7 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 | MAGICINDEX_COMPAT_MODEL | No | -- | Local model id, e.g. `qwen3:30b-a3b` |
 | MAGICINDEX_COMPAT_API_KEY | No | -- | Optional local endpoint key; can be blank for LAN servers without auth |
 | MAGICINDEX_OPENAI_MODEL | No | gpt-5.4-nano | OpenAI cloud model when `MAGICINDEX_PROVIDER=openai` |
+| MAGICINDEX_OPENAI_SEND_PDF | No | yes | Send PDFs directly as OpenAI Responses `input_file` content in cloud mode |
 | OPENAI_API_KEY | No | -- | Required only for OpenAI cloud MagicIndex |
 
 
@@ -148,6 +149,8 @@ MAGICINDEX_COMPAT_API_KEY=
 ```
 
 With `MAGICINDEX_PROVIDER_PRIVATE=yes`, the batch UI may default MagicIndex on. For cloud providers or any endpoint that sends data outside the private home/LAN boundary, keep `MAGICINDEX_PROVIDER_PRIVATE=no` so MagicIndex defaults off.
+
+OpenAI cloud mode sends PDF files directly to the Responses API as `input_file` content when `MAGICINDEX_OPENAI_SEND_PDF=yes`. This lets OpenAI handle born-digital PDFs and many scanned/mixed PDFs using its PDF text + page-image processing. Local OpenAI-compatible/Qwen mode does not receive raw PDFs; it currently uses extracted text previews and should be paired with a future `pdftotext`/OCR extraction pass for strong PDF coverage.
 
 ## Deployment
 

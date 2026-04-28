@@ -55,3 +55,31 @@ describe('import hardening helpers', () => {
     assert.equal(stripJsonFence('```json\n{"ok":true}\n```'), '{"ok":true}');
   });
 });
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { buildResponseBody, canSendPdfFile } = require('../lib/magic-index/providers/openai-responses');
+
+describe('OpenAI PDF MagicIndex requests', () => {
+  it('attaches PDF bytes as Responses input_file content', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hs-pdf-'));
+    const pdfPath = path.join(dir, 'sample.pdf');
+    fs.writeFileSync(pdfPath, Buffer.from('%PDF-1.4\n%%EOF'));
+    const config = { openai: { model: 'gpt-5.4-nano', api_key: 'test', send_pdf_input: true } };
+    const input = { filePath: pdfPath, filename: 'sample.pdf', mimeType: 'application/pdf' };
+
+    assert.equal(canSendPdfFile(input, config), true);
+    const body = buildResponseBody(input, config);
+    const userContent = body.input[1].content;
+    const filePart = userContent.find(part => part.type === 'input_file');
+    assert.ok(filePart);
+    assert.equal(filePart.filename, 'sample.pdf');
+    assert.equal(filePart.file_data, Buffer.from('%PDF-1.4\n%%EOF').toString('base64'));
+  });
+
+  it('can disable direct PDF sending for cloud tests', () => {
+    const config = { openai: { model: 'gpt-5.4-nano', api_key: 'test', send_pdf_input: false } };
+    assert.equal(canSendPdfFile({ filePath: __filename, filename: 'x.pdf', mimeType: 'application/pdf' }, config), false);
+  });
+});
