@@ -1,0 +1,42 @@
+## Codebase Patterns
+- Auth: scrypt passphrase hashing, session cookies (30-day TTL), cookie name `hs_session`
+- Middleware: `requireAuth`, `requireParent` guards (same pattern as familyPulse)
+- File storage: UUID filenames organized by year under STORAGE_PATH
+- Thumbnails: sharp to 300px-wide JPEG from original image (not processed PDF)
+- Image-to-PDF: sharp resize + pdf-lib wrap
+- Multipart uploads: skip express.json() for multipart content-types
+- API paths: always relative (nginx subpath compatible), never absolute `/api/...`
+- Share link auth: basePath computed from location.pathname, not hardcoded
+- Client-side scanning: jscanify vendored at public/vendor/jscanify.js, OpenCV.js from CDN
+- CSS: mobile-first, media queries for desktop breakpoints, no inline grid styles that override responsive rules
+
+---
+
+## 2026-04-26 — Feature #1: Foundation
+- Full initial implementation in single commit (f9b270a)
+- All 16 database tables, auth, CRUD, upload, search, tags, sharing, backup, audit
+- 10 frontend pages with dark theme
+- **Learnings:**
+  - express.json() must skip multipart requests or it consumes the body stream
+  - jscanify CDN path is 404 — must vendor locally
+  - sharp handles HEIC natively via libvips
+
+---
+
+## 2026-04-27 — Feature #2: MVP Hardening
+- 20 commits fixing iOS/mobile/scanner issues discovered during real-device testing
+- Major scanner overhaul: manual corner registration, client-side compression, black frame retry
+- See planning/camera-scanning-gotchas.md for detailed lessons
+- **Learnings:**
+  - iOS getUserMedia requires user gesture (no auto-start)
+  - iOS drawImage(video) races with OpenCV reads — stop interval, use rAF, detect black frames
+  - jscanify highlightPaper returns a new canvas, doesn't draw to passed canvas
+  - CSS position:absolute on canvas collapses parent; target by ID not tag
+  - object-fit:contain causes letterboxing that misaligns corner handles
+  - Container must be visible before reading offsetWidth/offsetHeight
+  - iOS auto-zooms inputs < 16px font-size
+  - PDF iframes trigger Safari overlay in WKWebView — show image instead
+  - target="_blank" in WKWebView = no back button — use download attribute
+  - nginx default client_max_body_size is 1MB, needs 55M for doc uploads
+  - Share page relative URLs resolve wrong when served at /share/:token
+---

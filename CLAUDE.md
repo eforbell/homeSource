@@ -2,12 +2,10 @@
 
 ## What This Is
 
-Sovereign family document vault for the Forbell household. Stores warranties, insurance docs,
-critical records (birth certificates, passports), manuals, and more. Supports phone camera
-scanning with client-side perspective correction, URL import, and file upload. Local-first
-storage with offline backup to USB/media.
-
-Family: Eric (Dad), Val (Mom), Adam (Son), Callie (Daughter).
+Sovereign family document vault. Part of the sovereign-home app suite. Stores warranties,
+insurance docs, critical records (birth certificates, passports), manuals, and more. Supports
+phone camera scanning with client-side perspective correction, URL import, and file upload.
+Local-first storage with offline backup to USB/media.
 
 ## Dev Commands
 

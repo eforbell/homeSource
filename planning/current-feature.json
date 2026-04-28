@@ -1,0 +1,21 @@
+{
+  "currentFeature": null,
+  "status": "idle",
+  "prdPath": null,
+  "completedFeatures": [
+    "Feature #1: Foundation (Schema + Auth + Document CRUD + File Upload + Search + Backup + Sharing)",
+    "Feature #2: MVP Hardening (iOS/WKWebView fixes, scanner overhaul, mobile polish, tag editor)"
+  ],
+  "skippedFeatures": [],
+  "futureFeatures": [
+    "Feature #3: PDF Thumbnails — generate thumbnails from PDF uploads via libvips+poppler (bugBase #56)",
+    "Feature #4: MagicIndex — LLM auto-metadata extraction on upload, opt-in OpenAI processing (bugBase #54)",
+    "Feature #5: Multi-page Document Scanning — accumulate pages, reorder, stitch into single PDF (bugBase #59)",
+    "Feature #6: Batch Uploads — multi-file selection with parallel processing (bugBase #57)",
+    "Feature #7: Search + Tags Integration — tags as first-class search facet, tag filter on search page (bugBase #63)",
+    "Feature #8: Expiry Tracking + Alerts — dashboard alerts for expiring passports, insurance, warranties",
+    "Feature #9: OCR (tesseract.js) — text extraction fed into search_vector for full-text search of scanned docs",
+    "Feature #10: MCP Server — agent automation sidecar for document operations",
+    "Feature #11: Envelope Encryption (DEK/KEK) — using pre-built schema, key management UI, multi-sig covenants"
+  ]
+}
