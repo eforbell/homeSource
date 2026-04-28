@@ -104,15 +104,17 @@
       const previewFile = files.find(f => f.file_type === 'processed' || (f.file_type === 'original' && f.mime_type === 'application/pdf')) || files.find(f => f.file_type === 'original');
 
       const preview = document.getElementById('share-file-preview');
-      if (data.access_level === 'download' && previewFile) {
+      if (previewFile) {
         if (previewFile.mime_type === 'application/pdf') {
           preview.innerHTML = `<iframe src="${basePath}api/share/${token}/files/${previewFile.id}/download" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
         } else if (previewFile.mime_type.startsWith('image/')) {
           preview.innerHTML = `<img src="${basePath}api/share/${token}/files/${previewFile.id}/download" style="max-width:100%;border-radius:8px;">`;
+        } else {
+          preview.innerHTML = '<div class="text-dim" style="font-size:4rem;">📄</div>';
         }
       } else {
         const thumbFile = files.find(f => f.file_type === 'thumbnail');
-        if (thumbFile && data.access_level === 'download') {
+        if (thumbFile) {
           preview.innerHTML = `<img src="${basePath}api/share/${token}/files/${thumbFile.id}/download" style="max-width:300px;border-radius:8px;">`;
         } else {
           preview.innerHTML = '<div class="text-dim" style="font-size:4rem;">📄</div>';

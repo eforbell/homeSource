@@ -555,7 +555,6 @@ app.get('/api/share/:token/files/:fileId/download', async (req, res) => {
   try {
     const link = await getShareLink(req.params.token);
     if (!link) return res.status(404).json({ error: 'Share link not found or expired' });
-    if (link.access_level !== 'download') return res.status(403).json({ error: 'Download not allowed for this share link' });
 
     const { rows } = await pool.query(
       'SELECT * FROM document_files WHERE id = $1 AND document_id = $2',
@@ -568,7 +567,11 @@ app.get('/api/share/:token/files/:fileId/download', async (req, res) => {
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
 
     res.setHeader('Content-Type', file.mime_type);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.original_filename}"`);
+    if (link.access_level === 'download') {
+      res.setHeader('Content-Disposition', `attachment; filename="${file.original_filename}"`);
+    } else {
+      res.setHeader('Content-Disposition', 'inline');
+    }
     fs.createReadStream(filePath).pipe(res);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
