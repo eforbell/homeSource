@@ -116,30 +116,54 @@
     }
 
     document.getElementById('create-batch-btn').addEventListener('click', async () => {
-      const files = [...document.getElementById('batch-files').files];
-      if (!files.length) return toastStatus('Choose files first');
-      const name = document.getElementById('batch-name').value.trim() || `Import ${new Date().toLocaleDateString()}`;
-      const magicindex = document.getElementById('magicindex-enabled').checked;
-      const batch = await API.post('api/import/batches', {
-        name,
-        source_kind: files.some(f => f.webkitRelativePath) ? 'browser_directory' : 'browser_files',
-        options: { magicindex_enabled: magicindex }
-      });
-      currentBatchId = batch.id;
-      document.getElementById('current-batch-card').style.display = 'block';
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        toastStatus(`Staging ${i + 1}/${files.length}: ${file.name}`);
-        await API.uploadFields(`api/import/batches/${batch.id}/items`, { file, relative_path: file.webkitRelativePath || file.name });
+      const btn = document.getElementById('create-batch-btn');
+      const allFiles = [...document.getElementById('batch-files').files];
+      const files = allFiles.filter(file => !isIgnoredImportPath(file.webkitRelativePath || file.name));
+      const ignored = allFiles.length - files.length;
+      if (!files.length) return toastStatus(ignored ? `Only hidden/system files were selected; nothing to import.` : 'Choose files first');
+
+      btn.disabled = true;
+      try {
+        const name = document.getElementById('batch-name').value.trim() || `Import ${new Date().toLocaleDateString()}`;
+        const magicindex = document.getElementById('magicindex-enabled').checked;
+        const batch = await API.post('api/import/batches', {
+          name,
+          source_kind: files.some(f => f.webkitRelativePath) ? 'browser_directory' : 'browser_files',
+          options: { magicindex_enabled: magicindex }
+        });
+        currentBatchId = batch.id;
+        document.getElementById('current-batch-card').style.display = 'block';
+
+        let staged = 0;
+        let failed = 0;
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          toastStatus(`Staging ${i + 1}/${files.length}: ${file.name}`);
+          try {
+            await API.uploadFields(`api/import/batches/${batch.id}/items`, { file, relative_path: file.webkitRelativePath || file.name });
+            staged++;
+          } catch (err) {
+            failed++;
+            console.warn('Failed to stage file', file.name, err);
+          }
+        }
+        if (staged > 0) await API.post(`api/import/batches/${batch.id}/start`, {});
+        toastStatus(`Staged ${staged}/${files.length} file(s). Skipped hidden/system: ${ignored}. Failed: ${failed}.`);
+        await refreshBatch();
+        await loadBatches();
+      } catch (err) {
+        toastStatus(err.message);
+      } finally {
+        btn.disabled = false;
       }
-      await API.post(`api/import/batches/${batch.id}/start`, {});
-      toastStatus(`Staged ${files.length} file(s). Start the import worker if it is not already running.`);
-      await refreshBatch();
-      await loadBatches();
     });
 
     document.getElementById('refresh-btn').addEventListener('click', refreshBatch);
 
+    function isIgnoredImportPath(input) {
+      const normalized = String(input || '').replace(/\\/g, '/');
+      return !normalized || normalized.split('/').some(part => part.startsWith('.') || part === '__MACOSX') || /(^|\/)Thumbs\.db$/i.test(normalized);
+    }
     function toastStatus(message) { document.getElementById('stage-status').textContent = message; }
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
     init();

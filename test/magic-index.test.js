@@ -37,7 +37,7 @@ describe('MagicIndex schema normalization', () => {
   });
 });
 
-const { inferMimeType, clampConfidence } = require('../lib/import-batches');
+const { inferMimeType, clampConfidence, isIgnoredImportPath } = require('../lib/import-batches');
 const { stripJsonFence } = require('../lib/magic-index/providers/openai-compatible-chat');
 
 describe('import hardening helpers', () => {
@@ -53,6 +53,12 @@ describe('import hardening helpers', () => {
 
   it('strips fenced JSON from local model output', () => {
     assert.equal(stripJsonFence('```json\n{"ok":true}\n```'), '{"ok":true}');
+  });
+
+  it('identifies hidden/system files that should not be imported', () => {
+    assert.equal(isIgnoredImportPath('Family Docs/.DS_Store'), true);
+    assert.equal(isIgnoredImportPath('__MACOSX/file.pdf'), true);
+    assert.equal(isIgnoredImportPath('Family Docs/policy.pdf'), false);
   });
 });
 
