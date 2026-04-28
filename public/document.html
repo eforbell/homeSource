@@ -358,14 +358,14 @@
           <span><strong>${esc(state)}</strong> · ${esc(provider)} · ${confidenceLabel}</span>
           <details>
             <summary class="text-sm text-dim" style="cursor:pointer;">View raw MagicIndex JSON</summary>
-            <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; max-width:320px;">${esc(JSON.stringify(value, null, 2))}</pre>
+            <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
           </details>
         </div>`;
       }
 
       return `<details>
         <summary class="text-sm text-dim" style="cursor:pointer;">View JSON</summary>
-        <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; max-width:320px;">${esc(JSON.stringify(value, null, 2))}</pre>
+        <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
       </details>`;
     }
 

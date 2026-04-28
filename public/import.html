@@ -109,7 +109,8 @@
       if (!items.length) { el.innerHTML = '<p class="text-dim">No items staged.</p>'; return; }
       el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th></tr></thead><tbody>' + items.map(i => {
         const mi = i.magicindex_result;
-        const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%` : '—';
+        const autoFields = mi && mi.auto_applied && typeof mi.auto_applied === 'object' ? Object.keys(mi.auto_applied).length : 0;
+        const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%${autoFields ? ` · applied ${autoFields}` : ''}` : '—';
         const doc = i.document_id ? `<a href="document.html?id=${i.document_id}">${esc(i.document_title || 'Open')}</a>` : '—';
         return `<tr><td><div>${esc(i.original_filename)}</div><div class="text-xs text-dim">${esc(i.relative_path || '')}</div></td><td>${esc(i.status)}${i.error_message ? `<div class="text-xs" style="color:var(--danger);">${esc(i.error_message)}</div>` : ''}</td><td>${doc}</td><td>${confidence}</td></tr>`;
       }).join('') + '</tbody></table>';
