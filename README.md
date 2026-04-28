@@ -14,6 +14,7 @@ The app is intentionally self-hosted and direct:
 - upload documents via file picker, camera scan, or URL import
 - client-side document scanning with auto-edge detection and manual corner adjustment
 - image-to-PDF conversion with thumbnail generation (sharp + pdf-lib)
+- PDF first-page thumbnail rendering with poppler fallback (`pdftoppm`) when sharp cannot decode
 - document metadata: type, dates, description, custom key-value fields
 - joint ownership model (owner, joint, beneficiary, custodian)
 - tagging system with color-coded tags
@@ -24,6 +25,9 @@ The app is intentionally self-hosted and direct:
 - audit log for document access, shares, and backups
 - parent/kid access control (parents have full CRUD; kids get read-only on own/shared docs)
 - mobile-first responsive design, iOS WKWebView compatible
+- MagicIndex for both Batch Import and single Add Document flows (upload/scan/url)
+- MagicIndex extraction diagnostics and evidence (`input_file`/fallback path, text preview source, confidence by field)
+- OCR-assisted metadata fallback for scan-heavy PDFs/images (`tesseract` when PDF text extraction is empty)
 
 ## Project Layout
 
@@ -121,6 +125,18 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 | MAGICINDEX_OPENAI_SEND_PDF | No | yes | Send PDFs directly as OpenAI Responses `input_file` content in cloud mode |
 | OPENAI_API_KEY | No | -- | Required only for OpenAI cloud MagicIndex |
 
+## Host Runtime Dependencies (Production)
+
+For robust PDF/image processing in production, install:
+
+- `poppler-utils` (provides `pdftotext` and `pdftoppm`)
+- `tesseract-ocr`
+
+These are now expected by Home Source hardening paths for:
+- PDF text extraction fallback
+- PDF thumbnail rendering fallback
+- OCR fallback when documents are scanned/image-heavy
+
 
 ## Batch Import Worker
 
@@ -151,6 +167,17 @@ MAGICINDEX_COMPAT_API_KEY=
 With `MAGICINDEX_PROVIDER_PRIVATE=yes`, the batch UI may default MagicIndex on. For cloud providers or any endpoint that sends data outside the private home/LAN boundary, keep `MAGICINDEX_PROVIDER_PRIVATE=no` so MagicIndex defaults off.
 
 OpenAI cloud mode sends PDF files directly to the Responses API as `input_file` content when `MAGICINDEX_OPENAI_SEND_PDF=yes`. This lets OpenAI handle born-digital PDFs and many scanned/mixed PDFs using its PDF text + page-image processing. Local OpenAI-compatible/Qwen mode does not receive raw PDFs; it currently uses extracted text previews and should be paired with a future `pdftotext`/OCR extraction pass for strong PDF coverage.
+
+### Batch UX notes
+
+- Batch page auto-refreshes while batches are `queued`/`running`.
+- Failed item statuses and error messages surface in the batch item table.
+- MagicIndex confidence view includes extraction source (for example `pdf_text_preview`, `pdf_ocr_preview`, `filename_only`).
+
+## Single Add + MagicIndex
+
+The Add Document page now includes a MagicIndex toggle (same provider/privacy defaults as batch config).  
+When enabled, single upload/scan/url flows run MagicIndex immediately after document creation and auto-apply fields/tags/owners that pass confidence thresholds.
 
 ## Deployment
 
