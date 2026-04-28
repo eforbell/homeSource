@@ -46,6 +46,16 @@ describe('MagicIndex schema normalization', () => {
     assert.equal(result.extraction_evidence, null);
     assert.equal(result.request_diagnostics, null);
   });
+
+  it('infers issued_date from key facts when direct issued_date is missing', () => {
+    const result = normalizeMagicIndexResult({
+      title: 'Insurance Statement',
+      issued_date: null,
+      key_facts: [{ label: 'Statement Date', value: '12/1/2023', confidence: 0.9 }],
+      confidence: 0.8
+    });
+    assert.equal(result.issued_date, '2023-12-01');
+  });
 });
 
 const { inferMimeType, clampConfidence, isIgnoredImportPath } = require('../lib/import-batches');
