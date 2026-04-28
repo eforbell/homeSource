@@ -426,6 +426,56 @@ th, td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: var(--accent-bg); }
 
+/* ── Browse pills ───────────────────────────────────────────── */
+
+.browse-pills {
+  display: flex; flex-wrap: wrap; gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+.browse-pill {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.browse-pill:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.browse-pill-count {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.browse-pill-tag {
+  border-color: color-mix(in srgb, var(--tag-color, var(--border)) 40%, transparent);
+}
+.browse-pill-tag:hover {
+  border-color: var(--tag-color, var(--accent));
+  background: color-mix(in srgb, var(--tag-color, var(--accent)) 10%, transparent);
+}
+
+/* ── Active filter indicator ────────────────────────────────── */
+
+.active-filter {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.active-filter strong {
+  color: var(--text);
+}
+
 /* ── Filters bar ─────────────────────────────────────────────── */
 
 .filters-bar {
