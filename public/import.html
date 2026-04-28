@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Batch Import</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="import">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Batch Import</h1>
+      <a href="documents.html" class="btn">Documents</a>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Create import batch</span></div>
+      <p class="text-dim">Select a pile of PDFs/images from Dropbox, OneDrive, or a local folder. HomeSource stages one file at a time, then the import worker turns them into reviewable documents.</p>
+      <div class="form-group">
+        <label class="form-label">Batch name</label>
+        <input id="batch-name" class="form-input" placeholder="Family archive import">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Files or folder</label>
+        <input type="file" id="batch-files" class="form-input" multiple webkitdirectory accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tiff">
+        <div class="form-hint">Folder selection preserves relative paths in browsers that support it. You can also select multiple files.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">MagicIndex</label>
+        <label style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
+        <div class="form-hint" id="magicindex-hint">Loading MagicIndex config...</div>
+      </div>
+      <button class="btn btn-primary" id="create-batch-btn">Stage selected files</button>
+      <span id="stage-status" class="text-sm text-dim" style="margin-left:.75rem;"></span>
+    </div>
+
+    <div class="card mt-2" id="current-batch-card" style="display:none;">
+      <div class="card-header">
+        <span class="card-title" id="current-batch-title">Current batch</span>
+        <button class="btn btn-sm" id="refresh-btn">Refresh</button>
+      </div>
+      <div class="grid-4" id="batch-counts"></div>
+      <div id="batch-items" class="mt-2"></div>
+      <p class="text-sm text-dim mt-2">Processing requires the import worker: <code>npm run worker:import</code>. In tests/dev, <code>npm run worker:import:once</code> processes one queued job.</p>
+    </div>
+
+    <div class="card mt-2">
+      <div class="card-header"><span class="card-title">Recent batches</span></div>
+      <div id="recent-batches"></div>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+    let currentBatchId = null;
+
+    async function init() {
+      await loadConfig();
+      await loadBatches();
+    }
+
+    async function loadConfig() {
+      try {
+        const cfg = await API.get('api/import/config');
+        const mi = cfg.magicindex;
+        document.getElementById('magicindex-enabled').checked = !!mi.default_enabled;
+        const privacy = mi.provider_private ? 'private provider: MagicIndex defaults on' : 'not marked private: MagicIndex defaults off';
+        document.getElementById('magicindex-hint').textContent = `Provider ${mi.provider || 'off'} (${privacy}). High-confidence metadata auto-applies.`;
+      } catch (err) {
+        document.getElementById('magicindex-hint').textContent = err.message;
+      }
+    }
+
+    async function loadBatches() {
+      const batches = await API.get('api/import/batches');
+      const el = document.getElementById('recent-batches');
+      if (!batches.length) {
+        el.innerHTML = '<div class="empty-state"><div class="empty-state-title">No import batches yet</div></div>';
+        return;
+      }
+      el.innerHTML = '<table><thead><tr><th>Name</th><th>Status</th><th>Items</th><th>Created</th></tr></thead><tbody>' + batches.map(b => {
+        const total = Object.values(b.item_counts || {}).reduce((a, n) => a + Number(n || 0), 0);
+        return `<tr style="cursor:pointer" onclick="selectBatch(${b.id})"><td>${esc(b.name)}</td><td>${esc(b.status)}</td><td>${total}</td><td class="text-dim text-sm">${new Date(b.created_at).toLocaleString()}</td></tr>`;
+      }).join('') + '</tbody></table>';
+    }
+
+    async function selectBatch(id) {
+      currentBatchId = id;
+      document.getElementById('current-batch-card').style.display = 'block';
+      await refreshBatch();
+    }
+
+    async function refreshBatch() {
+      if (!currentBatchId) return;
+      const [batch, items] = await Promise.all([
+        API.get(`api/import/batches/${currentBatchId}`),
+        API.get(`api/import/batches/${currentBatchId}/items?limit=200`)
+      ]);
+      document.getElementById('current-batch-title').textContent = `${batch.name} — ${batch.status}`;
+      const counts = batch.item_counts || {};
+      document.getElementById('batch-counts').innerHTML = ['queued','imported','review_ready','skipped_duplicate','failed'].map(k =>
+        `<div class="stat-card"><div class="stat-value">${counts[k] || 0}</div><div class="stat-label">${k.replace('_',' ')}</div></div>`
+      ).join('');
+      const el = document.getElementById('batch-items');
+      if (!items.length) { el.innerHTML = '<p class="text-dim">No items staged.</p>'; return; }
+      el.innerHTML = '<table><thead><tr><th>File</th><th>Status</th><th>Document</th><th>MagicIndex</th></tr></thead><tbody>' + items.map(i => {
+        const mi = i.magicindex_result;
+        const confidence = mi ? `${Math.round((mi.confidence || 0) * 100)}%` : '—';
+        const doc = i.document_id ? `<a href="document.html?id=${i.document_id}">${esc(i.document_title || 'Open')}</a>` : '—';
+        return `<tr><td><div>${esc(i.original_filename)}</div><div class="text-xs text-dim">${esc(i.relative_path || '')}</div></td><td>${esc(i.status)}${i.error_message ? `<div class="text-xs" style="color:var(--danger);">${esc(i.error_message)}</div>` : ''}</td><td>${doc}</td><td>${confidence}</td></tr>`;
+      }).join('') + '</tbody></table>';
+    }
+
+    document.getElementById('create-batch-btn').addEventListener('click', async () => {
+      const files = [...document.getElementById('batch-files').files];
+      if (!files.length) return toastStatus('Choose files first');
+      const name = document.getElementById('batch-name').value.trim() || `Import ${new Date().toLocaleDateString()}`;
+      const magicindex = document.getElementById('magicindex-enabled').checked;
+      const batch = await API.post('api/import/batches', {
+        name,
+        source_kind: files.some(f => f.webkitRelativePath) ? 'browser_directory' : 'browser_files',
+        options: { magicindex_enabled: magicindex }
+      });
+      currentBatchId = batch.id;
+      document.getElementById('current-batch-card').style.display = 'block';
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        toastStatus(`Staging ${i + 1}/${files.length}: ${file.name}`);
+        await API.uploadFields(`api/import/batches/${batch.id}/items`, { file, relative_path: file.webkitRelativePath || file.name });
+      }
+      await API.post(`api/import/batches/${batch.id}/start`, {});
+      toastStatus(`Staged ${files.length} file(s). Start the import worker if it is not already running.`);
+      await refreshBatch();
+      await loadBatches();
+    });
+
+    document.getElementById('refresh-btn').addEventListener('click', refreshBatch);
+
+    function toastStatus(message) { document.getElementById('stage-status').textContent = message; }
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    init();
+    window.selectBatch = selectBatch;
+  </script>
+</body>
+</html>

@@ -110,6 +110,44 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |
 | MAX_FILE_SIZE_MB | No | 50 | Upload size limit |
+| MAGICINDEX_PROVIDER | No | off | `off`, `openai`, or `openai_compatible` for local/LAN LLMs |
+| MAGICINDEX_PROVIDER_PRIVATE | No | no | Set `yes` only for private/local providers; allows batch UI to default MagicIndex on |
+| MAGICINDEX_PROVIDER_DEFAULT | No | openai_compatible | Provider preselected by the batch UI |
+| MAGICINDEX_AUTO_APPLY_CONFIDENCE | No | 0.85 | Threshold for auto-applying safe MagicIndex fields |
+| MAGICINDEX_COMPAT_BASE_URL | No | -- | OpenAI-compatible local endpoint, e.g. `http://lan-llm:8000/v1` |
+| MAGICINDEX_COMPAT_MODEL | No | -- | Local model id, e.g. `qwen3:30b-a3b` |
+| MAGICINDEX_COMPAT_API_KEY | No | -- | Optional local endpoint key; can be blank for LAN servers without auth |
+| MAGICINDEX_OPENAI_MODEL | No | gpt-5.4-nano | OpenAI cloud model when `MAGICINDEX_PROVIDER=openai` |
+| OPENAI_API_KEY | No | -- | Required only for OpenAI cloud MagicIndex |
+
+
+## Batch Import Worker
+
+Smart Batch Import stages files through the web app and processes them in a separate worker so slow PDF thumbnailing or MagicIndex calls do not block HTTP requests.
+
+Development:
+
+```sh
+npm run worker:import       # long-running worker
+npm run worker:import:once  # process one queued job, useful for tests/debugging
+```
+
+Production should run both services:
+
+- `deploy/home-source.service` for the web app
+- `deploy/home-source-import-worker.service` for batch processing
+
+For a local/private Qwen-style endpoint, use an OpenAI-compatible server and configure, for example:
+
+```env
+MAGICINDEX_PROVIDER=openai_compatible
+MAGICINDEX_PROVIDER_PRIVATE=yes
+MAGICINDEX_COMPAT_BASE_URL=http://lan-llm:8000/v1
+MAGICINDEX_COMPAT_MODEL=qwen3:30b-a3b
+MAGICINDEX_COMPAT_API_KEY=
+```
+
+With `MAGICINDEX_PROVIDER_PRIVATE=yes`, the batch UI may default MagicIndex on. For cloud providers or any endpoint that sends data outside the private home/LAN boundary, keep `MAGICINDEX_PROVIDER_PRIVATE=no` so MagicIndex defaults off.
 
 ## Deployment
 
