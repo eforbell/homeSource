@@ -15,6 +15,12 @@
       <a href="upload.html" class="btn btn-primary">+ Upload</a>
     </div>
 
+    <!-- Browse pills: popular types and tags -->
+    <div id="browse-pills" class="browse-pills" style="display:none;"></div>
+
+    <!-- Active filter indicator -->
+    <div id="active-filter" class="active-filter" style="display:none;"></div>
+
     <div class="filters-bar">
       <input type="search" id="filter-search" class="form-input" placeholder="Search..." style="min-width:200px;">
       <select id="filter-type" class="form-select">
@@ -94,13 +100,15 @@
         grid.innerHTML = documents.map(d => {
           const thumb = d.thumbnail ? `<img src="api/thumbnails/${d.thumbnail.stored_filename.split('/').pop()}" alt="">` : `<div class="doc-placeholder">📄</div>`;
           const owners = (d.owners || []).map(o => `<span class="avatar" title="${esc(o.name)}">${o.avatar_emoji}</span>`).join('');
-          const tags = (d.tags || []).map(t => `<span class="tag" style="background:${t.color}22; color:${t.color};">${esc(t.name)}</span>`).join('');
+          const tags = (d.tags || []).map(t =>
+            `<span class="tag browse-link" data-browse="tag" data-id="${t.id}" style="background:${t.color}22; color:${t.color}; cursor:pointer;">${esc(t.name)}</span>`
+          ).join('');
 
           return `<div class="doc-card" onclick="location.href='document.html?id=${d.id}'">
             <div class="doc-card-thumb">${thumb}</div>
             <div class="doc-card-body">
               <div class="doc-card-title">${esc(d.title)}</div>
-              <span class="doc-card-type">${d.document_type}</span>
+              <span class="doc-card-type browse-link" data-browse="type" data-id="${d.document_type}" style="cursor:pointer;">${d.document_type}</span>
               ${tags ? '<div class="tags-list mt-1">' + tags + '</div>' : ''}
               <div class="doc-card-meta">
                 <div class="doc-card-owners">${owners}</div>
@@ -109,6 +117,20 @@
             </div>
           </div>`;
         }).join('');
+
+        grid.querySelectorAll('.browse-link').forEach(el => {
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (el.dataset.browse === 'tag') {
+              document.getElementById('filter-tag').value = el.dataset.id;
+            } else if (el.dataset.browse === 'type') {
+              document.getElementById('filter-type').value = el.dataset.id;
+            }
+            currentOffset = 0;
+            loadDocuments();
+            updateActiveFilter();
+          });
+        });
 
         // Pagination
         if (total > PAGE_SIZE) {
@@ -126,7 +148,11 @@
 
     async function loadFilters() {
       try {
-        const [members, tags] = await Promise.all([API.get('api/members'), API.get('api/tags')]);
+        const [members, tags, { documents }] = await Promise.all([
+          API.get('api/members'),
+          API.get('api/tags'),
+          API.get('api/documents?limit=200')
+        ]);
         const ownerSelect = document.getElementById('filter-owner');
         for (const m of members) {
           ownerSelect.innerHTML += `<option value="${m.id}">${m.avatar_emoji} ${esc(m.name)}</option>`;
@@ -135,7 +161,95 @@
         for (const t of tags) {
           tagSelect.innerHTML += `<option value="${t.id}">${esc(t.name)}</option>`;
         }
+        buildBrowsePills(documents, tags);
       } catch {}
+    }
+
+    function buildBrowsePills(documents, tags) {
+      const pills = document.getElementById('browse-pills');
+
+      const typeCounts = {};
+      for (const d of documents) {
+        typeCounts[d.document_type] = (typeCounts[d.document_type] || 0) + 1;
+      }
+      const topTypes = Object.entries(typeCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6);
+
+      const tagsWithDocs = tags.filter(t => t.document_count > 0)
+        .sort((a, b) => b.document_count - a.document_count)
+        .slice(0, 8);
+
+      if (!topTypes.length && !tagsWithDocs.length) return;
+
+      let html = '';
+      if (topTypes.length) {
+        html += topTypes.map(([type, count]) =>
+          `<button class="browse-pill browse-pill-type" data-browse="type" data-id="${type}">
+            ${type} <span class="browse-pill-count">${count}</span>
+          </button>`
+        ).join('');
+      }
+      if (tagsWithDocs.length) {
+        html += tagsWithDocs.map(t =>
+          `<button class="browse-pill browse-pill-tag" data-browse="tag" data-id="${t.id}" style="--tag-color:${t.color};">
+            ${esc(t.name)} <span class="browse-pill-count">${t.document_count}</span>
+          </button>`
+        ).join('');
+      }
+
+      pills.innerHTML = html;
+      pills.style.display = 'flex';
+
+      pills.querySelectorAll('.browse-pill').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.browse === 'type') {
+            document.getElementById('filter-type').value = btn.dataset.id;
+          } else {
+            document.getElementById('filter-tag').value = btn.dataset.id;
+          }
+          currentOffset = 0;
+          loadDocuments();
+          updateActiveFilter();
+        });
+      });
+    }
+
+    function updateActiveFilter() {
+      const el = document.getElementById('active-filter');
+      const type = document.getElementById('filter-type').value;
+      const tag = document.getElementById('filter-tag').value;
+      const owner = document.getElementById('filter-owner').value;
+      const tagSelect = document.getElementById('filter-tag');
+      const ownerSelect = document.getElementById('filter-owner');
+
+      const parts = [];
+      if (type) parts.push(`Type: <strong>${type}</strong>`);
+      if (tag) {
+        const tagName = tagSelect.options[tagSelect.selectedIndex]?.text || tag;
+        parts.push(`Tag: <strong>${esc(tagName)}</strong>`);
+      }
+      if (owner) {
+        const ownerName = ownerSelect.options[ownerSelect.selectedIndex]?.text || owner;
+        parts.push(`Owner: <strong>${esc(ownerName)}</strong>`);
+      }
+
+      if (parts.length) {
+        el.innerHTML = parts.join(' &middot; ') + ' <button class="btn btn-sm" onclick="clearFilters()">Clear</button>';
+        el.style.display = 'flex';
+      } else {
+        el.style.display = 'none';
+      }
+    }
+
+    function clearFilters() {
+      document.getElementById('filter-type').value = '';
+      document.getElementById('filter-tag').value = '';
+      document.getElementById('filter-owner').value = '';
+      document.getElementById('filter-search').value = '';
+      currentOffset = 0;
+      loadDocuments();
+      updateActiveFilter();
     }
 
     let searchTimeout;
@@ -145,7 +259,7 @@
     });
 
     for (const id of ['filter-type', 'filter-owner', 'filter-tag']) {
-      document.getElementById(id).addEventListener('change', () => { currentOffset = 0; loadDocuments(); });
+      document.getElementById(id).addEventListener('change', () => { currentOffset = 0; loadDocuments(); updateActiveFilter(); });
     }
 
     document.getElementById('prev-btn').addEventListener('click', () => { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadDocuments(); });
