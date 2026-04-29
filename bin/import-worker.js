@@ -14,6 +14,7 @@ const { applyMagicIndexToDocument } = require('../lib/magic-index/apply');
 const audit = require('../lib/audit');
 
 const workerId = `${process.pid}-${Math.random().toString(36).slice(2)}`;
+const STALE_SWEEP_MS = 30_000;
 
 async function processNextJob() {
   const job = await batches.claimNextJob(workerId);
@@ -138,11 +139,14 @@ async function processMagicIndex(job) {
 }
 
 async function markMagicIndexWarning(item, err, config) {
+  const model = config.provider === 'openai_compatible'
+    ? config.compatible.model
+    : (config.provider === 'ollama' ? config.ollama.model : config.openai.model);
   const metadata = await mergedMetadata(item.document_id, {
     magicindex: {
       state: 'failed',
       provider: config.provider,
-      model: config.provider === 'openai_compatible' ? config.compatible.model : config.openai.model,
+      model,
       error: err.message,
       failed_at: new Date().toISOString()
     }
@@ -152,7 +156,7 @@ async function markMagicIndexWarning(item, err, config) {
     magicindex_result: {
       schema_version: 'magicindex.v1',
       provider: config.provider,
-      model: config.provider === 'openai_compatible' ? config.compatible.model : config.openai.model,
+      model,
       confidence: 0,
       field_confidence: {
         title: 0,
@@ -206,7 +210,15 @@ function filenameTitle(filename) {
 }
 
 async function runLoop({ once = false, idleMs = 1500 } = {}) {
+  let lastStaleSweepAt = 0;
   do {
+    if (!once && Date.now() - lastStaleSweepAt > STALE_SWEEP_MS) {
+      const recovered = await batches.recoverStaleRunningJobs({ staleMinutes: 10, maxAttempts: 3 });
+      if ((recovered.requeued || 0) > 0 || (recovered.failed || 0) > 0) {
+        console.warn(`[import-worker] recovered stale jobs: requeued=${recovered.requeued} failed=${recovered.failed}`);
+      }
+      lastStaleSweepAt = Date.now();
+    }
     const processed = await processNextJob();
     if (once) break;
     if (!processed) await new Promise(resolve => setTimeout(resolve, idleMs));
