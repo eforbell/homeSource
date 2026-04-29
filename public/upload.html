@@ -871,7 +871,7 @@
       if (!scannedPages.length) selectedFile = null;
       else if (scannedPages.length === 1) selectedFile = new File([scannedPages[0].blob], 'scan.jpg', { type: 'image/jpeg' });
       refreshScanPagesUi();
-    });
+    };
 
     document.getElementById('scan-document-filter').addEventListener('change', renderScanPreview);
     document.getElementById('scan-crop-looseness').addEventListener('change', () => {
