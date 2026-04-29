@@ -275,15 +275,21 @@
         }
 
         // Files table
+        const previewableFiles = files.filter(f => f.file_type !== 'thumbnail');
         const tbody = document.querySelector('#files-table tbody');
-        tbody.innerHTML = files.filter(f => f.file_type !== 'thumbnail').map(f =>
-          `<tr>
+        tbody.innerHTML = previewableFiles.map(f => {
+          const canPreview = f.mime_type === 'application/pdf' || f.mime_type.startsWith('image/');
+          const isActive = previewFile && previewFile.id === f.id;
+          return `<tr>
             <td>${esc(f.original_filename)}</td>
             <td class="text-dim text-sm">${f.file_type}</td>
             <td class="text-dim text-sm">${formatBytes(f.file_size_bytes)}</td>
-            <td><a href="api/documents/${docId}/files/${f.id}/download" class="btn btn-sm" target="_blank">Download</a></td>
-          </tr>`
-        ).join('');
+            <td class="flex gap-1">
+              ${canPreview ? `<button class="btn btn-sm${isActive ? ' btn-primary' : ''}" onclick="showPreview(${f.id})">View</button>` : ''}
+              <a href="api/documents/${docId}/files/${f.id}/download" class="btn btn-sm" target="_blank">Download</a>
+            </td>
+          </tr>`;
+        }).join('');
 
         document.getElementById('add-file-btn').style.display = 'inline-flex';
 
@@ -580,6 +586,52 @@
         toast('Tag created', 'success');
       } catch (err) { toast(err.message, 'error'); }
     });
+
+    function showPreview(fileId) {
+      const file = (currentDoc.files || []).find(f => f.id === fileId);
+      if (!file) return;
+      const preview = document.getElementById('file-preview');
+      const isMobile = window.innerWidth <= 768;
+
+      if (!isMobile && file.mime_type === 'application/pdf') {
+        preview.innerHTML = `<iframe src="api/documents/${docId}/files/${file.id}/download" class="doc-preview-frame"></iframe>`;
+      } else if (file.mime_type.startsWith('image/')) {
+        const downloadFile = (currentDoc.files || []).find(f => f.file_type === 'processed' || (f.file_type === 'original' && f.mime_type === 'application/pdf')) || file;
+        preview.innerHTML = `
+          <div class="doc-preview-toolbar">
+            <button class="active" data-zoom="fit">Fit to width</button>
+            <button data-zoom="actual">Full size</button>
+            <a href="api/documents/${docId}/files/${downloadFile.id}/download" class="btn btn-sm" download>Download</a>
+          </div>
+          <div class="doc-preview-wrap fit-width">
+            <img src="api/documents/${docId}/files/${file.id}/download" class="doc-preview-img">
+          </div>`;
+        preview.querySelectorAll('[data-zoom]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const wrap = preview.querySelector('.doc-preview-wrap');
+            preview.querySelectorAll('[data-zoom]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            wrap.className = 'doc-preview-wrap ' + (btn.dataset.zoom === 'fit' ? 'fit-width' : 'fit-actual');
+          });
+        });
+      } else if (isMobile && file.mime_type === 'application/pdf') {
+        const thumbnail = (currentDoc.files || []).find(f => f.file_type === 'thumbnail');
+        preview.innerHTML = `
+          <div style="text-align:center; padding:2rem;">
+            ${thumbnail ? `<img src="api/documents/${docId}/files/${thumbnail.id}/download" class="doc-preview-img" style="margin-bottom:1rem;">` : '<div style="font-size:3rem; margin-bottom:1rem;">📄</div>'}
+            <a href="api/documents/${docId}/files/${file.id}/download" class="btn btn-primary" download>Download PDF</a>
+          </div>`;
+      } else {
+        preview.innerHTML = '<div class="text-dim flex-center" style="padding:2rem;">Preview not available for this file type</div>';
+      }
+
+      document.querySelector('#files-table tbody').querySelectorAll('.btn-primary').forEach(b => b.classList.remove('btn-primary'));
+      const activeBtn = document.querySelector(`#files-table button[onclick="showPreview(${fileId})"]`);
+      if (activeBtn) activeBtn.classList.add('btn-primary');
+
+      preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    window.showPreview = showPreview;
 
     // File upload
     document.getElementById('add-file-btn').addEventListener('click', () => {
