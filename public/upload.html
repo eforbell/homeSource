@@ -34,11 +34,21 @@
           Loading scanner...
         </div>
         <div id="scanner-area" style="display:none;">
+          <div class="text-center mb-1">
+            <label class="text-xs text-dim" for="scan-guide-ratio" style="display:block;">Paper guide</label>
+            <select id="scan-guide-ratio" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
+              <option value="letter" selected>Letter (8.5 × 11)</option>
+              <option value="legal">Legal (8.5 × 14)</option>
+              <option value="a4">A4 (210 × 297)</option>
+              <option value="auto">Auto</option>
+            </select>
+          </div>
           <!-- Live camera feed -->
           <div id="scanner-live">
             <div class="scanner-container">
               <video id="scan-video" autoplay playsinline></video>
               <canvas id="scan-highlight"></canvas>
+              <div id="scan-guide-overlay" style="position:absolute;border:2px dashed rgba(217,119,6,0.9);border-radius:10px;pointer-events:none;display:none;"></div>
             </div>
             <div id="scan-detect-status" class="text-center text-xs text-dim" style="padding:0.4rem;">
               Point camera at a document
@@ -57,13 +67,6 @@
                 <option value="tight">Tight</option>
                 <option value="normal" selected>Normal</option>
                 <option value="wide">Wide</option>
-              </select>
-              <label class="text-xs text-dim" for="scan-guide-ratio" style="display:block;margin-top:0.6rem;">Paper guide</label>
-              <select id="scan-guide-ratio" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
-                <option value="letter" selected>Letter (8.5 × 11)</option>
-                <option value="legal">Legal (8.5 × 14)</option>
-                <option value="a4">A4 (210 × 297)</option>
-                <option value="auto">Auto</option>
               </select>
             </div>
             <div class="scanner-container" id="corner-container">
@@ -356,6 +359,7 @@
         scanner = new jscanify();
         document.getElementById('scanner-loading').style.display = 'none';
         document.getElementById('scanner-area').style.display = 'block';
+        updateGuideOverlay();
 
         startHighlightLoop();
 
@@ -567,6 +571,31 @@
       const width = 1100;
       if (!ratio) return { width: 1000, height: 1400 };
       return { width, height: Math.round(width / ratio) };
+    }
+
+    function updateGuideOverlay() {
+      const overlay = document.getElementById('scan-guide-overlay');
+      const ratio = getSelectedGuideRatio();
+      if (!overlay || !ratio) {
+        if (overlay) overlay.style.display = 'none';
+        return;
+      }
+      const container = document.querySelector('#scanner-live .scanner-container');
+      if (!container) return;
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      if (!cw || !ch) return;
+      let width = cw * 0.82;
+      let height = width / ratio;
+      if (height > ch * 0.82) {
+        height = ch * 0.82;
+        width = height * ratio;
+      }
+      overlay.style.display = 'block';
+      overlay.style.width = `${Math.round(width)}px`;
+      overlay.style.height = `${Math.round(height)}px`;
+      overlay.style.left = `${Math.round((cw - width) / 2)}px`;
+      overlay.style.top = `${Math.round((ch - height) / 2)}px`;
     }
 
     function seedCornerHandlesFromCurrentLooseness() {
@@ -896,6 +925,7 @@
             if (!video.videoWidth) return;
             highlightCanvas.width = video.videoWidth;
             highlightCanvas.height = video.videoHeight;
+            updateGuideOverlay();
             const img = cv.imread(video);
             const contour = scanner.findPaperContour(img);
             if (contour) {
@@ -1008,12 +1038,14 @@
       }
     });
     document.getElementById('scan-guide-ratio').addEventListener('change', () => {
+      updateGuideOverlay();
       if (document.getElementById('scanner-corners').style.display !== 'none' && frozenFrame) {
         const corners = detectCornersFromCanvasEnhanced(frozenFrame);
         if (corners) frameDetectedCorners = corners;
         seedCornerHandlesFromCurrentLooseness();
       }
     });
+    window.addEventListener('resize', updateGuideOverlay);
 
     // ── Load members for owner checkboxes ─────────────────────
 
