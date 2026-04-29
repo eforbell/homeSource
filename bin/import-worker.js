@@ -5,7 +5,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../lib/db');
-const { createDocument } = require('../lib/documents');
+const { createDocument, updateDocument } = require('../lib/documents');
 const { storeFile, saveFileRecord, generateThumbnail, calculateSha256 } = require('../lib/files');
 const batches = require('../lib/import-batches');
 const { analyzeDocument } = require('../lib/magic-index');
@@ -104,6 +104,10 @@ async function processThumbnail(job) {
 }
 
 async function processMagicIndex(job) {
+  if (!job.import_item_id && job.document_id) {
+    await processSingleUploadMagicIndex(job);
+    return;
+  }
   const item = await getItem(job.import_item_id);
   if (!item?.document_id) throw new Error('MagicIndex job missing document');
   const payload = job.payload || {};
@@ -135,6 +139,37 @@ async function processMagicIndex(job) {
     });
   } catch (err) {
     await markMagicIndexWarning(item, err, config);
+  }
+}
+
+async function processSingleUploadMagicIndex(job) {
+  const payload = job.payload || {};
+  const config = getMagicIndexConfig();
+  const memberId = await getDocumentCreator(job.document_id);
+  try {
+    const { result, provider, model } = await analyzeDocument({
+      enabled: true,
+      filePath: payload.file_path,
+      filename: payload.filename || 'document.pdf',
+      mimeType: payload.mime_type || 'application/pdf'
+    }, config);
+    const autoApplied = await applyMagicIndexToDocument({
+      documentId: job.document_id,
+      result,
+      threshold: config.auto_apply_confidence,
+      provider,
+      model,
+      force: false
+    });
+    await audit.log('magicindex.single_upload', 'document', job.document_id, memberId, {
+      source_type: payload.source_type || 'upload',
+      provider,
+      model,
+      confidence: result.confidence,
+      fields: Object.keys(autoApplied)
+    });
+  } catch (err) {
+    await markSingleUploadMagicIndexWarning(job.document_id, payload.source_type || 'upload', err, config, memberId);
   }
 }
 
@@ -183,6 +218,36 @@ async function markMagicIndexWarning(item, err, config) {
     error_message: `MagicIndex failed: ${err.message}`
   });
   await audit.log('magicindex.failed', 'document', item.document_id, item.batch_created_by, { import_item_id: item.id, error: err.message });
+}
+
+async function markSingleUploadMagicIndexWarning(documentId, sourceType, err, config, memberId) {
+  const model = config.provider === 'openai_compatible'
+    ? config.compatible.model
+    : (config.provider === 'ollama' ? config.ollama.model : config.openai.model);
+  const metadata = await mergedMetadata(documentId, {
+    magicindex: {
+      state: 'failed',
+      provider: config.provider,
+      model,
+      error: err.message,
+      failed_at: new Date().toISOString()
+    }
+  });
+  await updateDocument(documentId, { metadata });
+  await audit.log('magicindex.single_upload_failed', 'document', documentId, memberId, {
+    source_type: sourceType,
+    error: err.message
+  });
+}
+
+async function getDocumentCreator(documentId) {
+  const { rows } = await pool.query('SELECT created_by FROM documents WHERE id = $1', [documentId]);
+  return rows[0]?.created_by || null;
+}
+
+async function mergedMetadata(documentId, patch) {
+  const { rows } = await pool.query('SELECT metadata FROM documents WHERE id = $1', [documentId]);
+  return { ...(rows[0]?.metadata || {}), ...patch };
 }
 
 async function findDuplicate(sha256) {
