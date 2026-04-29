@@ -114,13 +114,16 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |
 | MAX_FILE_SIZE_MB | No | 50 | Upload size limit |
-| MAGICINDEX_PROVIDER | No | off | `off`, `openai`, or `openai_compatible` for local/LAN LLMs |
+| MAGICINDEX_PROVIDER | No | off | `off`, `openai`, `openai_compatible`, or `ollama` |
 | MAGICINDEX_PROVIDER_PRIVATE | No | no | Set `yes` only for private/local providers; allows batch UI to default MagicIndex on |
 | MAGICINDEX_PROVIDER_DEFAULT | No | openai_compatible | Provider preselected by the batch UI |
 | MAGICINDEX_AUTO_APPLY_CONFIDENCE | No | 0.85 | Threshold for auto-applying safe MagicIndex fields |
 | MAGICINDEX_COMPAT_BASE_URL | No | -- | OpenAI-compatible local endpoint, e.g. `http://lan-llm:8000/v1` |
 | MAGICINDEX_COMPAT_MODEL | No | -- | Local model id, e.g. `qwen3:30b-a3b` |
 | MAGICINDEX_COMPAT_API_KEY | No | -- | Optional local endpoint key; can be blank for LAN servers without auth |
+| MAGICINDEX_OLLAMA_BASE_URL | No | -- | Ollama native base URL, e.g. `http://lan-llm:11434` (used when `MAGICINDEX_PROVIDER=ollama`) |
+| MAGICINDEX_OLLAMA_MODEL | No | -- | Ollama model id, e.g. `qwen3-nothink` |
+| MAGICINDEX_OLLAMA_API_KEY | No | -- | Optional bearer token if your Ollama proxy requires auth |
 | MAGICINDEX_OPENAI_MODEL | No | gpt-5.4-nano | OpenAI cloud model when `MAGICINDEX_PROVIDER=openai` |
 | MAGICINDEX_OPENAI_SEND_PDF | No | yes | Send PDFs directly as OpenAI Responses `input_file` content in cloud mode |
 | OPENAI_API_KEY | No | -- | Required only for OpenAI cloud MagicIndex |
@@ -166,7 +169,9 @@ MAGICINDEX_COMPAT_API_KEY=
 
 With `MAGICINDEX_PROVIDER_PRIVATE=yes`, the batch UI may default MagicIndex on. For cloud providers or any endpoint that sends data outside the private home/LAN boundary, keep `MAGICINDEX_PROVIDER_PRIVATE=no` so MagicIndex defaults off.
 
-OpenAI cloud mode sends PDF files directly to the Responses API as `input_file` content when `MAGICINDEX_OPENAI_SEND_PDF=yes`. This lets OpenAI handle born-digital PDFs and many scanned/mixed PDFs using its PDF text + page-image processing. Local OpenAI-compatible/Qwen mode does not receive raw PDFs; it currently uses extracted text previews and should be paired with a future `pdftotext`/OCR extraction pass for strong PDF coverage.
+OpenAI cloud mode uses the modern Responses API and sends PDF files directly as `input_file` content when `MAGICINDEX_OPENAI_SEND_PDF=yes`. This lets OpenAI handle born-digital PDFs and many scanned/mixed PDFs using its PDF text + page-image processing. Local OpenAI-compatible/Qwen mode does not receive raw PDFs; it uses extracted text previews and OCR fallback for scan-heavy documents.
+
+Ollama-native mode (`MAGICINDEX_PROVIDER=ollama`) uses `/api/chat` with schema-constrained output (`format: <json schema>`), which is often more reliable than OpenAI-compat shims for strict local JSON extraction.
 
 ### Batch UX notes
 
