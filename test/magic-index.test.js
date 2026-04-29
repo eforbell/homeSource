@@ -58,7 +58,7 @@ describe('MagicIndex schema normalization', () => {
   });
 });
 
-const { inferMimeType, clampConfidence, isIgnoredImportPath } = require('../lib/import-batches');
+const { inferMimeType, clampConfidence, isIgnoredImportPath, ALLOWED_ITEM_UPDATE_FIELDS } = require('../lib/import-batches');
 const { stripJsonFence } = require('../lib/magic-index/providers/openai-compatible-chat');
 
 describe('import hardening helpers', () => {
@@ -80,6 +80,13 @@ describe('import hardening helpers', () => {
     assert.equal(isIgnoredImportPath('Family Docs/.DS_Store'), true);
     assert.equal(isIgnoredImportPath('__MACOSX/file.pdf'), true);
     assert.equal(isIgnoredImportPath('Family Docs/policy.pdf'), false);
+  });
+
+  it('allowlists import item update fields for SQL safety', () => {
+    assert.equal(ALLOWED_ITEM_UPDATE_FIELDS.has('magicindex_result'), true);
+    assert.equal(ALLOWED_ITEM_UPDATE_FIELDS.has('document_id'), true);
+    assert.equal(ALLOWED_ITEM_UPDATE_FIELDS.has('status'), false);
+    assert.equal(ALLOWED_ITEM_UPDATE_FIELDS.has('foo, status = failed --'), false);
   });
 });
 
