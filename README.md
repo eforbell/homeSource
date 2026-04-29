@@ -90,6 +90,7 @@ Passphrase-based with scrypt hashing and session cookies (30-day TTL). Cookie na
 Client-side scanning via jscanify (vendored) + OpenCV.js (CDN):
 - Live camera preview with auto-edge detection overlay
 - Tap to capture, then adjust corners with draggable handles
+- Multi-page capture flow: scan another page, reorder/remove pages, then save as one PDF
 - Perspective correction applied client-side before upload
 - Optional document filter (high contrast) and crop looseness control
 - Client-side image compression (max 2400px, 85% JPEG quality)

@@ -28,6 +28,14 @@ function pdfFile(name = 'insurance-policy.pdf') {
   };
 }
 
+function tinyPng(name = 'page.png') {
+  const onePixelPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a3sAAAAASUVORK5CYII=', 'base64');
+  return {
+    name,
+    blob: new Blob([onePixelPng], { type: 'image/png' })
+  };
+}
+
 async function stageFile(batchId, cookie, file = pdfFile(), relativePath = file.name) {
   const form = new FormData();
   form.append('file', file.blob, file.name);
@@ -108,5 +116,32 @@ describe('import batches API', () => {
     const items = await (await authedGet(`api/import/batches/${batch.id}/items`, parentCookie)).json();
     assert.equal(items[0].status, 'skipped_duplicate');
     assert.ok(items[0].document_id);
+  });
+});
+
+describe('multi-page scan upload', () => {
+  it('creates one PDF document from multiple scan pages', async () => {
+    const form = new FormData();
+    const page1 = tinyPng('scan-1.png');
+    const page2 = tinyPng('scan-2.png');
+    form.append('scan_pages', page1.blob, page1.name);
+    form.append('scan_pages', page2.blob, page2.name);
+    form.append('metadata', JSON.stringify({
+      title: 'Kitchen notes',
+      document_type: 'other',
+      source_type: 'scan',
+      magicindex_enabled: false
+    }));
+    const res = await authedFetch('api/documents/scan-multi', parentCookie, { method: 'POST', body: form });
+    assert.equal(res.status, 201);
+    const created = await res.json();
+    const detailRes = await authedGet(`api/documents/${created.id}`, parentCookie);
+    assert.equal(detailRes.status, 200);
+    const doc = await detailRes.json();
+    assert.equal(doc.title, 'Kitchen notes');
+    assert.equal(doc.source_type, 'scan');
+    assert.equal(doc.metadata?.scan_page_count, 2);
+    const originalPdf = (doc.files || []).find((f) => f.file_type === 'original' && f.mime_type === 'application/pdf');
+    assert.ok(originalPdf);
   });
 });

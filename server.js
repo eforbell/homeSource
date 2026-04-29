@@ -12,7 +12,7 @@ const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
 const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink } = require('./lib/share');
 const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
-const { importFromUrl, processUpload } = require('./lib/import');
+const { importFromUrl, processUpload, processMultiPageScanUpload } = require('./lib/import');
 const importBatches = require('./lib/import-batches');
 const { getMagicIndexConfig } = require('./lib/magic-index/config');
 const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
@@ -142,13 +142,19 @@ function parseMultipart(req) {
 
         if (nameMatch) {
           if (filenameMatch) {
-            parts[nameMatch[1]] = {
+            const value = {
               filename: filenameMatch[1],
               type: typeMatch?.[1] || 'application/octet-stream',
               data: body
             };
+            if (parts[nameMatch[1]] === undefined) parts[nameMatch[1]] = value;
+            else if (Array.isArray(parts[nameMatch[1]])) parts[nameMatch[1]].push(value);
+            else parts[nameMatch[1]] = [parts[nameMatch[1]], value];
           } else {
-            parts[nameMatch[1]] = body.toString('utf8');
+            const value = body.toString('utf8');
+            if (parts[nameMatch[1]] === undefined) parts[nameMatch[1]] = value;
+            else if (Array.isArray(parts[nameMatch[1]])) parts[nameMatch[1]].push(value);
+            else parts[nameMatch[1]] = [parts[nameMatch[1]], value];
           }
         }
         cursor = nextStart;
@@ -338,6 +344,17 @@ app.post('/api/documents', requireAuth, async (req, res) => {
       req.member.id
     );
 
+    res.status(201).json(doc);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/documents/scan-multi', requireAuth, async (req, res) => {
+  try {
+    const parts = await parseMultipart(req);
+    const pages = Array.isArray(parts.scan_pages) ? parts.scan_pages : (parts.scan_pages ? [parts.scan_pages] : []);
+    if (!pages.length) return res.status(400).json({ error: 'No scan pages provided' });
+    const metadata = parts.metadata ? JSON.parse(Array.isArray(parts.metadata) ? parts.metadata[0] : parts.metadata) : {};
+    const doc = await processMultiPageScanUpload(pages.map((p) => p.data), metadata, req.member.id);
     res.status(201).json(doc);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
