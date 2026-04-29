@@ -852,8 +852,10 @@
       const status = document.getElementById('submit-status');
       btn.disabled = true;
       status.style.display = 'block';
-      status.textContent = 'Saving...';
+      status.textContent = 'Uploading file...';
       status.style.color = 'var(--text-dim)';
+      const magicindexEnabled = document.getElementById('magicindex-enabled').checked;
+      const phaseTimer = startProgressPhases(status, magicindexEnabled);
 
       const ownerIds = [...document.querySelectorAll('.owner-cb:checked')].map(cb => Number(cb.value));
 
@@ -864,7 +866,7 @@
         issued_date: document.getElementById('meta-issued').value || undefined,
         expiry_date: document.getElementById('meta-expiry').value || undefined,
         owner_ids: ownerIds.length ? ownerIds : undefined,
-        magicindex_enabled: document.getElementById('magicindex-enabled').checked,
+        magicindex_enabled: magicindexEnabled,
         source_type: activeTab === 'scan' ? 'scan' : activeTab === 'url' ? 'url_import' : 'upload'
       };
       if (activeTab === 'scan') {
@@ -876,27 +878,45 @@
       try {
         if (activeTab === 'url') {
           const url = document.getElementById('import-url').value.trim();
-          if (!url) { toast('URL is required', 'error'); btn.disabled = false; status.style.display = 'none'; return; }
+          if (!url) { toast('URL is required', 'error'); btn.disabled = false; status.style.display = 'none'; stopProgressPhases(phaseTimer); return; }
+          status.textContent = magicindexEnabled ? 'Importing URL and processing document...' : 'Importing URL...';
           const doc = await API.post('api/import/url', { url, ...metadata });
+          stopProgressPhases(phaseTimer);
           toast('Document imported!', 'success');
           location.href = `document.html?id=${doc.id}`;
         } else {
-          if (!selectedFile) { toast('No file selected', 'error'); btn.disabled = false; status.style.display = 'none'; return; }
+          if (!selectedFile) { toast('No file selected', 'error'); btn.disabled = false; status.style.display = 'none'; stopProgressPhases(phaseTimer); return; }
           if (selectedFile.type.startsWith('image/') && activeTab === 'upload') {
             status.textContent = 'Compressing...';
             selectedFile = await compressImage(selectedFile);
           }
           status.textContent = `Uploading ${formatBytes(selectedFile.size)}...`;
           const doc = await API.upload('api/documents', selectedFile, metadata);
+          stopProgressPhases(phaseTimer);
           toast('Document saved!', 'success');
           location.href = `document.html?id=${doc.id}`;
         }
       } catch (err) {
+        stopProgressPhases(phaseTimer);
         status.textContent = err.message;
         status.style.color = 'var(--danger)';
         btn.disabled = false;
       }
     });
+
+    function startProgressPhases(statusEl, magicindexEnabled) {
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        const seconds = Math.floor((Date.now() - startedAt) / 1000);
+        if (seconds >= 10 && magicindexEnabled) statusEl.textContent = 'Running MagicIndex analysis...';
+        else if (seconds >= 4) statusEl.textContent = 'Processing document...';
+      }, 1000);
+      return timer;
+    }
+
+    function stopProgressPhases(timer) {
+      if (timer) clearInterval(timer);
+    }
 
     function formatBytes(b) {
       if (b < 1024) return b + ' B';
