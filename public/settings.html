@@ -139,12 +139,45 @@
     </div>
   </div>
 
+  <!-- Confirm modal -->
+  <div class="modal-backdrop hidden" id="confirm-modal">
+    <div class="modal">
+      <div class="modal-title" id="confirm-title">Confirm</div>
+      <p id="confirm-message" class="text-dim" style="margin-bottom:1rem;"></p>
+      <div class="modal-actions">
+        <button class="btn" id="confirm-cancel-btn">Cancel</button>
+        <button class="btn btn-danger" id="confirm-ok-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
   <script src="nav.js"></script>
   <script>
     'use strict';
+
+    function showConfirm(title, message) {
+      return new Promise(resolve => {
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-message').textContent = message;
+        const modal = document.getElementById('confirm-modal');
+        const okBtn = document.getElementById('confirm-ok-btn');
+        const cancelBtn = document.getElementById('confirm-cancel-btn');
+        modal.classList.remove('hidden');
+        function cleanup(result) {
+          modal.classList.add('hidden');
+          okBtn.removeEventListener('click', onOk);
+          cancelBtn.removeEventListener('click', onCancel);
+          resolve(result);
+        }
+        function onOk() { cleanup(true); }
+        function onCancel() { cleanup(false); }
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+      });
+    }
 
     // Theme
     const themeSelect = document.getElementById('theme-select');
@@ -247,7 +280,7 @@
 
     async function deleteTag(id) {
       const t = allTags.find(tag => tag.id === id);
-      if (!confirm(`Delete tag "${t ? t.name : id}"? This will unlink it from ${t ? t.document_count : '?'} documents.`)) return;
+      if (!await showConfirm('Delete Tag', `Delete "${t ? t.name : id}"? This will unlink it from ${t ? t.document_count : '?'} documents.`)) return;
       try {
         await API.del(`api/tags/${id}`);
         toast('Tag deleted', 'success');
@@ -273,7 +306,7 @@
       if (sourceId === targetId) return toast('Source and target must be different', 'error');
       const source = allTags.find(t => t.id === sourceId);
       const target = allTags.find(t => t.id === targetId);
-      if (!confirm(`Merge "${source?.name}" into "${target?.name}"? This will reassign all documents and delete "${source?.name}".`)) return;
+      if (!await showConfirm('Merge Tags', `Merge "${source?.name}" into "${target?.name}"? All documents will be reassigned and "${source?.name}" will be deleted.`)) return;
       try {
         await API.post(`api/tags/${targetId}/merge`, { source_id: sourceId });
         document.getElementById('merge-modal').classList.add('hidden');
