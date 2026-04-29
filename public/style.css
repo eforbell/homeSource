@@ -327,6 +327,7 @@ h3 { font-size: 1.1rem; }
 }
 
 .doc-card {
+  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -335,6 +336,22 @@ h3 { font-size: 1.1rem; }
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .doc-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px var(--shadow); }
+.doc-card-delete {
+  position: absolute; top: 0.4rem; right: 0.4rem;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.5);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.doc-card:hover .doc-card-delete { opacity: 1; }
+.doc-card-delete:hover { background: var(--danger); }
 
 .doc-card-thumb {
   width: 100%;

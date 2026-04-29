@@ -62,10 +62,53 @@
     </div>
   </div>
 
+  <!-- Confirm modal -->
+  <div class="modal-backdrop hidden" id="confirm-modal">
+    <div class="modal">
+      <div class="modal-title" id="confirm-title">Confirm</div>
+      <p id="confirm-message" class="text-dim" style="margin-bottom:1rem;"></p>
+      <div class="modal-actions">
+        <button class="btn" id="confirm-cancel-btn">Cancel</button>
+        <button class="btn btn-danger" id="confirm-ok-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
   <script src="api.js"></script>
   <script src="nav.js"></script>
   <script>
     'use strict';
+
+    function showConfirm(title, message) {
+      return new Promise(resolve => {
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-message').textContent = message;
+        const modal = document.getElementById('confirm-modal');
+        const okBtn = document.getElementById('confirm-ok-btn');
+        const cancelBtn = document.getElementById('confirm-cancel-btn');
+        modal.classList.remove('hidden');
+        function cleanup(result) {
+          modal.classList.add('hidden');
+          okBtn.removeEventListener('click', onOk);
+          cancelBtn.removeEventListener('click', onCancel);
+          resolve(result);
+        }
+        function onOk() { cleanup(true); }
+        function onCancel() { cleanup(false); }
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+      });
+    }
+
+    function toast(msg, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
 
     const PAGE_SIZE = 24;
     let currentOffset = 0;
@@ -116,6 +159,7 @@
                 <span>${new Date(d.created_at).toLocaleDateString()}</span>
               </div>
             </div>
+            <button class="doc-card-delete" data-doc-id="${d.id}" data-doc-title="${esc(d.title)}" title="Delete">&times;</button>
           </div>`;
         }).join('');
 
@@ -131,6 +175,20 @@
             currentOffset = 0;
             loadDocuments();
             updateActiveFilter();
+          });
+        });
+
+        grid.querySelectorAll('.doc-card-delete').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.docId;
+            const title = btn.dataset.docTitle;
+            if (!await showConfirm('Delete Document', `Permanently delete "${title}" and all its files? This cannot be undone.`)) return;
+            try {
+              await API.del(`api/documents/${id}?permanent=true`);
+              toast('Document deleted', 'success');
+              loadDocuments();
+            } catch (err) { toast(err.message, 'error'); }
           });
         });
 
