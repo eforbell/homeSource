@@ -81,14 +81,15 @@
 
     async function doSearch() {
       const q = document.getElementById('search-input').value.trim();
-      if (!q) return;
-
-      document.getElementById('search-initial').style.display = 'none';
-
-      const params = new URLSearchParams({ q });
       const type = document.getElementById('search-type').value;
       const owner = document.getElementById('search-owner').value;
       const tag = document.getElementById('search-tag').value;
+      if (!q && !type && !owner && !tag) return;
+
+      document.getElementById('search-initial').style.display = 'none';
+
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
       if (type) params.set('type', type);
       if (owner) params.set('owner', owner);
       if (tag) params.set('tag', tag);
