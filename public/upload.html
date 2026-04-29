@@ -58,6 +58,13 @@
                 <option value="normal" selected>Normal</option>
                 <option value="wide">Wide</option>
               </select>
+              <label class="text-xs text-dim" for="scan-guide-ratio" style="display:block;margin-top:0.6rem;">Paper guide</label>
+              <select id="scan-guide-ratio" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
+                <option value="letter" selected>Letter (8.5 × 11)</option>
+                <option value="legal">Legal (8.5 × 14)</option>
+                <option value="a4">A4 (210 × 297)</option>
+                <option value="auto">Auto</option>
+              </select>
             </div>
             <div class="scanner-container" id="corner-container">
               <canvas id="corner-canvas"></canvas>
@@ -528,8 +535,11 @@
       const maxY = Math.max(...pts.map((p) => p.y));
       const wRatio = (maxX - minX) / Math.max(1, frameWidth);
       const hRatio = (maxY - minY) / Math.max(1, frameHeight);
+      const guideRatio = getSelectedGuideRatio();
+      const boxRatio = (maxX - minX) / Math.max(1, (maxY - minY));
+      const ratioPenalty = guideRatio ? Math.min(0.6, Math.abs(boxRatio - guideRatio) * 1.6) : 0;
       const edgePenalty = Math.max(0, 0.03 - minX / frameWidth) + Math.max(0, 0.03 - minY / frameHeight);
-      return areaRatio * 1.2 + Math.min(wRatio, hRatio) - edgePenalty;
+      return areaRatio * 1.2 + Math.min(wRatio, hRatio) - edgePenalty - ratioPenalty;
     }
 
     function clamp(val, min, max) {
@@ -542,6 +552,21 @@
       if (value === 'tight') return { expandRatio: 0.02, minPadPx: 6 };
       if (value === 'wide') return { expandRatio: 0.08, minPadPx: 22 };
       return { expandRatio: 0.045, minPadPx: 14 };
+    }
+
+    function getSelectedGuideRatio() {
+      const mode = document.getElementById('scan-guide-ratio')?.value || 'letter';
+      if (mode === 'auto') return null;
+      if (mode === 'legal') return 8.5 / 14;
+      if (mode === 'a4') return 210 / 297;
+      return 8.5 / 11;
+    }
+
+    function getTargetCropSize() {
+      const ratio = getSelectedGuideRatio();
+      const width = 1100;
+      if (!ratio) return { width: 1000, height: 1400 };
+      return { width, height: Math.round(width / ratio) };
     }
 
     function seedCornerHandlesFromCurrentLooseness() {
@@ -781,7 +806,8 @@
           topLeftCorner: tlS, topRightCorner: trS,
           bottomLeftCorner: blS, bottomRightCorner: brS
         };
-        result = scanner.extractPaper(frozenFrame, 1000, 1400, corners);
+        const target = getTargetCropSize();
+        result = scanner.extractPaper(frozenFrame, target.width, target.height, corners);
       } catch (err) {
         console.warn('OpenCV crop failed, using fallback:', err);
       }
@@ -978,6 +1004,13 @@
     document.getElementById('scan-document-filter').addEventListener('change', renderScanPreview);
     document.getElementById('scan-crop-looseness').addEventListener('change', () => {
       if (document.getElementById('scanner-corners').style.display !== 'none') {
+        seedCornerHandlesFromCurrentLooseness();
+      }
+    });
+    document.getElementById('scan-guide-ratio').addEventListener('change', () => {
+      if (document.getElementById('scanner-corners').style.display !== 'none' && frozenFrame) {
+        const corners = detectCornersFromCanvasEnhanced(frozenFrame);
+        if (corners) frameDetectedCorners = corners;
         seedCornerHandlesFromCurrentLooseness();
       }
     });
