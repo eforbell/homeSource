@@ -9,7 +9,7 @@ const { hashPassphrase, verifyPassphrase, createSession, validateSession, destro
 const { listDocuments, getDocument, createDocument, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount } = require('./lib/documents');
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
-const { listTags, createTag, updateTag, deleteTag, setDocumentTags } = require('./lib/tags');
+const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
 const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink } = require('./lib/share');
 const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
 const { importFromUrl, processUpload } = require('./lib/import');
@@ -469,6 +469,19 @@ app.delete('/api/tags/:id', requireAuth, requireParent, async (req, res) => {
     if (!deleted) return res.status(404).json({ error: 'Tag not found' });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/tags/:id/merge', requireAuth, requireParent, async (req, res) => {
+  try {
+    const targetId = Number(req.params.id);
+    const sourceId = Number(req.body.source_id);
+    if (!sourceId || !targetId || sourceId === targetId) {
+      return res.status(400).json({ error: 'Valid distinct source_id and target tag required' });
+    }
+    const result = await mergeTags(sourceId, targetId);
+    if (!result) return res.status(404).json({ error: 'Target tag not found' });
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.put('/api/documents/:id/tags', requireAuth, async (req, res) => {

@@ -40,7 +40,10 @@
     <div class="card mt-2">
       <div class="card-header">
         <span class="card-title">Tags</span>
-        <button id="add-tag-btn" class="btn btn-sm">+ Add Tag</button>
+        <div class="flex gap-1">
+          <button id="merge-tags-btn" class="btn btn-sm">Merge</button>
+          <button id="add-tag-btn" class="btn btn-sm">+ Add Tag</button>
+        </div>
       </div>
       <div id="tags-list"></div>
     </div>
@@ -97,7 +100,7 @@
     </div>
   </div>
 
-  <!-- Add tag modal -->
+  <!-- Add/edit tag modal -->
   <div class="modal-backdrop hidden" id="tag-modal">
     <div class="modal">
       <div class="modal-title" id="tag-modal-title">Add Tag</div>
@@ -112,6 +115,26 @@
       <div class="modal-actions">
         <button class="btn" onclick="document.getElementById('tag-modal').classList.add('hidden')">Cancel</button>
         <button class="btn btn-primary" id="save-tag-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Merge tags modal -->
+  <div class="modal-backdrop hidden" id="merge-modal">
+    <div class="modal">
+      <div class="modal-title">Merge Tags</div>
+      <p class="text-dim text-sm mb-1">All documents tagged with the source tag will be reassigned to the target. The source tag will be deleted.</p>
+      <div class="form-group">
+        <label class="form-label">Source (will be removed)</label>
+        <select id="merge-source" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Target (will keep)</label>
+        <select id="merge-target" class="form-select"></select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('merge-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="merge-btn">Merge</button>
       </div>
     </div>
   </div>
@@ -166,16 +189,20 @@
     });
 
     // Tags
+    let allTags = [];
+    let editingTagId = null;
+
     async function loadTags() {
       try {
-        const tags = await API.get('api/tags');
-        document.getElementById('tags-list').innerHTML = tags.length
-          ? tags.map(t =>
+        allTags = await API.get('api/tags');
+        document.getElementById('tags-list').innerHTML = allTags.length
+          ? allTags.map(t =>
             `<div class="flex-between mb-1" style="padding:0.4rem 0;">
-              <span class="tag" style="background:${t.color}22;color:${t.color};">${esc(t.name)}</span>
+              <span class="tag" style="background:${t.color}22;color:${t.color};cursor:pointer;" onclick="editTag(${t.id})">${esc(t.name)}</span>
               <div class="flex gap-1">
                 <span class="text-xs text-muted">${t.document_count} docs</span>
-                <button class="btn btn-sm btn-danger" onclick="deleteTag(${t.id})">&times;</button>
+                <button class="btn btn-sm" onclick="editTag(${t.id})" title="Edit">&#9998;</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteTag(${t.id})" title="Delete">&times;</button>
               </div>
             </div>`).join('')
           : '<span class="text-dim text-sm">No tags yet</span>';
@@ -183,25 +210,44 @@
     }
 
     document.getElementById('add-tag-btn').addEventListener('click', () => {
+      editingTagId = null;
+      document.getElementById('tag-modal-title').textContent = 'Add Tag';
       document.getElementById('tag-name').value = '';
       document.getElementById('tag-color').value = '#d97706';
       document.getElementById('tag-modal').classList.remove('hidden');
     });
 
+    function editTag(id) {
+      const t = allTags.find(tag => tag.id === id);
+      if (!t) return;
+      editingTagId = id;
+      document.getElementById('tag-modal-title').textContent = 'Edit Tag';
+      document.getElementById('tag-name').value = t.name;
+      document.getElementById('tag-color').value = t.color;
+      document.getElementById('tag-modal').classList.remove('hidden');
+    }
+    window.editTag = editTag;
+
     document.getElementById('save-tag-btn').addEventListener('click', async () => {
+      const name = document.getElementById('tag-name').value.trim();
+      const color = document.getElementById('tag-color').value;
+      if (!name) return toast('Name required', 'error');
       try {
-        await API.post('api/tags', {
-          name: document.getElementById('tag-name').value,
-          color: document.getElementById('tag-color').value
-        });
+        if (editingTagId) {
+          await API.put(`api/tags/${editingTagId}`, { name, color });
+          toast('Tag updated', 'success');
+        } else {
+          await API.post('api/tags', { name, color });
+          toast('Tag created', 'success');
+        }
         document.getElementById('tag-modal').classList.add('hidden');
-        toast('Tag created', 'success');
         loadTags();
       } catch (err) { toast(err.message, 'error'); }
     });
 
     async function deleteTag(id) {
-      if (!confirm('Delete this tag?')) return;
+      const t = allTags.find(tag => tag.id === id);
+      if (!confirm(`Delete tag "${t ? t.name : id}"? This will unlink it from ${t ? t.document_count : '?'} documents.`)) return;
       try {
         await API.del(`api/tags/${id}`);
         toast('Tag deleted', 'success');
@@ -209,6 +255,32 @@
       } catch (err) { toast(err.message, 'error'); }
     }
     window.deleteTag = deleteTag;
+
+    // Merge
+    document.getElementById('merge-tags-btn').addEventListener('click', () => {
+      const sourceSelect = document.getElementById('merge-source');
+      const targetSelect = document.getElementById('merge-target');
+      const options = allTags.map(t => `<option value="${t.id}">${esc(t.name)} (${t.document_count} docs)</option>`).join('');
+      sourceSelect.innerHTML = options;
+      targetSelect.innerHTML = options;
+      if (allTags.length > 1) targetSelect.selectedIndex = 1;
+      document.getElementById('merge-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('merge-btn').addEventListener('click', async () => {
+      const sourceId = Number(document.getElementById('merge-source').value);
+      const targetId = Number(document.getElementById('merge-target').value);
+      if (sourceId === targetId) return toast('Source and target must be different', 'error');
+      const source = allTags.find(t => t.id === sourceId);
+      const target = allTags.find(t => t.id === targetId);
+      if (!confirm(`Merge "${source?.name}" into "${target?.name}"? This will reassign all documents and delete "${source?.name}".`)) return;
+      try {
+        await API.post(`api/tags/${targetId}/merge`, { source_id: sourceId });
+        document.getElementById('merge-modal').classList.add('hidden');
+        toast(`Merged into "${target?.name}"`, 'success');
+        loadTags();
+      } catch (err) { toast(err.message, 'error'); }
+    });
 
     // Audit log
     async function loadAudit() {

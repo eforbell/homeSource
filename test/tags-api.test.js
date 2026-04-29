@@ -144,3 +144,57 @@ describe('document tag assignment', () => {
     assert.equal(res.status, 400);
   });
 });
+
+describe('tag merge', () => {
+  let doc, srcTag, dstTag;
+
+  before(async () => {
+    await resetDatabase();
+    const p = await createMember('MergeParent', 'parent', 'pass');
+    const k = await createMember('MergeKid', 'kid', 'kidpass');
+    parentCookie = await loginAs(p, 'pass');
+    kidCookie = await loginAs(k, 'kidpass');
+    doc = await createTestDocument(p.id);
+  });
+
+  it('merges source tag into target', async () => {
+    const src = await (await authedPost('api/tags', parentCookie, { name: 'old-label', color: '#ff0000' })).json();
+    const dst = await (await authedPost('api/tags', parentCookie, { name: 'preferred', color: '#00ff00' })).json();
+    srcTag = src; dstTag = dst;
+    await authedPut(`api/documents/${doc.id}/tags`, parentCookie, { tag_ids: [src.id] });
+
+    const res = await authedPost(`api/tags/${dst.id}/merge`, parentCookie, { source_id: src.id });
+    assert.equal(res.status, 200);
+    const merged = await res.json();
+    assert.equal(merged.id, dst.id);
+    assert.equal(merged.document_count, 1);
+
+    const tagsRes = await authedGet('api/tags', parentCookie);
+    const tags = await tagsRes.json();
+    assert.ok(!tags.find(t => t.id === src.id), 'source tag should be deleted');
+  });
+
+  it('handles docs already tagged with target', async () => {
+    const a = await (await authedPost('api/tags', parentCookie, { name: 'dup-a', color: '#111111' })).json();
+    const b = await (await authedPost('api/tags', parentCookie, { name: 'dup-b', color: '#222222' })).json();
+    await authedPut(`api/documents/${doc.id}/tags`, parentCookie, { tag_ids: [a.id, b.id] });
+
+    const res = await authedPost(`api/tags/${b.id}/merge`, parentCookie, { source_id: a.id });
+    assert.equal(res.status, 200);
+    const merged = await res.json();
+    assert.equal(merged.document_count, 1);
+  });
+
+  it('rejects merging a tag into itself', async () => {
+    const t = await (await authedPost('api/tags', parentCookie, { name: 'self-merge', color: '#333333' })).json();
+    const res = await authedPost(`api/tags/${t.id}/merge`, parentCookie, { source_id: t.id });
+    assert.equal(res.status, 400);
+  });
+
+  it('kid cannot merge tags', async () => {
+    const a = await (await authedPost('api/tags', parentCookie, { name: 'kid-src', color: '#444444' })).json();
+    const b = await (await authedPost('api/tags', parentCookie, { name: 'kid-dst', color: '#555555' })).json();
+    const res = await authedPost(`api/tags/${b.id}/merge`, kidCookie, { source_id: a.id });
+    assert.equal(res.status, 403);
+  });
+});
