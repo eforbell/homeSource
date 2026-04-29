@@ -13,6 +13,9 @@ const { listTags, createTag, updateTag, deleteTag, setDocumentTags } = require('
 const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink } = require('./lib/share');
 const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
 const { importFromUrl, processUpload } = require('./lib/import');
+const importBatches = require('./lib/import-batches');
+const { getMagicIndexConfig } = require('./lib/magic-index/config');
+const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -64,9 +67,9 @@ async function bootstrapState() {
 
 const HTML_PAGES = new Set([
   '/', '/index.html', '/documents.html', '/document.html', '/upload.html',
-  '/search.html', '/backup.html', '/settings.html'
+  '/import.html', '/search.html', '/backup.html', '/settings.html'
 ]);
-const PARENT_ONLY_PAGES = new Set(['/settings.html', '/backup.html']);
+const PARENT_ONLY_PAGES = new Set(['/settings.html', '/backup.html', '/import.html']);
 
 app.use(async (req, res, next) => {
   if (req.method !== 'GET') return next();
@@ -577,6 +580,105 @@ app.get('/api/share/:token/files/:fileId/download', async (req, res) => {
 });
 
 // ── Import ──────────────────────────────────────────────────────────────────
+
+app.get('/api/import/config', requireAuth, requireParent, async (_req, res) => {
+  const cfg = getMagicIndexConfig();
+  res.json({
+    magicindex: {
+      provider: cfg.provider,
+      provider_default: cfg.provider_default,
+      provider_private: cfg.provider_private,
+      default_enabled: cfg.default_enabled,
+      auto_apply_confidence: cfg.auto_apply_confidence,
+      compatible_configured: !!(cfg.compatible.base_url && cfg.compatible.model),
+      openai_configured: !!cfg.openai.api_key
+    }
+  });
+});
+
+app.get('/api/import/batches', requireAuth, requireParent, async (req, res) => {
+  try { res.json(await importBatches.listBatches(req.query.limit)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/import/batches', requireAuth, requireParent, async (req, res) => {
+  try {
+    const batch = await importBatches.createBatch({ ...req.body, created_by: req.member.id });
+    await audit.log('import.batch_created', 'import_batch', batch.id, req.member.id, { name: batch.name, source_kind: batch.source_kind });
+    res.status(201).json(batch);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.get('/api/import/batches/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const batch = await importBatches.getBatch(req.params.id);
+    if (!batch) return res.status(404).json({ error: 'Import batch not found' });
+    res.json(batch);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/import/batches/:id/items', requireAuth, requireParent, async (req, res) => {
+  try { res.json(await importBatches.listItems(req.params.id, req.query)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/import/batches/:id/items', requireAuth, requireParent, async (req, res) => {
+  try {
+    const parts = await parseMultipart(req);
+    const item = await importBatches.stageImportItem(req.params.id, parts.file, { relative_path: parts.relative_path });
+    res.status(201).json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/import/batches/:id/start', requireAuth, requireParent, async (req, res) => {
+  try { res.json(await importBatches.startBatch(req.params.id)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/import/batches/:id/cancel', requireAuth, requireParent, async (req, res) => {
+  try { res.json(await importBatches.cancelBatch(req.params.id)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/import/items/:id/retry', requireAuth, requireParent, async (req, res) => {
+  try {
+    const item = await importBatches.retryItem(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Retryable import item not found' });
+    res.json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/import/items/:id/apply-magicindex', requireAuth, requireParent, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT ii.*, b.options AS batch_options, b.created_by AS batch_created_by
+      FROM import_items ii
+      JOIN import_batches b ON b.id = ii.batch_id
+      WHERE ii.id = $1
+    `, [req.params.id]);
+    const item = rows[0];
+    if (!item) return res.status(404).json({ error: 'Import item not found' });
+    if (!item.document_id) return res.status(400).json({ error: 'Import item has no document' });
+    if (!item.magicindex_result || typeof item.magicindex_result !== 'object') {
+      return res.status(400).json({ error: 'No MagicIndex result available to apply' });
+    }
+
+    const threshold = Number(req.body?.threshold ?? item.batch_options?.auto_apply_confidence ?? process.env.MAGICINDEX_AUTO_APPLY_CONFIDENCE ?? 0.85);
+    const autoApplied = await applyMagicIndexToDocument({
+      documentId: item.document_id,
+      result: item.magicindex_result.suggestions || item.magicindex_result,
+      threshold,
+      provider: item.magicindex_result.provider || item.batch_options?.magicindex_provider || 'openai',
+      model: item.magicindex_result.model || null,
+      force: true
+    });
+
+    const nextResult = { ...item.magicindex_result, auto_applied: autoApplied, applied_by_user: true, applied_at: new Date().toISOString() };
+    const updated = await importBatches.updateItemStatus(item.id, 'review_ready', { magicindex_result: nextResult });
+    await audit.log('magicindex.applied', 'document', item.document_id, req.member.id, { import_item_id: item.id, fields: Object.keys(autoApplied) });
+    res.json({ ok: true, item: updated, auto_applied: autoApplied });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 
 app.post('/api/import/url', requireAuth, requireParent, async (req, res) => {
   try {

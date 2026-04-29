@@ -17,6 +17,7 @@
     { id: 'dashboard',  label: 'Dashboard',  icon: 'home',   href: './' },
     { id: 'documents',  label: 'Documents',  icon: 'folder', href: 'documents.html' },
     { id: 'upload',     label: 'Upload',     icon: 'upload', href: 'upload.html' },
+    { id: 'import',     label: 'Import',     icon: 'upload', href: 'import.html' },
     { id: 'search',     label: 'Search',     icon: 'search', href: 'search.html' },
     { id: 'backup',     label: 'Backup',     icon: 'shield', href: 'backup.html' },
     { id: 'settings',   label: 'Settings',   icon: 'gear',   href: 'settings.html' }

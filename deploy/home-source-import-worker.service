@@ -1,0 +1,20 @@
+[Unit]
+Description=Home Source — Batch Import Worker
+After=network.target postgresql.service home-source.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=sovereign
+Group=sovereign
+WorkingDirectory=/opt/sovereign-home/apps/home-source
+ExecStart=/usr/bin/node bin/import-worker.js
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/etc/sovereign-home/home-source.env
+StateDirectory=sovereign-home/home-source/data
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -10,7 +10,9 @@
     "test": "node --test --test-concurrency=1 --require ./test/bootstrap.js test/*.test.js",
     "test:fast": "node --test --test-concurrency=1 --require ./test/bootstrap.js test/*.test.js",
     "test:unit": "node --test --require ./test/bootstrap.js test/auth.test.js test/test-env.test.js test/files.test.js",
-    "test:prepare": "DATABASE_URL=postgresql://homesource:homesource@localhost:5438/homesource_test node db/migrate.js"
+    "test:prepare": "DATABASE_URL=postgresql://homesource:homesource@localhost:5438/homesource_test node db/migrate.js",
+    "worker:import": "node bin/import-worker.js",
+    "worker:import:once": "node bin/import-worker.js --once"
   },
   "dependencies": {
     "archiver": "^7.0.0",

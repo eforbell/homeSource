@@ -300,12 +300,12 @@
           ['Status', doc.status],
           ['Created', new Date(doc.created_at).toLocaleDateString()]
         ];
-        if (doc.issued_date) rows.push(['Issued', new Date(doc.issued_date).toLocaleDateString()]);
-        if (doc.expiry_date) rows.push(['Expires', `<span style="color:var(--warn);">${new Date(doc.expiry_date).toLocaleDateString()}</span>`]);
+        if (doc.issued_date) rows.push(['Issued', formatDateForDisplay(doc.issued_date)]);
+        if (doc.expiry_date) rows.push(['Expires', `<span style="color:var(--warn);">${formatDateForDisplay(doc.expiry_date)}</span>`]);
         if (doc.source_url) rows.push(['Source URL', `<a href="${esc(doc.source_url)}" target="_blank" class="text-sm">Link</a>`]);
         if (doc.metadata && Object.keys(doc.metadata).length) {
           for (const [k, v] of Object.entries(doc.metadata)) {
-            rows.push([k.replace(/_/g, ' '), esc(String(v))]);
+            rows.push([k.replace(/_/g, ' '), formatMetadataValue(k, v)]);
           }
         }
         meta.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td class="text-dim text-sm" style="white-space:nowrap;">${k}</td><td>${v}</td></tr>`).join('') + '</table>';
@@ -345,6 +345,45 @@
         : '<span class="text-dim text-sm">No tags</span>';
     }
 
+    function formatMetadataValue(key, value) {
+      if (value === null || value === undefined) return '<span class="text-dim">—</span>';
+      if (typeof value !== 'object') return esc(String(value));
+
+      if (key === 'magicindex') {
+        const state = value.state || 'unknown';
+        const provider = value.provider || 'unknown';
+        const confidence = Number(value.confidence);
+        const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '—';
+        const importItemId = Number(currentDoc?.metadata?.import_item_id || 0);
+        const canApply = importItemId > 0 && value.state === 'complete' && value.applied_by_user !== true;
+        const evidence = value.extraction_evidence?.source ? `<span class="text-xs text-dim">source: ${esc(value.extraction_evidence.source)}</span>` : '';
+        return `<div style="display:flex; flex-direction:column; gap:0.25rem;">
+          <span><strong>${esc(state)}</strong> · ${esc(provider)} · ${confidenceLabel}</span>
+          ${evidence}
+          ${canApply ? `<div><button class="btn btn-sm" onclick="applyMagicIndexFromDocument(${importItemId})">Apply suggestions</button></div>` : ''}
+          <details>
+            <summary class="text-sm text-dim" style="cursor:pointer;">View raw MagicIndex JSON</summary>
+            <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
+          </details>
+        </div>`;
+      }
+
+      return `<details>
+        <summary class="text-sm text-dim" style="cursor:pointer;">View JSON</summary>
+        <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
+      </details>`;
+    }
+
+    async function applyMagicIndexFromDocument(importItemId) {
+      try {
+        await API.post(`api/import/items/${importItemId}/apply-magicindex`, {});
+        toast('MagicIndex suggestions applied', 'success');
+        await loadDocument();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
     async function loadShares() {
       try {
         const shares = await API.get(`api/documents/${docId}/shares`);
@@ -376,9 +415,20 @@
       document.getElementById('edit-title').value = currentDoc.title;
       document.getElementById('edit-desc').value = currentDoc.description || '';
       document.getElementById('edit-type').value = currentDoc.document_type;
-      document.getElementById('edit-issued').value = currentDoc.issued_date || '';
-      document.getElementById('edit-expiry').value = currentDoc.expiry_date || '';
+      document.getElementById('edit-issued').value = normalizeDateInputValue(currentDoc.issued_date);
+      document.getElementById('edit-expiry').value = normalizeDateInputValue(currentDoc.expiry_date);
       document.getElementById('edit-modal').classList.remove('hidden');
+    }
+
+    function normalizeDateInputValue(value) {
+      if (!value) return '';
+      return String(value).slice(0, 10);
+    }
+
+    function formatDateForDisplay(value) {
+      const ymd = normalizeDateInputValue(value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return esc(String(value));
+      return new Date(`${ymd}T12:00:00`).toLocaleDateString();
     }
 
     document.getElementById('save-edit-btn').addEventListener('click', async () => {

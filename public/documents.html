@@ -121,6 +121,7 @@
         grid.querySelectorAll('.browse-link').forEach(el => {
           el.addEventListener('click', (e) => {
             e.stopPropagation();
+            resetFilterValues();
             if (el.dataset.browse === 'tag') {
               document.getElementById('filter-tag').value = el.dataset.id;
             } else if (el.dataset.browse === 'type') {
@@ -203,6 +204,7 @@
 
       pills.querySelectorAll('.browse-pill').forEach(btn => {
         btn.addEventListener('click', () => {
+          resetFilterValues();
           if (btn.dataset.browse === 'type') {
             document.getElementById('filter-type').value = btn.dataset.id;
           } else {
@@ -242,11 +244,15 @@
       }
     }
 
-    function clearFilters() {
+    function resetFilterValues() {
       document.getElementById('filter-type').value = '';
       document.getElementById('filter-tag').value = '';
       document.getElementById('filter-owner').value = '';
       document.getElementById('filter-search').value = '';
+    }
+
+    function clearFilters() {
+      resetFilterValues();
       currentOffset = 0;
       loadDocuments();
       updateActiveFilter();
