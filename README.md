@@ -117,6 +117,7 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 | MAGICINDEX_PROVIDER | No | off | `off`, `openai`, `openai_compatible`, or `ollama` |
 | MAGICINDEX_PROVIDER_PRIVATE | No | no | Set `yes` only for private/local providers; allows batch UI to default MagicIndex on |
 | MAGICINDEX_PROVIDER_DEFAULT | No | openai_compatible | Provider preselected by the batch UI |
+| MAGICINDEX_FETCH_TIMEOUT_MS | No | 90000 | Timeout (ms) for MagicIndex provider HTTP calls before worker marks attempt failed/retryable |
 | MAGICINDEX_AUTO_APPLY_CONFIDENCE | No | 0.85 | Threshold for auto-applying safe MagicIndex fields |
 | MAGICINDEX_COMPAT_BASE_URL | No | -- | OpenAI-compatible local endpoint, e.g. `http://lan-llm:8000/v1` |
 | MAGICINDEX_COMPAT_MODEL | No | -- | Local model id, e.g. `qwen3:30b-a3b` |
