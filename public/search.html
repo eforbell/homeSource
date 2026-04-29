@@ -41,6 +41,9 @@
         <select id="search-owner" class="form-select">
           <option value="">All Owners</option>
         </select>
+        <select id="search-tag" class="form-select">
+          <option value="">All Tags</option>
+        </select>
       </div>
     </div>
 
@@ -64,10 +67,14 @@
 
     async function loadFilters() {
       try {
-        const members = await API.get('api/members');
-        const select = document.getElementById('search-owner');
+        const [members, tags] = await Promise.all([API.get('api/members'), API.get('api/tags')]);
+        const ownerSelect = document.getElementById('search-owner');
         for (const m of members) {
-          select.innerHTML += `<option value="${m.id}">${m.avatar_emoji} ${m.name}</option>`;
+          ownerSelect.innerHTML += `<option value="${m.id}">${m.avatar_emoji} ${esc(m.name)}</option>`;
+        }
+        const tagSelect = document.getElementById('search-tag');
+        for (const t of tags) {
+          tagSelect.innerHTML += `<option value="${t.id}">${esc(t.name)}</option>`;
         }
       } catch {}
     }
@@ -81,8 +88,10 @@
       const params = new URLSearchParams({ q });
       const type = document.getElementById('search-type').value;
       const owner = document.getElementById('search-owner').value;
+      const tag = document.getElementById('search-tag').value;
       if (type) params.set('type', type);
       if (owner) params.set('owner', owner);
+      if (tag) params.set('tag', tag);
 
       try {
         const { results, total } = await API.get('api/search?' + params);
