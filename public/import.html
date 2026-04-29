@@ -159,8 +159,13 @@
             console.warn('Failed to stage file', file.name, err);
           }
         }
-        if (staged > 0) await API.post(`api/import/batches/${batch.id}/start`, {});
-        toastStatus(`Staged ${staged}/${files.length} file(s). Skipped hidden/system: ${ignored}. Failed: ${failed}.`);
+        if (staged > 0) {
+          await API.post(`api/import/batches/${batch.id}/start`, {});
+          toastStatus(`Staged ${staged}/${files.length} file(s). Skipped hidden/system: ${ignored}. Failed: ${failed}.`);
+        } else {
+          await API.post(`api/import/batches/${batch.id}/cancel`, {});
+          toastStatus(`No files were staged. Skipped hidden/system: ${ignored}. Failed: ${failed}. Batch was cancelled.`);
+        }
         await refreshBatch();
         await loadBatches();
       } catch (err) {
