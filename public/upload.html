@@ -34,11 +34,21 @@
           Loading scanner...
         </div>
         <div id="scanner-area" style="display:none;">
+          <div class="text-center mb-1">
+            <label class="text-xs text-dim" for="scan-guide-ratio" style="display:block;">Paper guide</label>
+            <select id="scan-guide-ratio" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
+              <option value="letter" selected>Letter (8.5 × 11)</option>
+              <option value="legal">Legal (8.5 × 14)</option>
+              <option value="a4">A4 (210 × 297)</option>
+              <option value="auto">Auto</option>
+            </select>
+          </div>
           <!-- Live camera feed -->
           <div id="scanner-live">
             <div class="scanner-container">
               <video id="scan-video" autoplay playsinline></video>
               <canvas id="scan-highlight"></canvas>
+              <div id="scan-guide-overlay" style="position:absolute;border:2px dashed rgba(217,119,6,0.9);border-radius:10px;pointer-events:none;display:none;"></div>
             </div>
             <div id="scan-detect-status" class="text-center text-xs text-dim" style="padding:0.4rem;">
               Point camera at a document
@@ -71,6 +81,7 @@
             </div>
             <div class="btn-group mt-2" style="justify-content:center; flex-wrap:wrap;">
               <button id="corner-retake-btn" class="btn">Retake</button>
+              <button id="corner-autofit-btn" class="btn">Auto-fit</button>
               <button id="corner-crop-btn" class="btn btn-primary">Crop & Use</button>
               <button id="corner-skip-btn" class="btn">Use Full Frame</button>
             </div>
@@ -78,6 +89,8 @@
           <!-- Final preview after crop -->
           <div id="scan-preview" style="display:none;">
             <canvas id="scan-result" style="max-width:100%;border-radius:8px;display:block;margin:0 auto;"></canvas>
+            <div id="scan-pages-summary" class="text-xs text-dim text-center mt-1" style="display:none;"></div>
+            <div id="scan-pages-strip" class="mt-1" style="display:none;"></div>
             <div style="margin-top:0.75rem;">
               <label class="text-sm" style="display:flex;align-items:center;gap:0.5rem;justify-content:center;cursor:pointer;">
                 <input type="checkbox" id="scan-document-filter">
@@ -87,7 +100,8 @@
             </div>
             <div class="btn-group mt-2" style="justify-content:center;">
               <button id="scan-retake-btn" class="btn">Retake</button>
-              <button id="scan-accept-btn" class="btn btn-primary">Use This</button>
+              <button id="scan-another-btn" class="btn">Scan Another Page</button>
+              <button id="scan-accept-btn" class="btn btn-primary">Use This Page</button>
             </div>
           </div>
         </div>
@@ -191,6 +205,7 @@
     let selectedFile = null;
     let activeTab = 'scan';
     let scanBlob = null;
+    let scannedPages = [];
 
     async function loadMagicIndexConfig() {
       try {
@@ -297,6 +312,7 @@
     let detectedCorners = null;
     let frameDetectedCorners = null;
     let scanBaseCanvas = null;
+    let scanPreviewPageAdded = false;
 
     document.getElementById('start-camera-btn').addEventListener('click', () => {
       document.getElementById('scanner-start').style.display = 'none';
@@ -343,43 +359,9 @@
         scanner = new jscanify();
         document.getElementById('scanner-loading').style.display = 'none';
         document.getElementById('scanner-area').style.display = 'block';
+        updateGuideOverlay();
 
-        const highlightCanvas = document.getElementById('scan-highlight');
-        const statusEl = document.getElementById('scan-detect-status');
-        const hlCtx = highlightCanvas.getContext('2d');
-        highlightInterval = setInterval(() => {
-          try {
-            if (!video.videoWidth) return;
-            highlightCanvas.width = video.videoWidth;
-            highlightCanvas.height = video.videoHeight;
-
-            // Single cv.imread — read once, detect contour, draw highlight
-            const img = cv.imread(video);
-            const contour = scanner.findPaperContour(img);
-            if (contour) {
-              const pts = scanner.getCornerPoints(contour);
-              if (pts.topLeftCorner && pts.topRightCorner && pts.bottomLeftCorner && pts.bottomRightCorner) {
-                detectedCorners = pts;
-                statusEl.textContent = 'Document detected — tap to capture';
-                statusEl.style.color = 'var(--accent-light)';
-                hlCtx.strokeStyle = '#d97706';
-                hlCtx.lineWidth = 4;
-                hlCtx.beginPath();
-                hlCtx.moveTo(pts.topLeftCorner.x, pts.topLeftCorner.y);
-                hlCtx.lineTo(pts.topRightCorner.x, pts.topRightCorner.y);
-                hlCtx.lineTo(pts.bottomRightCorner.x, pts.bottomRightCorner.y);
-                hlCtx.lineTo(pts.bottomLeftCorner.x, pts.bottomLeftCorner.y);
-                hlCtx.closePath();
-                hlCtx.stroke();
-              }
-            } else {
-              statusEl.textContent = 'Point camera at a document';
-              statusEl.style.color = '';
-              detectedCorners = null;
-            }
-            img.delete();
-          } catch (e) {}
-        }, 300);
+        startHighlightLoop();
 
       } catch (err) {
         console.error('Camera error:', err);
@@ -448,7 +430,7 @@
 
       // Re-detect on the frozen frame (instead of trusting the last live-frame reading)
       // so the initial handles align better with what was actually captured.
-      const frameCorners = detectCornersFromCanvas(frozenFrame) || detectedCorners;
+      const frameCorners = detectCornersFromCanvasEnhanced(frozenFrame) || detectedCorners;
       frameDetectedCorners = frameCorners;
 
       // Read container size after it's visible
@@ -466,10 +448,102 @@
         if (!contour) return null;
         const pts = scanner.getCornerPoints(contour);
         if (!pts || !pts.topLeftCorner || !pts.topRightCorner || !pts.bottomLeftCorner || !pts.bottomRightCorner) return null;
-        return pts;
+        return isCornerSetUsable(pts, canvas.width, canvas.height) ? pts : null;
       } catch (err) {
         return null;
       }
+    }
+
+    function detectCornersFromCanvasEnhanced(canvas) {
+      const primary = detectCornersFromCanvas(canvas);
+      if (primary) return primary;
+      if (typeof cv === 'undefined') return null;
+      try {
+        const src = cv.imread(canvas);
+        const gray = new cv.Mat();
+        const blurred = new cv.Mat();
+        const edges = new cv.Mat();
+        const contours = new cv.MatVector();
+        const hierarchy = new cv.Mat();
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+        cv.Canny(blurred, edges, 50, 150);
+        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        let best = null;
+        let bestScore = 0;
+        for (let i = 0; i < contours.size(); i++) {
+          const cnt = contours.get(i);
+          const peri = cv.arcLength(cnt, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+          if (approx.rows === 4) {
+            const points = [];
+            for (let j = 0; j < 4; j++) points.push({ x: approx.intPtr(j, 0)[0], y: approx.intPtr(j, 0)[1] });
+            const quad = orderQuad(points);
+            const score = scoreQuad(quad, canvas.width, canvas.height);
+            if (score > bestScore) {
+              bestScore = score;
+              best = quad;
+            }
+          }
+          approx.delete();
+          cnt.delete();
+        }
+        src.delete(); gray.delete(); blurred.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+        return bestScore >= 0.2 ? best : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function orderQuad(points) {
+      const sumSorted = [...points].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+      const diffSorted = [...points].sort((a, b) => (a.y - a.x) - (b.y - b.x));
+      return {
+        topLeftCorner: sumSorted[0],
+        bottomRightCorner: sumSorted[3],
+        topRightCorner: diffSorted[0],
+        bottomLeftCorner: diffSorted[3]
+      };
+    }
+
+    function polygonArea(pts) {
+      let area = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % pts.length];
+        area += (p1.x * p2.y) - (p2.x * p1.y);
+      }
+      return Math.abs(area / 2);
+    }
+
+    function isCornerSetUsable(corners, frameWidth, frameHeight) {
+      const pts = [corners.topLeftCorner, corners.topRightCorner, corners.bottomRightCorner, corners.bottomLeftCorner];
+      const areaRatio = polygonArea(pts) / Math.max(1, frameWidth * frameHeight);
+      const minX = Math.min(...pts.map((p) => p.x));
+      const maxX = Math.max(...pts.map((p) => p.x));
+      const minY = Math.min(...pts.map((p) => p.y));
+      const maxY = Math.max(...pts.map((p) => p.y));
+      const wRatio = (maxX - minX) / Math.max(1, frameWidth);
+      const hRatio = (maxY - minY) / Math.max(1, frameHeight);
+      return areaRatio >= 0.12 && wRatio >= 0.35 && hRatio >= 0.35;
+    }
+
+    function scoreQuad(corners, frameWidth, frameHeight) {
+      if (!isCornerSetUsable(corners, frameWidth, frameHeight)) return 0;
+      const pts = [corners.topLeftCorner, corners.topRightCorner, corners.bottomRightCorner, corners.bottomLeftCorner];
+      const areaRatio = polygonArea(pts) / Math.max(1, frameWidth * frameHeight);
+      const minX = Math.min(...pts.map((p) => p.x));
+      const maxX = Math.max(...pts.map((p) => p.x));
+      const minY = Math.min(...pts.map((p) => p.y));
+      const maxY = Math.max(...pts.map((p) => p.y));
+      const wRatio = (maxX - minX) / Math.max(1, frameWidth);
+      const hRatio = (maxY - minY) / Math.max(1, frameHeight);
+      const guideRatio = getSelectedGuideRatio();
+      const boxRatio = (maxX - minX) / Math.max(1, (maxY - minY));
+      const ratioPenalty = guideRatio ? Math.min(0.6, Math.abs(boxRatio - guideRatio) * 1.6) : 0;
+      const edgePenalty = Math.max(0, 0.03 - minX / frameWidth) + Math.max(0, 0.03 - minY / frameHeight);
+      return areaRatio * 1.2 + Math.min(wRatio, hRatio) - edgePenalty - ratioPenalty;
     }
 
     function clamp(val, min, max) {
@@ -482,6 +556,46 @@
       if (value === 'tight') return { expandRatio: 0.02, minPadPx: 6 };
       if (value === 'wide') return { expandRatio: 0.08, minPadPx: 22 };
       return { expandRatio: 0.045, minPadPx: 14 };
+    }
+
+    function getSelectedGuideRatio() {
+      const mode = document.getElementById('scan-guide-ratio')?.value || 'letter';
+      if (mode === 'auto') return null;
+      if (mode === 'legal') return 8.5 / 14;
+      if (mode === 'a4') return 210 / 297;
+      return 8.5 / 11;
+    }
+
+    function getTargetCropSize() {
+      const ratio = getSelectedGuideRatio();
+      const width = 1100;
+      if (!ratio) return { width: 1000, height: 1400 };
+      return { width, height: Math.round(width / ratio) };
+    }
+
+    function updateGuideOverlay() {
+      const overlay = document.getElementById('scan-guide-overlay');
+      const ratio = getSelectedGuideRatio();
+      if (!overlay || !ratio) {
+        if (overlay) overlay.style.display = 'none';
+        return;
+      }
+      const container = document.querySelector('#scanner-live .scanner-container');
+      if (!container) return;
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      if (!cw || !ch) return;
+      let width = cw * 0.82;
+      let height = width / ratio;
+      if (height > ch * 0.82) {
+        height = ch * 0.82;
+        width = height * ratio;
+      }
+      overlay.style.display = 'block';
+      overlay.style.width = `${Math.round(width)}px`;
+      overlay.style.height = `${Math.round(height)}px`;
+      overlay.style.left = `${Math.round((cw - width) / 2)}px`;
+      overlay.style.top = `${Math.round((ch - height) / 2)}px`;
     }
 
     function seedCornerHandlesFromCurrentLooseness() {
@@ -721,7 +835,8 @@
           topLeftCorner: tlS, topRightCorner: trS,
           bottomLeftCorner: blS, bottomRightCorner: brS
         };
-        result = scanner.extractPaper(frozenFrame, 1000, 1400, corners);
+        const target = getTargetCropSize();
+        result = scanner.extractPaper(frozenFrame, target.width, target.height, corners);
       } catch (err) {
         console.warn('OpenCV crop failed, using fallback:', err);
       }
@@ -736,6 +851,7 @@
       }
 
       setScanPreviewSource(result);
+      scanPreviewPageAdded = false;
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'block';
     });
@@ -745,6 +861,7 @@
     document.getElementById('corner-skip-btn').addEventListener('click', () => {
       if (!frozenFrame) return;
       setScanPreviewSource(frozenFrame);
+      scanPreviewPageAdded = false;
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'block';
     });
@@ -755,7 +872,26 @@
       goBackToLive();
     });
 
+    document.getElementById('corner-autofit-btn').addEventListener('click', () => {
+      if (!frozenFrame) return;
+      const corners = detectCornersFromCanvasEnhanced(frozenFrame);
+      if (!corners) {
+        toast('Could not auto-detect page edges. Adjust corners manually.', 'error');
+        return;
+      }
+      frameDetectedCorners = corners;
+      seedCornerHandlesFromCurrentLooseness();
+      toast('Auto-fit applied.', 'success');
+    });
+
     document.getElementById('scan-retake-btn').addEventListener('click', () => {
+      goBackToLive();
+    });
+
+    document.getElementById('scan-another-btn').addEventListener('click', async () => {
+      const added = await addCurrentPreviewPage();
+      if (!added) return;
+      toast(`Page ${scannedPages.length} added. Scan the next page.`, 'success');
       goBackToLive();
     });
 
@@ -765,9 +901,19 @@
       scanBlob = null;
       scanBaseCanvas = null;
       frameDetectedCorners = null;
+      scanPreviewPageAdded = false;
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'none';
       document.getElementById('scanner-live').style.display = 'block';
+      refreshScanPagesUi();
+      startHighlightLoop();
+    }
+
+    function startHighlightLoop() {
+      if (highlightInterval) {
+        clearInterval(highlightInterval);
+        highlightInterval = null;
+      }
 
       const video = document.getElementById('scan-video');
       if (video.srcObject) {
@@ -779,6 +925,7 @@
             if (!video.videoWidth) return;
             highlightCanvas.width = video.videoWidth;
             highlightCanvas.height = video.videoHeight;
+            updateGuideOverlay();
             const img = cv.imread(video);
             const contour = scanner.findPaperContour(img);
             if (contour) {
@@ -810,14 +957,79 @@
 
     // ── Accept scan result ───────────────────────────────────
 
-    document.getElementById('scan-accept-btn').addEventListener('click', () => {
-      const canvas = document.getElementById('scan-result');
-      canvas.toBlob(blob => {
-        scanBlob = blob;
-        selectedFile = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
-        toast('Scan captured! Fill in details and save.', 'success');
-      }, 'image/jpeg', 0.92);
+    document.getElementById('scan-accept-btn').addEventListener('click', async () => {
+      const added = await addCurrentPreviewPage();
+      if (!added) return;
+      selectedFile = scannedPages.length === 1 ? new File([scannedPages[0].blob], 'scan.jpg', { type: 'image/jpeg' }) : null;
+      toast(`Captured ${scannedPages.length} page${scannedPages.length === 1 ? '' : 's'}. Fill in details and save.`, 'success');
     });
+
+    async function addCurrentPreviewPage() {
+      if (scanPreviewPageAdded) return true;
+      const canvas = document.getElementById('scan-result');
+      const blob = await canvasToJpegBlob(canvas);
+      if (!blob) {
+        toast('Could not capture scan preview', 'error');
+        return false;
+      }
+      scanBlob = blob;
+      scannedPages.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        blob
+      });
+      scanPreviewPageAdded = true;
+      refreshScanPagesUi();
+      return true;
+    }
+
+    function canvasToJpegBlob(canvas) {
+      return new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92);
+      });
+    }
+
+    function refreshScanPagesUi() {
+      const summary = document.getElementById('scan-pages-summary');
+      const strip = document.getElementById('scan-pages-strip');
+      if (!scannedPages.length) {
+        summary.style.display = 'none';
+        strip.style.display = 'none';
+        strip.innerHTML = '';
+        return;
+      }
+      summary.style.display = 'block';
+      summary.textContent = `${scannedPages.length} page${scannedPages.length === 1 ? '' : 's'} captured`;
+      strip.style.display = 'grid';
+      strip.style.gridTemplateColumns = 'repeat(auto-fill, minmax(120px, 1fr))';
+      strip.style.gap = '0.5rem';
+      strip.innerHTML = scannedPages.map((page, index) => {
+        const url = URL.createObjectURL(page.blob);
+        return `<div style="border:1px solid var(--border);border-radius:8px;padding:0.35rem;">
+          <img src="${url}" alt="Page ${index + 1}" style="width:100%;height:72px;object-fit:cover;border-radius:6px;">
+          <div class="text-xs text-dim" style="margin-top:0.25rem;">Page ${index + 1}</div>
+          <div style="display:flex;gap:0.25rem;margin-top:0.25rem;">
+            <button class="btn btn-sm" type="button" onclick="moveScanPage(${index}, -1)" ${index === 0 ? 'disabled' : ''}>↑</button>
+            <button class="btn btn-sm" type="button" onclick="moveScanPage(${index}, 1)" ${index === scannedPages.length - 1 ? 'disabled' : ''}>↓</button>
+            <button class="btn btn-sm" type="button" onclick="deleteScanPage(${index})">✕</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    window.moveScanPage = (index, delta) => {
+      const target = index + delta;
+      if (target < 0 || target >= scannedPages.length) return;
+      const [item] = scannedPages.splice(index, 1);
+      scannedPages.splice(target, 0, item);
+      refreshScanPagesUi();
+    };
+
+    window.deleteScanPage = (index) => {
+      scannedPages.splice(index, 1);
+      if (!scannedPages.length) selectedFile = null;
+      else if (scannedPages.length === 1) selectedFile = new File([scannedPages[0].blob], 'scan.jpg', { type: 'image/jpeg' });
+      refreshScanPagesUi();
+    };
 
     document.getElementById('scan-document-filter').addEventListener('change', renderScanPreview);
     document.getElementById('scan-crop-looseness').addEventListener('change', () => {
@@ -825,6 +1037,15 @@
         seedCornerHandlesFromCurrentLooseness();
       }
     });
+    document.getElementById('scan-guide-ratio').addEventListener('change', () => {
+      updateGuideOverlay();
+      if (document.getElementById('scanner-corners').style.display !== 'none' && frozenFrame) {
+        const corners = detectCornersFromCanvasEnhanced(frozenFrame);
+        if (corners) frameDetectedCorners = corners;
+        seedCornerHandlesFromCurrentLooseness();
+      }
+    });
+    window.addEventListener('resize', updateGuideOverlay);
 
     // ── Load members for owner checkboxes ─────────────────────
 
@@ -886,6 +1107,25 @@
           toast('Document imported!', 'success');
           location.href = `document.html?id=${doc.id}`;
         } else {
+          if (activeTab === 'scan') {
+            if (!scannedPages.length) {
+              if (document.getElementById('scan-preview').style.display !== 'none') {
+                const added = await addCurrentPreviewPage();
+                if (!added) throw new Error('No scan page captured');
+              } else {
+                throw new Error('No scan page captured');
+              }
+            }
+            if (scannedPages.length > 1) {
+              status.textContent = `Uploading ${scannedPages.length} scan pages...`;
+              const doc = await API.uploadScanPages('api/documents/scan-multi', scannedPages.map((p) => p.blob), metadata);
+              stopProgressPhases(phaseTimer);
+              toast('Document saved!', 'success');
+              location.href = `document.html?id=${doc.id}`;
+              return;
+            }
+            selectedFile = new File([scannedPages[0].blob], 'scan.jpg', { type: 'image/jpeg' });
+          }
           if (!selectedFile) { toast('No file selected', 'error'); btn.disabled = false; status.style.display = 'none'; stopProgressPhases(phaseTimer); return; }
           if (selectedFile.type.startsWith('image/') && activeTab === 'upload') {
             status.textContent = 'Compressing...';

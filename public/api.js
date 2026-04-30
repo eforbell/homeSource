@@ -81,5 +81,27 @@ window.API = {
       throw new Error(err.error || res.statusText);
     }
     return res.json();
+  },
+
+  async uploadScanPages(path, pages = [], metadata = {}) {
+    const form = new FormData();
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      const file = page instanceof File ? page : new File([page], `scan-page-${i + 1}.jpg`, { type: 'image/jpeg' });
+      form.append('scan_pages', file);
+    }
+    form.append('metadata', JSON.stringify(metadata || {}));
+    let res;
+    try {
+      res = await fetch(path, { method: 'POST', body: form });
+    } catch {
+      throw new Error('Upload failed — check your connection and try again');
+    }
+    if (!res.ok) {
+      if (res.status === 413) throw new Error('Scan upload too large — server rejected the upload');
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    return res.json();
   }
 };
