@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { getMagicIndexConfig } = require('../lib/magic-index/config');
-const { normalizeMagicIndexResult } = require('../lib/magic-index/schema');
+const { normalizeMagicIndexResult, normalizeTitle } = require('../lib/magic-index/schema');
 
 describe('MagicIndex config', () => {
   it('defaults off unless provider is marked private', () => {
@@ -55,6 +55,11 @@ describe('MagicIndex schema normalization', () => {
       confidence: 0.8
     });
     assert.equal(result.issued_date, '2023-12-01');
+  });
+
+  it('humanizes slug-like titles while preserving acronyms', () => {
+    assert.equal(normalizeTitle('2.5t-trane-single_stage_airhandler'), '2.5t TRANE Single Stage Airhandler');
+    assert.equal(normalizeTitle('hvac_invoice_pdf'), 'HVAC Invoice PDF');
   });
 });
 
