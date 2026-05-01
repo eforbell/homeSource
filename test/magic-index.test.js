@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { getMagicIndexConfig } = require('../lib/magic-index/config');
-const { normalizeMagicIndexResult } = require('../lib/magic-index/schema');
+const { normalizeMagicIndexResult, normalizeTitle } = require('../lib/magic-index/schema');
 
 describe('MagicIndex config', () => {
   it('defaults off unless provider is marked private', () => {
@@ -56,6 +56,11 @@ describe('MagicIndex schema normalization', () => {
     });
     assert.equal(result.issued_date, '2023-12-01');
   });
+
+  it('humanizes slug-like titles while preserving acronyms', () => {
+    assert.equal(normalizeTitle('2.5t-trane-single_stage_airhandler'), '2.5t TRANE Single Stage Airhandler');
+    assert.equal(normalizeTitle('hvac_invoice_pdf'), 'HVAC Invoice PDF');
+  });
 });
 
 const { inferMimeType, clampConfidence, isIgnoredImportPath, ALLOWED_ITEM_UPDATE_FIELDS } = require('../lib/import-batches');
@@ -94,6 +99,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { buildResponseBody, buildUserContent, canSendPdfFile } = require('../lib/magic-index/providers/openai-responses');
+const { parseOllamaJsonContent } = require('../lib/magic-index/providers/ollama-chat');
 
 describe('OpenAI PDF MagicIndex requests', () => {
   it('attaches PDF bytes as Responses input_file content', () => {
@@ -127,5 +133,18 @@ describe('OpenAI PDF MagicIndex requests', () => {
     assert.ok(imagePart);
     assert.equal(imagePart.detail, 'high');
     assert.match(imagePart.image_url, /^data:image\/jpeg;base64,/);
+  });
+});
+
+describe('Ollama JSON parsing hardening', () => {
+  it('extracts final JSON when think blocks and duplicate payloads leak', () => {
+    const content = `"title":"bad"}\n</think>\n\n{"title":"Good","document_type":"other","summary":"ok","issued_date":null,"expiry_date":null,"amount":null,"suggested_tags":[],"suggested_owners":[],"key_facts":[],"confidence":0.5,"field_confidence":{},"needs_review_reasons":[]}`;
+    const parsed = parseOllamaJsonContent(content);
+    assert.equal(parsed.title, 'Good');
+  });
+
+  it('parses clean JSON directly', () => {
+    const parsed = parseOllamaJsonContent('{"title":"A","document_type":"other","summary":"B"}');
+    assert.equal(parsed.title, 'A');
   });
 });
