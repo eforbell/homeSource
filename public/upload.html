@@ -53,10 +53,10 @@
             <div class="text-center mb-1">
               <label class="text-xs text-dim" for="scan-crop-looseness">Auto crop looseness</label>
               <select id="scan-crop-looseness" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
-                <option value="extra-tight">Extra tight (marginless)</option>
-                <option value="tight">Tight</option>
+                <option value="tight">Tight (borderless)</option>
                 <option value="normal" selected>Normal</option>
                 <option value="wide">Wide</option>
+                <option value="wider">Wider</option>
               </select>
             </div>
             <div class="scanner-container" id="corner-container">
@@ -333,7 +333,12 @@
     async function startCamera() {
       try {
         videoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1440 },
+            aspectRatio: { ideal: 4 / 3 }
+          }
         });
 
         const video = document.getElementById('scan-video');
@@ -358,6 +363,7 @@
             const contour = scanner.findPaperContour(img);
             if (contour) {
               const pts = scanner.getCornerPoints(contour);
+              contour.delete();
               if (pts.topLeftCorner && pts.topRightCorner && pts.bottomLeftCorner && pts.bottomRightCorner) {
                 detectedCorners = pts;
                 statusEl.textContent = 'Document detected — tap to capture';
@@ -465,6 +471,7 @@
         img.delete();
         if (!contour) return null;
         const pts = scanner.getCornerPoints(contour);
+        contour.delete();
         if (!pts || !pts.topLeftCorner || !pts.topRightCorner || !pts.bottomLeftCorner || !pts.bottomRightCorner) return null;
         return pts;
       } catch (err) {
@@ -478,10 +485,10 @@
 
     function getLoosenessProfile() {
       const value = document.getElementById('scan-crop-looseness').value;
-      if (value === 'extra-tight') return { expandRatio: -0.006, minPadPx: -3 };
-      if (value === 'tight') return { expandRatio: 0.02, minPadPx: 6 };
-      if (value === 'wide') return { expandRatio: 0.08, minPadPx: 22 };
-      return { expandRatio: 0.045, minPadPx: 14 };
+      if (value === 'tight') return { expandRatio: -0.008, minPadPx: -4 };
+      if (value === 'wide') return { expandRatio: 0.035, minPadPx: 10 };
+      if (value === 'wider') return { expandRatio: 0.07, minPadPx: 20 };
+      return { expandRatio: 0.005, minPadPx: 2 };
     }
 
     function seedCornerHandlesFromCurrentLooseness() {
@@ -783,6 +790,7 @@
             const contour = scanner.findPaperContour(img);
             if (contour) {
               const pts = scanner.getCornerPoints(contour);
+              contour.delete();
               if (pts.topLeftCorner && pts.topRightCorner && pts.bottomLeftCorner && pts.bottomRightCorner) {
                 detectedCorners = pts;
                 statusEl.textContent = 'Document detected — tap to capture';
