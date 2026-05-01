@@ -63,10 +63,10 @@
             <div class="text-center mb-1">
               <label class="text-xs text-dim" for="scan-crop-looseness">Auto crop looseness</label>
               <select id="scan-crop-looseness" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
-                <option value="extra-tight">Extra tight (marginless)</option>
-                <option value="tight">Tight</option>
+                <option value="tight">Tight (borderless)</option>
                 <option value="normal" selected>Normal</option>
                 <option value="wide">Wide</option>
+                <option value="wider">Wider</option>
               </select>
             </div>
             <div class="scanner-container" id="corner-container">
@@ -349,7 +349,12 @@
     async function startCamera() {
       try {
         videoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1440 },
+            aspectRatio: { ideal: 4 / 3 }
+          }
         });
 
         const video = document.getElementById('scan-video');
@@ -447,6 +452,7 @@
         img.delete();
         if (!contour) return null;
         const pts = scanner.getCornerPoints(contour);
+        contour.delete();
         if (!pts || !pts.topLeftCorner || !pts.topRightCorner || !pts.bottomLeftCorner || !pts.bottomRightCorner) return null;
         return isCornerSetUsable(pts, canvas.width, canvas.height) ? pts : null;
       } catch (err) {
@@ -552,10 +558,10 @@
 
     function getLoosenessProfile() {
       const value = document.getElementById('scan-crop-looseness').value;
-      if (value === 'extra-tight') return { expandRatio: -0.006, minPadPx: -3 };
-      if (value === 'tight') return { expandRatio: 0.02, minPadPx: 6 };
-      if (value === 'wide') return { expandRatio: 0.08, minPadPx: 22 };
-      return { expandRatio: 0.045, minPadPx: 14 };
+      if (value === 'tight') return { expandRatio: -0.008, minPadPx: -4 };
+      if (value === 'wide') return { expandRatio: 0.035, minPadPx: 10 };
+      if (value === 'wider') return { expandRatio: 0.07, minPadPx: 20 };
+      return { expandRatio: 0.005, minPadPx: 2 };
     }
 
     function getSelectedGuideRatio() {
@@ -769,22 +775,18 @@
       }
 
       const pixelCount = w * h;
-      const low = percentileFromHistogram(histogram, pixelCount * 0.03);
-      const high = percentileFromHistogram(histogram, pixelCount * 0.97);
+      const low = percentileFromHistogram(histogram, pixelCount * 0.02);
+      const high = percentileFromHistogram(histogram, pixelCount * 0.98);
       const span = Math.max(1, high - low);
 
       for (let i = 0; i < data.length; i += 4) {
         const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        let normalized = (lum - low) / span;
-        normalized = Math.max(0, Math.min(1, normalized));
+        let n = (lum - low) / span;
+        n = Math.max(0, Math.min(1, n));
+        n = Math.pow(n, 0.92);
+        n = n * n * (3 - 2 * n);
 
-        // Slight gamma + soft threshold for "document scanner" effect
-        let value = Math.pow(normalized, 0.82) * 255;
-        if (value <= 42) value = 0;
-        else if (value >= 216) value = 255;
-        else value = ((value - 42) / (216 - 42)) * 255;
-
-        const gray = Math.round(value);
+        const gray = Math.round(n * 255);
         data[i] = gray;
         data[i + 1] = gray;
         data[i + 2] = gray;
@@ -930,6 +932,7 @@
             const contour = scanner.findPaperContour(img);
             if (contour) {
               const pts = scanner.getCornerPoints(contour);
+              contour.delete();
               if (pts.topLeftCorner && pts.topRightCorner && pts.bottomLeftCorner && pts.bottomRightCorner) {
                 detectedCorners = pts;
                 statusEl.textContent = 'Document detected — tap to capture';
