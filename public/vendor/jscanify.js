@@ -60,11 +60,15 @@
       for (let i = 0; i < contours.size(); i++) {
         const contour = contours.get(i);
         const area = cv.contourArea(contour);
-        if (area < minArea || area <= bestArea) continue;
+        if (area < minArea || area <= bestArea) {
+          contour.delete();
+          continue;
+        }
 
         const peri = cv.arcLength(contour, true);
         const approx = new cv.Mat();
         cv.approxPolyDP(contour, approx, peri * 0.03, true);
+        contour.delete();
 
         if (approx.rows === 4 && cv.isContourConvex(approx)) {
           if (bestQuad) bestQuad.delete();
@@ -88,18 +92,23 @@
       edges.delete();
 
       let maxArea = 0;
-      let maxIdx = -1;
+      let bestContour = null;
       for (let i = 0; i < contours.size(); i++) {
-        const area = cv.contourArea(contours.get(i));
+        const contour = contours.get(i);
+        const area = cv.contourArea(contour);
         if (area > maxArea && area >= minArea) {
           maxArea = area;
-          maxIdx = i;
+          if (bestContour) bestContour.delete();
+          bestContour = contour;
+        } else {
+          contour.delete();
         }
       }
 
       let result = null;
-      if (maxIdx >= 0) {
-        result = contours.get(maxIdx).clone();
+      if (bestContour) {
+        result = bestContour.clone();
+        bestContour.delete();
       }
 
       hierarchy.delete();
