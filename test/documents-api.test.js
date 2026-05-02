@@ -215,4 +215,8 @@ describe('MagicIndex re-analysis', () => {
     });
     assert.equal(res.status, 403);
   });
+
+  after(async () => {
+    await pool.query('DELETE FROM processing_jobs WHERE document_id = $1', [doc.id]);
+  });
 });

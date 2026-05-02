@@ -376,7 +376,10 @@
         const state = value.state || 'unknown';
         const provider = value.provider || 'unknown';
         const confidence = Number(value.confidence);
-        const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '—';
+        const rawConfidence = Number(value.raw_confidence);
+        const confidenceLabel = Number.isFinite(confidence)
+          ? `${Math.round(confidence * 100)}%${Number.isFinite(rawConfidence) && Math.round(rawConfidence * 100) !== Math.round(confidence * 100) ? ` (raw ${Math.round(rawConfidence * 100)}%)` : ''}`
+          : '—';
         const importItemId = Number(currentDoc?.metadata?.import_item_id || 0);
         const canApply = importItemId > 0 && value.state === 'complete' && value.applied_by_user !== true;
         const evidence = value.extraction_evidence?.source ? `<span class="text-xs text-dim">source: ${esc(value.extraction_evidence.source)}</span>` : '';

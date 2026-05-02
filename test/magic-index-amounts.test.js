@@ -44,6 +44,35 @@ describe('MagicIndex amount normalization', () => {
     assert.equal(result.amount.value, 13110);
     assert.equal(result.amount.currency, 'USD');
     assert.equal(result.amount.source, 'key_fact');
-    assert.equal(result.field_confidence.amount, 0.97);
+    assert.equal(result.field_confidence.amount, 0.922);
+  });
+
+  it('suppresses expiry dates on tax documents and dampens confidence', () => {
+    const result = normalizeMagicIndexResult({
+      title: '2017 Tax Return',
+      document_type: 'tax',
+      summary: 'Form 1040 return for 2017',
+      expiry_date: '2023-01-01',
+      confidence: 0.95,
+      field_confidence: { expiry_date: 0.95 }
+    });
+    assert.equal(result.expiry_date, null);
+    assert.equal(result.field_confidence.expiry_date, 0.02);
+    assert.ok(result.confidence < 0.95);
+    assert.match(result.needs_review_reasons.join(' '), /Suppressed expiry date/i);
+  });
+
+  it('dampens suspicious invoice-vs-insurance classifications', () => {
+    const result = normalizeMagicIndexResult({
+      title: 'Invoice',
+      document_type: 'insurance',
+      summary: 'Invoice for MacBook Pro purchased by Eric Forbell',
+      confidence: 0.92,
+      field_confidence: { document_type: 0.85 }
+    });
+    assert.equal(result.document_type, 'insurance');
+    assert.ok(result.field_confidence.document_type < 0.85);
+    assert.ok(result.confidence < 0.92);
+    assert.match(result.needs_review_reasons.join(' '), /invoice\/statement/i);
   });
 });
