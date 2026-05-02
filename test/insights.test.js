@@ -149,4 +149,23 @@ describe('MagicInsight parent workflow and access control', () => {
     const detailRes = await authedGet(`api/insights/${insightId}`, parentCookie);
     assert.equal(detailRes.status, 404);
   });
+
+  it('surfaces critical non-expiry insights in dashboard summary even without due dates', async () => {
+    const remainingRes = await authedGet('api/insights?status=new', parentCookie);
+    const [qualityInsight] = await remainingRes.json();
+    assert.ok(qualityInsight);
+
+    const escalateRes = await authedPut(`api/insights/${qualityInsight.id}`, parentCookie, {
+      severity: 'critical'
+    });
+    assert.equal(escalateRes.status, 200);
+
+    const statsRes = await authedGet('api/stats', parentCookie);
+    assert.equal(statsRes.status, 200);
+    const stats = await statsRes.json();
+    assert.equal(stats.insights.new_critical_count, 1);
+    assert.equal(stats.insights.top_due.some((item) => item.id === qualityInsight.id), true);
+    const surfaced = stats.insights.top_due.find((item) => item.id === qualityInsight.id);
+    assert.equal(surfaced.due_date, null);
+  });
 });
