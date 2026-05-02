@@ -36,7 +36,7 @@
         <div class="form-group">
           <label class="form-label">Status</label>
           <select id="filter-status" class="form-select">
-            <option value="">Open (default)</option>
+            <option value="">Open (new + accepted)</option>
             <option value="new">New</option>
             <option value="accepted">Accepted</option>
             <option value="dismissed">Dismissed</option>
@@ -92,6 +92,14 @@
         </select>
       </div>
       <div class="form-group">
+        <label class="form-label">Severity</label>
+        <select id="edit-severity" class="form-select">
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="info">Info</option>
+        </select>
+      </div>
+      <div class="form-group">
         <label class="form-label">Reasoning</label>
         <textarea id="edit-reasoning" class="form-textarea"></textarea>
       </div>
@@ -128,6 +136,25 @@
 
     function severityClass(severity) {
       return severity === 'critical' ? 'badge-danger' : severity === 'warning' ? 'badge-warn' : 'badge-info';
+    }
+
+    function statusLabel(status) {
+      return {
+        new: 'new',
+        accepted: 'reviewed',
+        dismissed: 'dismissed',
+        resolved: 'resolved',
+        stale: 'stale'
+      }[status] || status || 'unknown';
+    }
+
+    function categoryLabel(category) {
+      return {
+        expiry_alert: 'expiry alert',
+        renewal_reminder: 'renewal reminder',
+        document_quality: 'document quality',
+        household_insight: 'household insight'
+      }[category] || category || 'unknown';
     }
 
     async function loadSummary() {
@@ -169,14 +196,15 @@
             <div>
               <div class="flex gap-1" style="align-items:center; flex-wrap:wrap;">
                 <span class="badge ${severityClass(item.severity)}">${esc(item.severity)}</span>
-                <span class="badge badge-muted">${esc(item.category)}</span>
-                <span class="badge badge-muted">${esc(item.status)}</span>
+                <span class="badge badge-muted">${esc(categoryLabel(item.category))}</span>
+                <span class="badge badge-muted">${esc(statusLabel(item.status))}</span>
               </div>
               <h3 style="margin:0.5rem 0 0.35rem 0;">${esc(item.title)}</h3>
               <p class="text-dim" style="margin:0;">${esc(item.reasoning || '')}</p>
             </div>
             <div class="btn-group">
-              ${item.status !== 'accepted' ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'accepted')">Accept</button>` : ''}
+              ${!['accepted', 'resolved', 'dismissed'].includes(item.status) ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'accepted')">Accept</button>` : ''}
+              ${item.status !== 'resolved' ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'resolved')">Resolve</button>` : ''}
               ${item.status !== 'dismissed' ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'dismissed')">Dismiss</button>` : ''}
               <button class="btn btn-sm" onclick="openEditModal(${item.id})">Edit</button>
               <button class="btn btn-sm btn-danger" onclick="deleteInsight(${item.id})">Delete</button>
@@ -216,6 +244,7 @@
       if (!editingInsight) return;
       document.getElementById('edit-title').value = editingInsight.title || '';
       document.getElementById('edit-status').value = editingInsight.status || 'new';
+      document.getElementById('edit-severity').value = editingInsight.severity || 'info';
       document.getElementById('edit-reasoning').value = editingInsight.reasoning || '';
       document.getElementById('edit-modal').classList.remove('hidden');
     }
@@ -242,6 +271,7 @@
         await API.put(`api/insights/${editingInsight.id}`, {
           title: document.getElementById('edit-title').value,
           status: document.getElementById('edit-status').value,
+          severity: document.getElementById('edit-severity').value,
           reasoning: document.getElementById('edit-reasoning').value
         });
         closeEditModal();

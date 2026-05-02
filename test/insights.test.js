@@ -110,15 +110,34 @@ describe('MagicInsight parent workflow and access control', () => {
 
     const acceptRes = await authedPut(`api/insights/${insightId}`, parentCookie, {
       status: 'accepted',
+      severity: 'warning',
       title: 'Passport renewal review',
       reasoning: 'Reviewed by parent'
     });
     assert.equal(acceptRes.status, 200);
     const updated = await acceptRes.json();
     assert.equal(updated.status, 'accepted');
+    assert.equal(updated.severity, 'warning');
     assert.equal(updated.title, 'Passport renewal review');
     assert.equal(updated.reasoning, 'Reviewed by parent');
     assert.equal(updated.reviewed_by, parent.id);
+  });
+
+  it('allows parent to resolve an insight', async () => {
+    const resolveRes = await authedPut(`api/insights/${insightId}`, parentCookie, {
+      status: 'resolved'
+    });
+    assert.equal(resolveRes.status, 200);
+    const updated = await resolveRes.json();
+    assert.equal(updated.status, 'resolved');
+
+    const openRes = await authedGet('api/insights', parentCookie);
+    const openInsights = await openRes.json();
+    assert.equal(openInsights.some((item) => item.id === insightId), false);
+
+    const resolvedRes = await authedGet('api/insights?status=resolved', parentCookie);
+    const resolvedInsights = await resolvedRes.json();
+    assert.equal(resolvedInsights.some((item) => item.id === insightId), true);
   });
 
   it('allows parent to delete an insight', async () => {
