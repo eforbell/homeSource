@@ -20,6 +20,18 @@ node bin/magicinsight-eval.js \
   --base-url http://192.168.1.100:11434
 ```
 
+To see the exact preview HomeSource would feed into MagicIndex for a real file:
+
+```bash
+npm run magicindex:preview -- /path/to/file.pdf
+```
+
+Or JSON output you can paste into an eval sample:
+
+```bash
+npm run magicindex:preview -- /path/to/file.pdf --json
+```
+
 ## Sample format
 
 ```json
