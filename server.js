@@ -18,6 +18,7 @@ const { getMagicIndexConfig } = require('./lib/magic-index/config');
 const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
 const insights = require('./lib/insights');
 const { runExpiryScan } = require('./lib/scanners/expiry');
+const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -820,8 +821,17 @@ app.delete('/api/insights/:id', requireAuth, requireParent, async (req, res) => 
 app.post('/api/insights/scan', requireAuth, requireParent, async (req, res) => {
   try {
     const scanId = insights.createScanId('manual');
-    const result = await runExpiryScan({ actorId: req.member.id, scanId });
-    await audit.log('insight.scan', 'magic_data', null, req.member.id, result);
+    const [expiryResult, qualityResult] = await Promise.all([
+      runExpiryScan({ actorId: req.member.id, scanId }),
+      runDocumentQualityScan({ actorId: req.member.id, scanId })
+    ]);
+    const result = {
+      scan_id: scanId,
+      created_or_updated: expiryResult.created_or_updated + qualityResult.created_or_updated,
+      stale_count: expiryResult.stale_count + qualityResult.stale_count,
+      touched_ids: [...expiryResult.touched_ids, ...qualityResult.touched_ids]
+    };
+    await audit.log('insight.scan', 'magic_data', null, req.member.id, { expiryResult, qualityResult, ...result });
     res.json({ ok: true, ...result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
