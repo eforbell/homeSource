@@ -12,7 +12,7 @@ const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
 const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink } = require('./lib/share');
 const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
-const { importFromUrl, processUpload, processMultiPageScanUpload } = require('./lib/import');
+const { importFromUrl, processUpload, processMultiPageScanUpload, queueDocumentMagicIndexReanalysis, pickDocumentMagicIndexFile } = require('./lib/import');
 const importBatches = require('./lib/import-batches');
 const { getMagicIndexConfig } = require('./lib/magic-index/config');
 const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
@@ -370,6 +370,25 @@ app.put('/api/documents/:id', requireAuth, async (req, res) => {
     await audit.log('document.updated', 'document', doc.id, req.member.id, { fields: Object.keys(req.body) });
     res.json(doc);
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    const file = pickDocumentMagicIndexFile(doc);
+    if (!file) return res.status(400).json({ error: 'No document file available for MagicIndex re-analysis' });
+    await queueDocumentMagicIndexReanalysis({
+      documentId: doc.id,
+      fileRecord: file,
+      sourceType: doc.source_type,
+      memberId: req.member.id,
+      userHint: req.body?.user_hint || ''
+    });
+    res.status(202).json({ ok: true, queued: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) => {

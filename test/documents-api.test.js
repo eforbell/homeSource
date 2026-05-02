@@ -2,13 +2,16 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, createTestDocument } = require('./helpers');
+const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, createTestDocument, getPool } = require('./helpers');
+const { saveFileRecord } = require('../lib/files');
 
 let parent, kid, parentCookie, kidCookie;
+let pool;
 
 before(async () => {
   await startServer();
   await resetDatabase();
+  pool = getPool();
   parent = await createMember('DocParent', 'parent', 'pass123');
   kid = await createMember('DocKid', 'kid', 'kidpass');
   parentCookie = await loginAs(parent, 'pass123');
@@ -162,6 +165,53 @@ describe('document owners', () => {
   it('kid cannot add owners', async () => {
     const res = await authedPost(`api/documents/${doc.id}/owners`, kidCookie, {
       member_id: parent.id
+    });
+    assert.equal(res.status, 403);
+  });
+});
+
+describe('MagicIndex re-analysis', () => {
+  let doc;
+
+  before(async () => {
+    doc = await createTestDocument(parent.id, {
+      title: 'Reanalyze Me',
+      metadata: { magicindex: { state: 'complete' } }
+    });
+    await saveFileRecord(doc.id, {
+      file_type: 'original',
+      stored_filename: 'test-reanalyze.pdf',
+      original_filename: 'test-reanalyze.pdf',
+      mime_type: 'application/pdf',
+      file_size_bytes: 128
+    });
+  });
+
+  it('queues a parent-triggered re-analysis with user hint', async () => {
+    const res = await authedPost(`api/documents/${doc.id}/magicindex/reanalyze`, parentCookie, {
+      user_hint: 'This is a vehicle registration. Ignore cover page dates.'
+    });
+    assert.equal(res.status, 202);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.metadata.magicindex.state, 'pending');
+    assert.equal(detail.metadata.magicindex.user_hint, 'This is a vehicle registration. Ignore cover page dates.');
+
+    const { rows } = await pool.query(
+      `SELECT job_type, payload FROM processing_jobs WHERE document_id = $1 AND job_type = 'magicindex' ORDER BY id DESC LIMIT 1`,
+      [doc.id]
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].job_type, 'magicindex');
+    assert.equal(rows[0].payload.user_hint, 'This is a vehicle registration. Ignore cover page dates.');
+  });
+
+  it('blocks kid-triggered re-analysis', async () => {
+    const res = await authedPost(`api/documents/${doc.id}/magicindex/reanalyze`, kidCookie, {
+      user_hint: 'Nope'
     });
     assert.equal(res.status, 403);
   });

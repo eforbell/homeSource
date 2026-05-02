@@ -125,7 +125,8 @@ async function processMagicIndex(job) {
       threshold: config.auto_apply_confidence,
       provider,
       model,
-      force: false
+      force: false,
+      userHint: payload.user_hint || ''
     });
     await batches.updateItemStatus(item.id, 'review_ready', {
       magicindex_result: { ...result, provider, model, auto_applied: autoApplied },
@@ -159,14 +160,16 @@ async function processSingleUploadMagicIndex(job) {
       threshold: config.auto_apply_confidence,
       provider,
       model,
-      force: false
+      force: false,
+      userHint: payload.user_hint || ''
     });
     await audit.log('magicindex.single_upload', 'document', job.document_id, memberId, {
       source_type: payload.source_type || 'upload',
       provider,
       model,
       confidence: result.confidence,
-      fields: Object.keys(autoApplied)
+      fields: Object.keys(autoApplied),
+      user_hint: payload.user_hint || null
     });
   } catch (err) {
     await markSingleUploadMagicIndexWarning(job.document_id, payload.source_type || 'upload', err, config, memberId);
