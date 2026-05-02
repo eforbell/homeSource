@@ -16,6 +16,18 @@ Shipping these as separate slices keeps each PR testable and lets the family use
 
 ## Recommended Order
 
+### 4.0 — Local Model Readiness Gate
+
+Artifact: `feature-4-0-local-model-readiness.md`
+
+Run in parallel with 4A or immediately before 4B. This proves the private LAN Qwen3 4B model can handle the specific MagicInsight jobs before we ask it to reason across household documents. It should not block deterministic 4A.
+
+Why first/parallel:
+
+- protects us from designing around a model that cannot reliably emit schema-valid insight candidates
+- gives early evidence before investing in LLM-heavy 4B/4D work
+- avoids prematurely requiring a larger 35B-class local model on constrained hardware
+
 ### 4A — MagicInsight Foundation
 
 Artifact: `feature-4a-insight-foundation.md`
@@ -75,7 +87,7 @@ Why last:
 
 ## First PR target
 
-Start with Feature 4A only.
+Start with Feature 4A only, while also adding/running the 4.0 local-model readiness gate before any LLM-backed MagicInsight PR.
 
 Minimum PR success definition:
 

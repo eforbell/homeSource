@@ -18,6 +18,10 @@ This is the highest-value but also highest-hallucination part of MagicInsight. I
 3. related-document graph primitives
 4. clear private-provider gating
 
+## Local Model Gate
+
+Household gap detection is blocked on `feature-4-0-local-model-readiness.md`. A 4B local model is acceptable if it proves conservative `no_insight` behavior, source-document grounding, and schema-valid output. If it only partially passes, keep 4D disabled and limit LLM use to single-document or MagicLink suggestions.
+
 ## Scope
 
 ### In

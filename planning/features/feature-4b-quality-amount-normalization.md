@@ -9,6 +9,10 @@ Status: Ready after 4A
 
 Improve trust in MagicIndex and enable useful financial summaries by normalizing messy extracted values and surfacing documents whose extraction quality is suspect.
 
+## Local Model Gate
+
+Before enabling any LLM-assisted quality or amount normalization, run `feature-4-0-local-model-readiness.md` against the private LAN model. The 4B implementation may still ship deterministic amount normalization without the model, but LLM fallback should be enabled only after the gate is marked `private model ready` or explicitly `partial` for this bounded task.
+
 ## Scope
 
 ### In
