@@ -189,14 +189,14 @@ Key design choices:
   "expected_description": "Auto insurance policy for 2024 Toyota RAV4",
   "evidence": "Vehicle title (doc #38) references a 2024 Toyota RAV4 but no auto insurance document mentions this vehicle",
   "related_document_ids": [38],
-  "member_names": ["Eric Forbell"]
+  "member_names": ["Eric F."]
 }
 ```
 
 **life_event:**
 ```json
 {
-  "member_name": "Sarah Forbell",
+  "member_name": "Sarah F.",
   "event": "turning_18",
   "event_date": "2026-09-01",
   "affected_documents": [
@@ -343,9 +343,9 @@ One call with a structured household summary:
 
 ```
 Family Members:
-- Eric Forbell (parent, DOB 1985-03-12)
-- Jane Forbell (parent, DOB 1987-07-20)
-- Sarah Forbell (kid, DOB 2008-09-01)
+- Eric F. (parent, DOB 1985-03-12)
+- Jane F. (parent, DOB 1987-07-20)
+- Sarah F. (kid, DOB 2008-09-01)
 
 Documents on File (by type):
 - identification: 4 (Passport x2, Driver License x2)
