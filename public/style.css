@@ -414,6 +414,20 @@ h3 { font-size: 1.1rem; }
 
 /* ── Badges / Posture ────────────────────────────────────────── */
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+.badge-danger { background: rgba(239,68,68,0.12); color: var(--danger); }
+.badge-warn { background: rgba(234,179,8,0.15); color: var(--warn); }
+.badge-info { background: rgba(59,130,246,0.12); color: var(--accent); }
+.badge-muted { background: var(--accent-bg); color: var(--text-dim); }
+
 .posture-badge {
   display: inline-flex; align-items: center; gap: 0.3rem;
   padding: 0.3rem 0.75rem;
@@ -686,6 +700,17 @@ tr:hover td { background: var(--accent-bg); }
 .gap-1 { gap: 0.5rem; }
 .gap-2 { gap: 1rem; }
 .hidden { display: none !important; }
+
+.insight-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg-card);
+}
+.insight-critical { border-color: rgba(239,68,68,0.35); }
+.insight-warning { border-color: rgba(234,179,8,0.35); }
+.insight-info { border-color: var(--border); }
 
 /* ── Scrollbar ───────────────────────────────────────────────── */
 

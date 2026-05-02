@@ -32,6 +32,7 @@ function url(path) {
 
 async function resetDatabase() {
   const tables = [
+    'magic_data',
     'processing_jobs', 'import_items', 'import_batches',
     'audit_log', 'backup_log', 'key_holders', 'encryption_keys',
     'share_links', 'document_tags', 'tags', 'document_owners',
