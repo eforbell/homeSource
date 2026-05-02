@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>📁 Home Source — Insights</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="insights">
+  <div class="page-content">
+    <div class="page-header">
+      <div>
+        <a href="./" class="text-dim text-sm">&larr; Back to Dashboard</a>
+        <h1 style="margin-top:0.25rem;">Insights</h1>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" id="scan-btn">Scan now</button>
+      </div>
+    </div>
+
+    <div class="grid-4" id="insight-stats">
+      <div class="stat-card"><div class="stat-value" id="summary-action">—</div><div class="stat-label">Action Required</div></div>
+      <div class="stat-card"><div class="stat-value" id="summary-critical">—</div><div class="stat-label">Critical</div></div>
+      <div class="stat-card"><div class="stat-value" id="summary-warning">—</div><div class="stat-label">Warning</div></div>
+      <div class="stat-card"><div class="stat-value" id="summary-accepted">—</div><div class="stat-label">Accepted</div></div>
+    </div>
+
+    <div class="card mt-2">
+      <div class="card-header">
+        <span class="card-title">Filters</span>
+      </div>
+      <div class="grid-3">
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="filter-status" class="form-select">
+            <option value="">Open (new + accepted)</option>
+            <option value="new">New</option>
+            <option value="accepted">Accepted</option>
+            <option value="dismissed">Dismissed</option>
+            <option value="stale">Stale</option>
+            <option value="resolved">Resolved</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Severity</label>
+          <select id="filter-severity" class="form-select">
+            <option value="">All severities</option>
+            <option value="critical">Critical</option>
+            <option value="warning">Warning</option>
+            <option value="info">Info</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <select id="filter-category" class="form-select">
+            <option value="">All categories</option>
+            <option value="expiry_alert">Expiry alert</option>
+            <option value="renewal_reminder">Renewal reminder</option>
+            <option value="document_quality">Document quality</option>
+            <option value="household_insight">Household insight</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-2">
+      <div class="card-header">
+        <span class="card-title">Review Queue</span>
+      </div>
+      <div id="insights-list"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="edit-modal">
+    <div class="modal">
+      <div class="modal-title">Edit Insight</div>
+      <div class="form-group">
+        <label class="form-label">Title</label>
+        <input type="text" id="edit-title" class="form-input">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Status</label>
+        <select id="edit-status" class="form-select">
+          <option value="new">New</option>
+          <option value="accepted">Accepted</option>
+          <option value="dismissed">Dismissed</option>
+          <option value="resolved">Resolved</option>
+          <option value="stale">Stale</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Severity</label>
+        <select id="edit-severity" class="form-select">
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="info">Info</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Reasoning</label>
+        <textarea id="edit-reasoning" class="form-textarea"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeEditModal()">Cancel</button>
+        <button class="btn btn-primary" id="save-edit-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    let currentInsights = [];
+    let editingInsight = null;
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+
+    function toast(message, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = message;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 2600);
+    }
+
+    function severityClass(severity) {
+      return severity === 'critical' ? 'badge-danger' : severity === 'warning' ? 'badge-warn' : 'badge-info';
+    }
+
+    function statusLabel(status) {
+      return {
+        new: 'new',
+        accepted: 'reviewed',
+        dismissed: 'dismissed',
+        resolved: 'resolved',
+        stale: 'stale'
+      }[status] || status || 'unknown';
+    }
+
+    function categoryLabel(category) {
+      return {
+        expiry_alert: 'expiry alert',
+        renewal_reminder: 'renewal reminder',
+        document_quality: 'document quality',
+        household_insight: 'household insight'
+      }[category] || category || 'unknown';
+    }
+
+    async function loadSummary() {
+      const summary = await API.get('api/insights/summary');
+      document.getElementById('summary-action').textContent = summary.action_required_count;
+      document.getElementById('summary-critical').textContent = summary.new_critical_count;
+      document.getElementById('summary-warning').textContent = summary.new_warning_count;
+      document.getElementById('summary-accepted').textContent = summary.accepted_count;
+    }
+
+    function currentFilters() {
+      return {
+        status: document.getElementById('filter-status').value,
+        severity: document.getElementById('filter-severity').value,
+        category: document.getElementById('filter-category').value
+      };
+    }
+
+    async function loadInsights() {
+      const params = new URLSearchParams();
+      const filters = currentFilters();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value) params.set(key, value);
+      }
+      currentInsights = await API.get(`api/insights${params.toString() ? `?${params.toString()}` : ''}`);
+      renderInsights();
+    }
+
+    function renderInsights() {
+      const list = document.getElementById('insights-list');
+      if (!currentInsights.length) {
+        list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✨</div><div class="empty-state-title">No insights in this view</div><p class="text-dim">Try a scan or change the filters.</p></div>';
+        return;
+      }
+
+      list.innerHTML = currentInsights.map(item => `
+        <div class="insight-card insight-${esc(item.severity)}">
+          <div class="flex-between gap-1" style="align-items:flex-start;">
+            <div>
+              <div class="flex gap-1" style="align-items:center; flex-wrap:wrap;">
+                <span class="badge ${severityClass(item.severity)}">${esc(item.severity)}</span>
+                <span class="badge badge-muted">${esc(categoryLabel(item.category))}</span>
+                <span class="badge badge-muted">${esc(statusLabel(item.status))}</span>
+              </div>
+              <h3 style="margin:0.5rem 0 0.35rem 0;">${esc(item.title)}</h3>
+              <p class="text-dim" style="margin:0;">${esc(item.reasoning || '')}</p>
+            </div>
+            <div class="btn-group">
+              ${!['accepted', 'resolved', 'dismissed'].includes(item.status) ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'accepted')">Accept</button>` : ''}
+              ${item.status !== 'resolved' ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'resolved')">Resolve</button>` : ''}
+              ${item.status !== 'dismissed' ? `<button class="btn btn-sm" onclick="quickUpdate(${item.id}, 'dismissed')">Dismiss</button>` : ''}
+              <button class="btn btn-sm" onclick="openEditModal(${item.id})">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteInsight(${item.id})">Delete</button>
+            </div>
+          </div>
+
+          <div class="grid-3 mt-1">
+            <div><span class="text-xs text-dim">Due</span><br><strong>${item.due_date ? new Date(item.due_date).toLocaleDateString() : '—'}</strong></div>
+            <div><span class="text-xs text-dim">Confidence</span><br><strong>${item.confidence != null ? `${Math.round(Number(item.confidence) * 100)}%` : '—'}</strong></div>
+            <div><span class="text-xs text-dim">Reviewed</span><br><strong>${item.reviewed_at ? new Date(item.reviewed_at).toLocaleDateString() : '—'}</strong></div>
+          </div>
+
+          ${(item.source_documents || []).length ? `
+            <div class="mt-1">
+              <div class="text-xs text-dim" style="margin-bottom:0.35rem;">Source documents</div>
+              <div class="flex gap-1" style="flex-wrap:wrap;">
+                ${item.source_documents.map(doc => `<a class="tag" href="document.html?id=${doc.id}">${esc(doc.title)}</a>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+
+    async function quickUpdate(id, status) {
+      try {
+        await API.put(`api/insights/${id}`, { status });
+        toast(`Insight marked ${status}`, 'success');
+        await Promise.all([loadSummary(), loadInsights()]);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    function openEditModal(id) {
+      editingInsight = currentInsights.find(item => item.id === id) || null;
+      if (!editingInsight) return;
+      document.getElementById('edit-title').value = editingInsight.title || '';
+      document.getElementById('edit-status').value = editingInsight.status || 'new';
+      document.getElementById('edit-severity').value = editingInsight.severity || 'info';
+      document.getElementById('edit-reasoning').value = editingInsight.reasoning || '';
+      document.getElementById('edit-modal').classList.remove('hidden');
+    }
+
+    function closeEditModal() {
+      editingInsight = null;
+      document.getElementById('edit-modal').classList.add('hidden');
+    }
+
+    async function deleteInsight(id) {
+      if (!confirm('Delete this insight?')) return;
+      try {
+        await API.del(`api/insights/${id}`);
+        toast('Insight deleted', 'success');
+        await Promise.all([loadSummary(), loadInsights()]);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    document.getElementById('save-edit-btn').addEventListener('click', async () => {
+      if (!editingInsight) return;
+      try {
+        await API.put(`api/insights/${editingInsight.id}`, {
+          title: document.getElementById('edit-title').value,
+          status: document.getElementById('edit-status').value,
+          severity: document.getElementById('edit-severity').value,
+          reasoning: document.getElementById('edit-reasoning').value
+        });
+        closeEditModal();
+        toast('Insight updated', 'success');
+        await Promise.all([loadSummary(), loadInsights()]);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+
+    document.getElementById('scan-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('scan-btn');
+      btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      try {
+        const result = await API.post('api/insights/scan', {});
+        toast(`Scan finished: ${result.created_or_updated} updated, ${result.stale_count} stale`, 'success');
+        await Promise.all([loadSummary(), loadInsights()]);
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Scan now';
+      }
+    });
+
+    ['filter-status', 'filter-severity', 'filter-category'].forEach(id => {
+      document.getElementById(id).addEventListener('change', loadInsights);
+    });
+
+    Promise.all([loadSummary(), loadInsights()]).catch(err => {
+      console.error(err);
+      toast(err.message, 'error');
+    });
+  </script>
+</body>
+</html>

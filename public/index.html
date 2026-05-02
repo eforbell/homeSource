@@ -20,7 +20,7 @@
     <div class="grid-4" id="stats-row">
       <div class="stat-card"><div class="stat-value" id="stat-total">—</div><div class="stat-label">Documents</div></div>
       <div class="stat-card"><div class="stat-value" id="stat-types">—</div><div class="stat-label">Categories</div></div>
-      <div class="stat-card"><div class="stat-value" id="stat-expiring">—</div><div class="stat-label">Expiring Soon</div></div>
+      <div class="stat-card"><div class="stat-value" id="stat-attention">—</div><div class="stat-label" id="stat-attention-label">Expiring Soon</div></div>
       <div class="stat-card">
         <div id="backup-posture-badge" class="posture-badge posture-none" style="margin:0 auto;">
           <span class="posture-dot"></span>
@@ -39,12 +39,13 @@
       <div id="recent-docs"></div>
     </div>
 
-    <!-- Expiring soon -->
-    <div class="card mt-2" id="expiring-card" style="display:none;">
+    <!-- Insights / Expiring soon -->
+    <div class="card mt-2" id="attention-card" style="display:none;">
       <div class="card-header">
-        <span class="card-title" style="color:var(--warn);">Expiring Soon</span>
+        <span class="card-title" id="attention-card-title" style="color:var(--warn);">Expiring Soon</span>
+        <a href="insights.html" class="btn btn-sm" id="insights-link" style="display:none;">Open Insights</a>
       </div>
-      <div id="expiring-docs"></div>
+      <div id="attention-items"></div>
     </div>
   </div>
 
@@ -59,7 +60,6 @@
 
         document.getElementById('stat-total').textContent = stats.total_documents;
         document.getElementById('stat-types').textContent = stats.by_type.length;
-        document.getElementById('stat-expiring').textContent = stats.expiring_soon.length;
 
         // Backup posture
         const bp = stats.backup;
@@ -82,15 +82,43 @@
             </tr>`).join('') + '</tbody></table>';
         }
 
-        // Expiring
-        if (stats.expiring_soon.length) {
-          document.getElementById('expiring-card').style.display = 'block';
-          document.getElementById('expiring-docs').innerHTML = '<table><thead><tr><th>Title</th><th>Type</th><th>Expires</th></tr></thead><tbody>' +
-            stats.expiring_soon.map(d => `<tr style="cursor:pointer" onclick="location.href='document.html?id=${d.id}'">
-              <td>${esc(d.title)}</td>
-              <td><span class="doc-card-type">${d.document_type}</span></td>
-              <td style="color:var(--warn);">${new Date(d.expiry_date).toLocaleDateString()}</td>
-            </tr>`).join('') + '</tbody></table>';
+        const statAttention = document.getElementById('stat-attention');
+        const statAttentionLabel = document.getElementById('stat-attention-label');
+        const attentionCard = document.getElementById('attention-card');
+        const attentionCardTitle = document.getElementById('attention-card-title');
+        const attentionItems = document.getElementById('attention-items');
+        const insightsLink = document.getElementById('insights-link');
+
+        if (stats.insights) {
+          statAttention.textContent = stats.insights.action_required_count;
+          statAttentionLabel.textContent = 'Action Required';
+          attentionCard.style.display = 'block';
+          attentionCardTitle.textContent = 'Insights';
+          insightsLink.style.display = 'inline-flex';
+
+          if (stats.insights.top_due.length) {
+            attentionItems.innerHTML = '<table><thead><tr><th>Insight</th><th>When</th></tr></thead><tbody>' +
+              stats.insights.top_due.map(item => `<tr style="cursor:pointer" onclick="location.href='${esc(item.action_url || 'insights.html')}'">
+                <td>
+                  <strong>${esc(item.title)}</strong><br>
+                  <span class="text-xs text-dim">${esc(item.severity)} · ${esc((item.category || '').replace(/_/g, ' '))}</span>
+                </td>
+                <td style="color:var(--warn);">${item.due_date ? new Date(item.due_date).toLocaleDateString() : 'Review now'}</td>
+              </tr>`).join('') + '</tbody></table>';
+          } else {
+            attentionItems.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✨</div><div class="empty-state-title">No urgent insights</div><p class="text-dim">Nothing needs immediate review right now.</p></div>';
+          }
+        } else {
+          statAttention.textContent = stats.expiring_soon.length;
+          if (stats.expiring_soon.length) {
+            attentionCard.style.display = 'block';
+            attentionItems.innerHTML = '<table><thead><tr><th>Title</th><th>Type</th><th>Expires</th></tr></thead><tbody>' +
+              stats.expiring_soon.map(d => `<tr style="cursor:pointer" onclick="location.href='document.html?id=${d.id}'">
+                <td>${esc(d.title)}</td>
+                <td><span class="doc-card-type">${d.document_type}</span></td>
+                <td style="color:var(--warn);">${new Date(d.expiry_date).toLocaleDateString()}</td>
+              </tr>`).join('') + '</tbody></table>';
+          }
         }
       } catch (err) {
         console.error('Dashboard load error:', err);

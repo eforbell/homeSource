@@ -1,0 +1,14 @@
+{
+  "case": "offer_letter_example",
+  "task": "amount_date_extraction",
+  "filename": "Offer Letter for Jane Doe.pdf",
+  "mimeType": "application/pdf",
+  "textPreview": "Offer Letter for Jane Doe dated 2023-12-01. This letter outlines employment terms and conditions.",
+  "expected": {
+    "title_includes": "Offer Letter",
+    "issued_date": "2023-12-01",
+    "expiry_date": null,
+    "summary_nonempty": true,
+    "confidence_min": 0.5
+  }
+}

@@ -16,6 +16,8 @@ const { importFromUrl, processUpload, processMultiPageScanUpload } = require('./
 const importBatches = require('./lib/import-batches');
 const { getMagicIndexConfig } = require('./lib/magic-index/config');
 const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
+const insights = require('./lib/insights');
+const { runExpiryScan } = require('./lib/scanners/expiry');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -67,9 +69,9 @@ async function bootstrapState() {
 
 const HTML_PAGES = new Set([
   '/', '/index.html', '/documents.html', '/document.html', '/upload.html',
-  '/import.html', '/search.html', '/backup.html', '/settings.html'
+  '/import.html', '/search.html', '/backup.html', '/settings.html', '/insights.html'
 ]);
-const PARENT_ONLY_PAGES = new Set(['/settings.html', '/backup.html', '/import.html']);
+const PARENT_ONLY_PAGES = new Set(['/settings.html', '/backup.html', '/import.html', '/insights.html']);
 
 app.use(async (req, res, next) => {
   if (req.method !== 'GET') return next();
@@ -768,24 +770,83 @@ app.get('/api/audit', requireAuth, requireParent, async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/insights', requireAuth, requireParent, async (req, res) => {
+  try {
+    res.json(await insights.listInsights(req.query));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/insights/summary', requireAuth, requireParent, async (_req, res) => {
+  try {
+    res.json(await insights.getInsightSummary());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/insights/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const insight = await insights.getInsight(req.params.id);
+    if (!insight) return res.status(404).json({ error: 'Insight not found' });
+    res.json(insight);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/insights/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const updated = await insights.updateInsight(req.params.id, req.body, req.member.id);
+    if (!updated) return res.status(404).json({ error: 'Insight not found' });
+    await audit.log('insight.updated', 'magic_data', updated.id, req.member.id, {
+      status: updated.status,
+      severity: updated.severity,
+      title: updated.title
+    });
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/insights/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const existing = await insights.getInsight(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Insight not found' });
+    const ok = await insights.deleteInsight(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Insight not found' });
+    await audit.log('insight.deleted', 'magic_data', Number(req.params.id), req.member.id, {
+      category: existing.category,
+      title: existing.title
+    });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/insights/scan', requireAuth, requireParent, async (req, res) => {
+  try {
+    const scanId = insights.createScanId('manual');
+    const result = await runExpiryScan({ actorId: req.member.id, scanId });
+    await audit.log('insight.scan', 'magic_data', null, req.member.id, result);
+    res.json({ ok: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─�� Dashboard stats ─────────────────────────────────────────────────────────
 
-app.get('/api/stats', requireAuth, async (_req, res) => {
+app.get('/api/stats', requireAuth, async (req, res) => {
   try {
-    const [docs, types, recent, expiring, backup] = await Promise.all([
+    const tasks = [
       pool.query("SELECT COUNT(*)::int AS total FROM documents WHERE status = 'active'"),
       pool.query("SELECT document_type, COUNT(*)::int AS count FROM documents WHERE status = 'active' GROUP BY document_type ORDER BY count DESC"),
       pool.query("SELECT d.id, d.title, d.document_type, d.created_at FROM documents d WHERE d.status = 'active' ORDER BY d.created_at DESC LIMIT 5"),
       pool.query("SELECT d.id, d.title, d.document_type, d.expiry_date FROM documents d WHERE d.status = 'active' AND d.expiry_date IS NOT NULL AND d.expiry_date <= NOW() + INTERVAL '90 days' ORDER BY d.expiry_date ASC LIMIT 10"),
       getBackupStatus()
-    ]);
+    ];
+    if (req.member?.role === 'parent') tasks.push(insights.getInsightSummary());
+    const [docs, types, recent, expiring, backup, insightSummary = null] = await Promise.all(tasks);
 
     res.json({
       total_documents: docs.rows[0].total,
       by_type: types.rows,
       recent: recent.rows,
       expiring_soon: expiring.rows,
-      backup
+      backup,
+      insights: insightSummary
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -810,6 +871,7 @@ app.get('/setup', async (req, res) => {
 
 app.get('/login', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
 app.get('/share/:token', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'share.html')));
+app.get('/insights.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'insights.html')));
 
 // ── Periodic cleanup ────────────────────────────────────────────────────────
 
