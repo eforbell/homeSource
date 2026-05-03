@@ -333,6 +333,31 @@ app.get('/api/documents/:id', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/documents/:id/magicindex-status', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, title, description, metadata,
+         COALESCE(
+           (SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name)
+            FROM document_tags dt JOIN tags t ON dt.tag_id = t.id
+            WHERE dt.document_id = d.id), '[]'
+         ) AS tags
+       FROM documents d WHERE d.id = $1`,
+      [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Document not found' });
+    const doc = rows[0];
+    const mi = doc.metadata?.magicindex || null;
+    res.json({
+      state: mi?.state || null,
+      title: doc.title,
+      description: doc.description,
+      tags: doc.tags,
+      magicindex: mi
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/documents', requireAuth, async (req, res) => {
   try {
     const parts = await parseMultipart(req);

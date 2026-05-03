@@ -711,7 +711,62 @@
       setTimeout(() => el.remove(), 4000);
     }
 
-    loadDocument();
+    // MagicIndex polling — start when status is pending, stop when done
+    let _miPollInterval = null;
+
+    function startMagicIndexPolling() {
+      if (_miPollInterval) return;
+      _miPollInterval = setInterval(async () => {
+        try {
+          const status = await API.get(`api/documents/${docId}/magicindex-status`);
+          const state = status.state;
+          if (state && state !== 'pending') {
+            clearInterval(_miPollInterval);
+            _miPollInterval = null;
+            // Patch currentDoc metadata and re-render affected sections
+            if (!currentDoc) return;
+            currentDoc.metadata = { ...(currentDoc.metadata || {}), magicindex: status.magicindex };
+            currentDoc.title = status.title;
+            currentDoc.description = status.description;
+            currentDoc.tags = status.tags || [];
+            // Re-render metadata rows
+            const meta = document.getElementById('doc-meta');
+            const rows = [
+              ['Type', `<span class="doc-card-type">${currentDoc.document_type}</span>`],
+              ['Source', currentDoc.source_type],
+              ['Status', currentDoc.status],
+              ['Created', new Date(currentDoc.created_at).toLocaleDateString()]
+            ];
+            if (currentDoc.issued_date) rows.push(['Issued', formatDateForDisplay(currentDoc.issued_date)]);
+            if (currentDoc.expiry_date) rows.push(['Expires', `<span style="color:var(--warn);">${formatDateForDisplay(currentDoc.expiry_date)}</span>`]);
+            if (currentDoc.source_url) rows.push(['Source URL', `<a href="${esc(currentDoc.source_url)}" target="_blank" class="text-sm">Link</a>`]);
+            if (currentDoc.metadata && Object.keys(currentDoc.metadata).length) {
+              for (const [k, v] of Object.entries(currentDoc.metadata)) {
+                rows.push([k.replace(/_/g, ' '), formatMetadataValue(k, v)]);
+              }
+            }
+            meta.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td class="text-dim text-sm" style="white-space:nowrap;">${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+            // Re-render tags
+            renderTags(currentDoc.tags);
+            // Re-render title and description if they changed
+            document.getElementById('doc-title').textContent = currentDoc.title;
+            document.title = `Home Source — ${currentDoc.title}`;
+            if (currentDoc.description) {
+              document.getElementById('desc-card').style.display = 'block';
+              document.getElementById('doc-description').textContent = currentDoc.description;
+            }
+          }
+        } catch (_) { /* ignore poll errors */ }
+      }, 3500);
+    }
+
+    function maybeStartMagicIndexPolling(doc) {
+      if (doc.metadata?.magicindex?.state === 'pending') startMagicIndexPolling();
+    }
+
+    loadDocument().then(() => {
+      if (currentDoc) maybeStartMagicIndexPolling(currentDoc);
+    });
   </script>
 </body>
 </html>
