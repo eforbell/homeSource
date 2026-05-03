@@ -75,4 +75,25 @@ describe('MagicIndex amount normalization', () => {
     assert.ok(result.confidence < 0.92);
     assert.match(result.needs_review_reasons.join(' '), /invoice\/statement/i);
   });
+
+  it('suppresses non-monetary numeric amounts from recall-style notices', () => {
+    const result = normalizeMagicIndexResult({
+      title: 'Safety Recall Notice',
+      document_type: 'receipt',
+      summary: 'Vehicle recall notice regarding rear view camera defect',
+      confidence: 0.95,
+      amount: { value: 2017, currency: 'USD', confidence: 0.95, source: 'key_fact', raw_value: '2017 Expedition', raw_label: 'vehicle_model' },
+      key_facts: [
+        { label: 'vehicle_model', value: '2017 Expedition', confidence: 0.95 },
+        { label: 'vin', value: '1FMJU1KTBHEA45526', confidence: 0.95 },
+        { label: 'recall_number', value: '25S89 / NHTSA Recall 25V572', confidence: 0.95 }
+      ]
+    });
+    assert.equal(result.amount, null);
+    assert.ok(result.field_confidence.amount <= 0.02);
+    assert.ok(result.field_confidence.document_type < 0.95);
+    assert.ok(result.confidence < 0.95);
+    assert.match(result.needs_review_reasons.join(' '), /safety\/recall notice/i);
+    assert.match(result.needs_review_reasons.join(' '), /Suppressed amount/i);
+  });
 });
