@@ -89,11 +89,30 @@ describe('MagicIndex amount normalization', () => {
         { label: 'recall_number', value: '25S89 / NHTSA Recall 25V572', confidence: 0.95 }
       ]
     });
+    assert.equal(result.document_type, 'notice');
     assert.equal(result.amount, null);
     assert.ok(result.field_confidence.amount <= 0.02);
-    assert.ok(result.field_confidence.document_type < 0.95);
+    assert.equal(result.field_confidence.document_type, 0.9);
     assert.ok(result.confidence < 0.95);
     assert.match(result.needs_review_reasons.join(' '), /safety\/recall notice/i);
     assert.match(result.needs_review_reasons.join(' '), /Suppressed amount/i);
+  });
+
+  it('coerces advisory/data-incident notices into notice type', () => {
+    const result = normalizeMagicIndexResult({
+      title: 'Notice of Data Incident',
+      document_type: 'insurance',
+      summary: 'This notice explains a data incident and offers identity restoration services.',
+      confidence: 0.92,
+      key_facts: [
+        { label: 'incident_start_date', value: '2024-10-21', confidence: 0.95 },
+        { label: 'incident_end_date', value: '2025-01-13', confidence: 0.95 },
+        { label: 'affected_data', value: 'Social Security Number', confidence: 0.95 }
+      ]
+    });
+    assert.equal(result.document_type, 'notice');
+    assert.equal(result.field_confidence.document_type, 0.9);
+    assert.ok(result.confidence < 0.92);
+    assert.match(result.needs_review_reasons.join(' '), /advisory\/incident notice/i);
   });
 });
