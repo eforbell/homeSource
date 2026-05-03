@@ -44,9 +44,14 @@ npm run magicindex:preview -- /path/to/file.pdf --json
   "textPreview": "optional direct text preview instead of filePath",
   "expected": {
     "title_includes": "Offer Letter",
+    "title_includes_any_of": ["Offer Letter", "Employment Offer"],
     "document_type": "contract",
+    "document_type_any_of": ["contract", "employment"],
     "issued_date": "2023-12-01",
+    "issued_date_any_of": ["2023-12-01", "2023-12-02"],
     "expiry_date": null,
+    "expiry_date_any_of": [null, "2023-12-31"],
+    "amount_value_any_of": [1199, 1199.27],
     "summary_nonempty": true,
     "confidence_min": 0.5
   }
@@ -58,4 +63,5 @@ Notes:
 - `filePath` is resolved relative to the sample JSON file.
 - `textPreview` can be used by itself for text-only evaluation.
 - `expected.amount_value` compares against `result.amount.value` with a small numeric tolerance.
+- `*_any_of` fields let you encode acceptable ambiguity for titles, doc types, dates, or amounts.
 - Output artifacts are written to `planning/evals/`.
