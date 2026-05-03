@@ -112,6 +112,7 @@
           <option value="identification">ID</option>
           <option value="property">Property</option>
           <option value="vehicle">Vehicle</option>
+          <option value="notice">Notice</option>
           <option value="other">Other</option>
         </select>
       </div>
@@ -128,6 +129,21 @@
       <div class="modal-actions">
         <button class="btn" onclick="document.getElementById('edit-modal').classList.add('hidden')">Cancel</button>
         <button class="btn btn-primary" id="save-edit-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="reanalyze-modal">
+    <div class="modal">
+      <div class="modal-title">Re-analyze with MagicIndex</div>
+      <div class="form-group">
+        <label class="form-label">Optional note for MagicIndex</label>
+        <textarea id="reanalyze-hint" class="form-textarea" placeholder="Examples: This is a vehicle registration. Ignore old cover sheet dates. Prefer the current expiration date."></textarea>
+        <div class="form-hint">Use this to nudge document type, expiry interpretation, or other obvious context.</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('reanalyze-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="run-reanalyze-btn">Queue re-analysis</button>
       </div>
     </div>
   </div>
@@ -226,6 +242,7 @@
         const actions = document.getElementById('doc-actions');
         actions.innerHTML = `
           <button class="btn btn-sm" onclick="openEditModal()">Edit</button>
+          <button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button>
           <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
           <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>
         `;
@@ -315,7 +332,7 @@
             rows.push([k.replace(/_/g, ' '), formatMetadataValue(k, v)]);
           }
         }
-        meta.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td class="text-dim text-sm" style="white-space:nowrap;">${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+        meta.innerHTML = '<div class="table-wrap"><table class="doc-meta-table">' + rows.map(([k, v]) => `<tr><td class="doc-meta-key text-dim text-sm">${k}</td><td class="doc-meta-value">${v}</td></tr>`).join('') + '</table></div>';
 
         // Owners
         renderOwners(doc.owners || []);
@@ -360,13 +377,19 @@
         const state = value.state || 'unknown';
         const provider = value.provider || 'unknown';
         const confidence = Number(value.confidence);
-        const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '—';
+        const rawConfidence = Number(value.raw_confidence);
+        const confidenceLabel = Number.isFinite(confidence)
+          ? `${Math.round(confidence * 100)}%${Number.isFinite(rawConfidence) && Math.round(rawConfidence * 100) !== Math.round(confidence * 100) ? ` (raw ${Math.round(rawConfidence * 100)}%)` : ''}`
+          : '—';
         const importItemId = Number(currentDoc?.metadata?.import_item_id || 0);
         const canApply = importItemId > 0 && value.state === 'complete' && value.applied_by_user !== true;
         const evidence = value.extraction_evidence?.source ? `<span class="text-xs text-dim">source: ${esc(value.extraction_evidence.source)}</span>` : '';
+        const hint = value.user_hint ? `<span class="text-xs text-dim">hint: ${esc(value.user_hint)}</span>` : '';
         return `<div style="display:flex; flex-direction:column; gap:0.25rem;">
           <span><strong>${esc(state)}</strong> · ${esc(provider)} · ${confidenceLabel}</span>
           ${evidence}
+          ${hint}
+          <div><button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button></div>
           ${canApply ? `<div><button class="btn btn-sm" onclick="applyMagicIndexFromDocument(${importItemId})">Apply suggestions</button></div>` : ''}
           <details>
             <summary class="text-sm text-dim" style="cursor:pointer;">View raw MagicIndex JSON</summary>
@@ -427,6 +450,11 @@
       document.getElementById('edit-modal').classList.remove('hidden');
     }
 
+    function openReanalyzeModal() {
+      document.getElementById('reanalyze-hint').value = currentDoc?.metadata?.magicindex?.user_hint || '';
+      document.getElementById('reanalyze-modal').classList.remove('hidden');
+    }
+
     function normalizeDateInputValue(value) {
       if (!value) return '';
       return String(value).slice(0, 10);
@@ -451,6 +479,25 @@
         toast('Document updated', 'success');
         loadDocument();
       } catch (err) { toast(err.message, 'error'); }
+    });
+
+    document.getElementById('run-reanalyze-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('run-reanalyze-btn');
+      btn.disabled = true;
+      btn.textContent = 'Queueing...';
+      try {
+        await API.post(`api/documents/${docId}/magicindex/reanalyze`, {
+          user_hint: document.getElementById('reanalyze-hint').value || ''
+        });
+        document.getElementById('reanalyze-modal').classList.add('hidden');
+        toast('MagicIndex re-analysis queued', 'success');
+        await loadDocument();
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Queue re-analysis';
+      }
     });
 
     async function archiveDoc() {

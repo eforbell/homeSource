@@ -12,12 +12,13 @@ const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
 const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink } = require('./lib/share');
 const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
-const { importFromUrl, processUpload, processMultiPageScanUpload } = require('./lib/import');
+const { importFromUrl, processUpload, processMultiPageScanUpload, queueDocumentMagicIndexReanalysis, pickDocumentMagicIndexFile, normalizeUserHint } = require('./lib/import');
 const importBatches = require('./lib/import-batches');
 const { getMagicIndexConfig } = require('./lib/magic-index/config');
 const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
 const insights = require('./lib/insights');
 const { runExpiryScan } = require('./lib/scanners/expiry');
+const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -369,6 +370,29 @@ app.put('/api/documents/:id', requireAuth, async (req, res) => {
     await audit.log('document.updated', 'document', doc.id, req.member.id, { fields: Object.keys(req.body) });
     res.json(doc);
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (doc.metadata?.magicindex?.state === 'pending') {
+      return res.status(409).json({ error: 'MagicIndex re-analysis already pending for this document' });
+    }
+    const file = pickDocumentMagicIndexFile(doc);
+    if (!file) return res.status(400).json({ error: 'No document file available for MagicIndex re-analysis' });
+    const userHint = normalizeUserHint(req.body?.user_hint || '');
+    await queueDocumentMagicIndexReanalysis({
+      documentId: doc.id,
+      fileRecord: file,
+      sourceType: doc.source_type,
+      memberId: req.member.id,
+      userHint
+    });
+    res.status(202).json({ ok: true, queued: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) => {
@@ -820,8 +844,17 @@ app.delete('/api/insights/:id', requireAuth, requireParent, async (req, res) => 
 app.post('/api/insights/scan', requireAuth, requireParent, async (req, res) => {
   try {
     const scanId = insights.createScanId('manual');
-    const result = await runExpiryScan({ actorId: req.member.id, scanId });
-    await audit.log('insight.scan', 'magic_data', null, req.member.id, result);
+    const [expiryResult, qualityResult] = await Promise.all([
+      runExpiryScan({ actorId: req.member.id, scanId }),
+      runDocumentQualityScan({ actorId: req.member.id, scanId })
+    ]);
+    const result = {
+      scan_id: scanId,
+      created_or_updated: expiryResult.created_or_updated + qualityResult.created_or_updated,
+      stale_count: expiryResult.stale_count + qualityResult.stale_count,
+      touched_ids: [...expiryResult.touched_ids, ...qualityResult.touched_ids]
+    };
+    await audit.log('insight.scan', 'magic_data', null, req.member.id, { expiryResult, qualityResult, ...result });
     res.json({ ok: true, ...result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

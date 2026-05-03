@@ -43,6 +43,7 @@ Sample file format:
       "title_includes": "Offer Letter",
       "document_type": "contract",
       "issued_date": "2023-12-01",
+      "issued_date_any_of": ["2023-12-01", "2023-12-02"],
       "expiry_date": null,
       "summary_nonempty": true
     }
@@ -96,22 +97,50 @@ function approxEqual(a, b, tolerance = 0.01) {
   return Math.abs(Number(a) - Number(b)) <= tolerance;
 }
 
+function anyOfEquals(actual, expectedValues = []) {
+  return Array.isArray(expectedValues) && expectedValues.some((value) => actual === value);
+}
+
+function anyOfContains(actual, expectedValues = []) {
+  const haystack = String(actual || '').toLowerCase();
+  return Array.isArray(expectedValues) && expectedValues.some((value) => haystack.includes(String(value).toLowerCase()));
+}
+
+function anyOfApproxEqual(actual, expectedValues = []) {
+  return Array.isArray(expectedValues) && expectedValues.some((value) => approxEqual(actual, value));
+}
+
 function evaluateExpected(result, expected = {}) {
   const checks = {};
-  if (expected.title_includes !== undefined) {
-    checks.title = String(result.title || '').toLowerCase().includes(String(expected.title_includes).toLowerCase()) ? 'pass' : 'fail';
+  if (expected.title_includes !== undefined || expected.title_includes_any_of !== undefined) {
+    const ok = expected.title_includes_any_of !== undefined
+      ? anyOfContains(result.title, expected.title_includes_any_of)
+      : String(result.title || '').toLowerCase().includes(String(expected.title_includes).toLowerCase());
+    checks.title = ok ? 'pass' : 'fail';
   }
-  if (expected.document_type !== undefined) {
-    checks.document_type = result.document_type === expected.document_type ? 'pass' : 'fail';
+  if (expected.document_type !== undefined || expected.document_type_any_of !== undefined) {
+    const ok = expected.document_type_any_of !== undefined
+      ? anyOfEquals(result.document_type, expected.document_type_any_of)
+      : result.document_type === expected.document_type;
+    checks.document_type = ok ? 'pass' : 'fail';
   }
-  if (Object.prototype.hasOwnProperty.call(expected, 'issued_date')) {
-    checks.issued_date = result.issued_date === expected.issued_date ? 'pass' : 'fail';
+  if (Object.prototype.hasOwnProperty.call(expected, 'issued_date') || Object.prototype.hasOwnProperty.call(expected, 'issued_date_any_of')) {
+    const ok = Object.prototype.hasOwnProperty.call(expected, 'issued_date_any_of')
+      ? anyOfEquals(result.issued_date, expected.issued_date_any_of)
+      : result.issued_date === expected.issued_date;
+    checks.issued_date = ok ? 'pass' : 'fail';
   }
-  if (Object.prototype.hasOwnProperty.call(expected, 'expiry_date')) {
-    checks.expiry_date = result.expiry_date === expected.expiry_date ? 'pass' : 'fail';
+  if (Object.prototype.hasOwnProperty.call(expected, 'expiry_date') || Object.prototype.hasOwnProperty.call(expected, 'expiry_date_any_of')) {
+    const ok = Object.prototype.hasOwnProperty.call(expected, 'expiry_date_any_of')
+      ? anyOfEquals(result.expiry_date, expected.expiry_date_any_of)
+      : result.expiry_date === expected.expiry_date;
+    checks.expiry_date = ok ? 'pass' : 'fail';
   }
-  if (Object.prototype.hasOwnProperty.call(expected, 'amount_value')) {
-    checks.amount = approxEqual(result.amount?.value, expected.amount_value) ? 'pass' : 'fail';
+  if (Object.prototype.hasOwnProperty.call(expected, 'amount_value') || Object.prototype.hasOwnProperty.call(expected, 'amount_value_any_of')) {
+    const ok = Object.prototype.hasOwnProperty.call(expected, 'amount_value_any_of')
+      ? anyOfApproxEqual(result.amount?.value, expected.amount_value_any_of)
+      : approxEqual(result.amount?.value, expected.amount_value);
+    checks.amount = ok ? 'pass' : 'fail';
   }
   if (expected.summary_nonempty !== undefined) {
     checks.summary = expected.summary_nonempty

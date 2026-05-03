@@ -65,6 +65,7 @@ describe('MagicIndex schema normalization', () => {
 
 const { inferMimeType, clampConfidence, isIgnoredImportPath, ALLOWED_ITEM_UPDATE_FIELDS } = require('../lib/import-batches');
 const { stripJsonFence } = require('../lib/magic-index/providers/openai-compatible-chat');
+const { buildMagicIndexRules } = require('../lib/magic-index/prompt');
 
 describe('import hardening helpers', () => {
   it('infers MIME type from filename when browser omits it', () => {
@@ -146,5 +147,14 @@ describe('Ollama JSON parsing hardening', () => {
   it('parses clean JSON directly', () => {
     const parsed = parseOllamaJsonContent('{"title":"A","document_type":"other","summary":"B"}');
     assert.equal(parsed.title, 'A');
+  });
+});
+
+describe('MagicIndex prompt guidance', () => {
+  it('injects conservative extraction rules and optional user hints', () => {
+    const prompt = buildMagicIndexRules({ userHint: 'This is a vehicle registration. Ignore old notice dates.' });
+    assert.match(prompt, /Tax documents usually do not have actionable expiry dates/i);
+    assert.match(prompt, /prefer final total/i);
+    assert.match(prompt, /User hint: This is a vehicle registration/i);
   });
 });
