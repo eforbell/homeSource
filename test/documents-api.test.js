@@ -188,8 +188,9 @@ describe('MagicIndex re-analysis', () => {
   });
 
   it('queues a parent-triggered re-analysis with user hint', async () => {
+    const longHint = `This is a vehicle registration. ${'A'.repeat(600)}`;
     const res = await authedPost(`api/documents/${doc.id}/magicindex/reanalyze`, parentCookie, {
-      user_hint: 'This is a vehicle registration. Ignore cover page dates.'
+      user_hint: longHint
     });
     assert.equal(res.status, 202);
     const data = await res.json();
@@ -198,7 +199,8 @@ describe('MagicIndex re-analysis', () => {
     const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
     const detail = await detailRes.json();
     assert.equal(detail.metadata.magicindex.state, 'pending');
-    assert.equal(detail.metadata.magicindex.user_hint, 'This is a vehicle registration. Ignore cover page dates.');
+    assert.equal(detail.metadata.magicindex.user_hint.length, 500);
+    assert.match(detail.metadata.magicindex.user_hint, /^This is a vehicle registration\./);
 
     const { rows } = await pool.query(
       `SELECT job_type, payload FROM processing_jobs WHERE document_id = $1 AND job_type = 'magicindex' ORDER BY id DESC LIMIT 1`,
@@ -206,7 +208,7 @@ describe('MagicIndex re-analysis', () => {
     );
     assert.equal(rows.length, 1);
     assert.equal(rows[0].job_type, 'magicindex');
-    assert.equal(rows[0].payload.user_hint, 'This is a vehicle registration. Ignore cover page dates.');
+    assert.equal(rows[0].payload.user_hint.length, 500);
   });
 
   it('blocks kid-triggered re-analysis', async () => {
@@ -214,6 +216,13 @@ describe('MagicIndex re-analysis', () => {
       user_hint: 'Nope'
     });
     assert.equal(res.status, 403);
+  });
+
+  it('blocks duplicate re-analysis while pending', async () => {
+    const res = await authedPost(`api/documents/${doc.id}/magicindex/reanalyze`, parentCookie, {
+      user_hint: 'Try again'
+    });
+    assert.equal(res.status, 409);
   });
 
   after(async () => {
