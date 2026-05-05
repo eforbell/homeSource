@@ -17,8 +17,10 @@ const importBatches = require('./lib/import-batches');
 const { getMagicIndexConfig } = require('./lib/magic-index/config');
 const { applyMagicIndexToDocument } = require('./lib/magic-index/apply');
 const insights = require('./lib/insights');
+const magicLinks = require('./lib/magic-links');
 const { runExpiryScan } = require('./lib/scanners/expiry');
 const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
+const { scanDeterministicLinks } = require('./lib/scanners/magic-links-deterministic');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -880,6 +882,59 @@ app.post('/api/insights/scan', requireAuth, requireParent, async (req, res) => {
       touched_ids: [...expiryResult.touched_ids, ...qualityResult.touched_ids]
     };
     await audit.log('insight.scan', 'magic_data', null, req.member.id, { expiryResult, qualityResult, ...result });
+    res.json({ ok: true, ...result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/documents/:id/links', requireAuth, async (req, res) => {
+  try {
+    res.json(await magicLinks.listLinksForDocument(req.params.id));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/documents/:id/links', requireAuth, requireParent, async (req, res) => {
+  try {
+    const link = await magicLinks.createManualLink({
+      sourceDocumentId: Number(req.params.id),
+      targetDocumentId: Number(req.body.target_document_id),
+      linkType: req.body.link_type,
+      reasoning: req.body.reasoning || '',
+      actorId: req.member.id
+    });
+    await audit.log('link.created', 'magic_link', link.id, req.member.id, {
+      source_document_id: link.source_document_id,
+      target_document_id: link.target_document_id,
+      link_type: link.link_type
+    });
+    res.status(201).json(link);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/links/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const link = await magicLinks.updateLink(req.params.id, req.body, req.member.id);
+    if (!link) return res.status(404).json({ error: 'Link not found' });
+    await audit.log('link.updated', 'magic_link', link.id, req.member.id, {
+      status: link.status,
+      link_type: link.link_type
+    });
+    res.json(link);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/links/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const ok = await magicLinks.deleteLink(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Link not found' });
+    await audit.log('link.deleted', 'magic_link', Number(req.params.id), req.member.id, {});
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/links/scan', requireAuth, requireParent, async (req, res) => {
+  try {
+    const result = await scanDeterministicLinks();
+    await audit.log('link.scan', 'magic_link', null, req.member.id, result);
     res.json({ ok: true, ...result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
