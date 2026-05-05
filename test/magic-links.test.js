@@ -143,20 +143,30 @@ describe('magic links API and deterministic scan', () => {
     const renewal = policyLinks.find((link) => link.link_type === 'renews' && link.related_document_id === oldPolicy.id);
     assert.ok(renewal);
     assert.equal(renewal.status, 'suggested');
+    const policySameAccount = policyLinks.find((link) => link.link_type === 'same_account' && link.related_document_id === oldPolicy.id);
+    assert.ok(policySameAccount);
 
     const vehicleLinks = await (await authedGet(`api/documents/${newRegistration.id}/links`, parentCookie)).json();
     const supersede = vehicleLinks.find((link) => link.link_type === 'supersedes' && link.related_document_id === oldRegistration.id);
     assert.ok(supersede);
     assert.equal(supersede.status, 'suggested');
+    const vehicleSameAsset = vehicleLinks.find((link) => link.link_type === 'same_asset' && link.related_document_id === oldRegistration.id);
+    assert.ok(vehicleSameAsset);
   });
 
-  it('accepts suggested links', async () => {
+  it('accepts suggested links and exposes archive suggestion context for accepted superseding links', async () => {
     const links = await (await authedGet(`api/documents/${newRegistration.id}/links`, parentCookie)).json();
     const supersede = links.find((link) => link.link_type === 'supersedes' && link.related_document_id === oldRegistration.id);
     const res = await authedPut(`api/links/${supersede.id}`, parentCookie, { status: 'accepted' });
     assert.equal(res.status, 200);
     const updated = await res.json();
     assert.equal(updated.status, 'accepted');
+
+    const refreshed = await (await authedGet(`api/documents/${newRegistration.id}/links`, parentCookie)).json();
+    const accepted = refreshed.find((link) => link.id === supersede.id);
+    assert.equal(accepted.archive_candidate_document_id, oldRegistration.id);
+    assert.equal(accepted.archive_candidate_document_title, oldRegistration.title);
+    assert.equal(accepted.direction, 'outgoing');
   });
 
   it('blocks kid writes to link routes', async () => {
