@@ -892,6 +892,12 @@ app.get('/api/documents/:id/links', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/links', requireAuth, requireParent, async (req, res) => {
+  try {
+    res.json(await magicLinks.listLinks(req.query));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/documents/:id/links', requireAuth, requireParent, async (req, res) => {
   try {
     const link = await magicLinks.createManualLink({

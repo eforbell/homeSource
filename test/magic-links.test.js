@@ -152,6 +152,12 @@ describe('magic links API and deterministic scan', () => {
     assert.equal(supersede.status, 'suggested');
     const vehicleSameAsset = vehicleLinks.find((link) => link.link_type === 'same_asset' && link.related_document_id === oldRegistration.id);
     assert.ok(vehicleSameAsset);
+
+    const suggestedListRes = await authedGet('api/links?status=suggested', parentCookie);
+    assert.equal(suggestedListRes.status, 200);
+    const suggestedLinks = await suggestedListRes.json();
+    assert.ok(suggestedLinks.some((link) => link.link_type === 'renews'));
+    assert.ok(suggestedLinks.some((link) => link.link_type === 'supersedes'));
   });
 
   it('accepts suggested links and exposes archive suggestion context for accepted superseding links', async () => {
