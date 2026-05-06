@@ -92,8 +92,8 @@
             <div class="btn-group mt-2" style="justify-content:center; flex-wrap:wrap;">
               <button id="corner-retake-btn" class="btn">Retake</button>
               <button id="corner-autofit-btn" class="btn">Auto-fit</button>
-              <button id="corner-crop-btn" class="btn btn-primary">Crop & Use</button>
-              <button id="corner-skip-btn" class="btn">Use Full Frame</button>
+              <button id="corner-crop-btn" class="btn">Crop</button>
+              <button id="corner-skip-btn" class="btn">Skip Crop</button>
             </div>
           </div>
           <!-- Final preview after crop -->
@@ -101,6 +101,12 @@
             <canvas id="scan-result" style="max-width:100%;border-radius:8px;display:block;margin:0 auto;"></canvas>
             <div id="scan-pages-summary" class="text-xs text-dim text-center mt-1" style="display:none;"></div>
             <div id="scan-pages-strip" class="mt-1" style="display:none;"></div>
+            <div class="scanner-preview-tools">
+              <div class="scanner-rotate-controls">
+                <button id="preview-rotate-left-btn" class="btn" type="button">↺ Rotate Left</button>
+                <button id="preview-rotate-right-btn" class="btn" type="button">↻ Rotate Right</button>
+              </div>
+            </div>
             <div style="margin-top:0.75rem;">
               <label class="text-sm" style="display:flex;align-items:center;gap:0.5rem;justify-content:center;cursor:pointer;">
                 <input type="checkbox" id="scan-document-filter">
@@ -903,6 +909,13 @@
       renderScanPreview();
     }
 
+    function rotatePreview(degrees) {
+      if (!scanBaseCanvas) return;
+      scanBaseCanvas = rotateCanvas(scanBaseCanvas, degrees);
+      scanPreviewPageAdded = false;
+      renderScanPreview();
+    }
+
     function renderScanPreview() {
       if (!scanBaseCanvas) return;
       const previewCanvas = document.getElementById('scan-result');
@@ -998,6 +1011,14 @@
 
     document.getElementById('scan-retake-btn').addEventListener('click', () => {
       goBackToLive();
+    });
+
+    document.getElementById('preview-rotate-left-btn').addEventListener('click', () => {
+      rotatePreview(-90);
+    });
+
+    document.getElementById('preview-rotate-right-btn').addEventListener('click', () => {
+      rotatePreview(90);
     });
 
     document.getElementById('scan-another-btn').addEventListener('click', async () => {

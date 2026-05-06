@@ -695,6 +695,11 @@ tr:hover td { background: var(--accent-bg); }
 .scanner-toggle input {
   margin: 0;
 }
+.scanner-preview-tools {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
 .scanner-capture-btn {
   width: 60px; height: 60px;
   border-radius: 50%;
