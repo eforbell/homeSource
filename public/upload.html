@@ -61,13 +61,23 @@
           <div id="scanner-corners" style="display:none;">
             <p class="text-sm text-dim text-center mb-1">Drag corners to select document edges</p>
             <div class="text-center mb-1">
-              <label class="text-xs text-dim" for="scan-crop-looseness">Auto crop looseness</label>
+              <label class="text-xs text-dim" for="scan-crop-looseness" style="display:block;">Auto crop looseness</label>
               <select id="scan-crop-looseness" class="form-select" style="max-width:220px;margin:0.35rem auto 0;">
                 <option value="tight">Tight (borderless)</option>
                 <option value="normal" selected>Normal</option>
                 <option value="wide">Wide</option>
                 <option value="wider">Wider</option>
               </select>
+            </div>
+            <div class="scanner-crop-tools">
+              <div class="scanner-rotate-controls">
+                <button id="corner-rotate-left-btn" class="btn" type="button">↺ Rotate Left</button>
+                <button id="corner-rotate-right-btn" class="btn" type="button">↻ Rotate Right</button>
+              </div>
+              <label class="scanner-toggle text-xs text-dim" for="scan-perspective-enabled">
+                <input type="checkbox" id="scan-perspective-enabled" checked>
+                Perspective correction
+              </label>
             </div>
             <div class="scanner-container" id="corner-container">
               <canvas id="corner-canvas"></canvas>
@@ -393,6 +403,44 @@
       return canvas;
     }
 
+    function cloneCanvas(source) {
+      const clone = document.createElement('canvas');
+      clone.width = source.width;
+      clone.height = source.height;
+      clone.getContext('2d').drawImage(source, 0, 0);
+      return clone;
+    }
+
+    function normalizeRotation(rotation) {
+      return ((rotation % 360) + 360) % 360;
+    }
+
+    function rotateCanvas(source, degrees) {
+      const normalized = normalizeRotation(degrees);
+      if (!normalized) return cloneCanvas(source);
+      const swapAxes = normalized === 90 || normalized === 270;
+      const out = document.createElement('canvas');
+      out.width = swapAxes ? source.height : source.width;
+      out.height = swapAxes ? source.width : source.height;
+      const ctx = out.getContext('2d');
+      ctx.translate(out.width / 2, out.height / 2);
+      ctx.rotate(normalized * Math.PI / 180);
+      ctx.drawImage(source, -source.width / 2, -source.height / 2);
+      return out;
+    }
+
+    function shouldDefaultPerspectiveCorrection() {
+      return getSelectedGuideRatio() !== null;
+    }
+
+    function syncPerspectiveControl() {
+      const toggle = document.getElementById('scan-perspective-enabled');
+      if (!toggle) return;
+      if (document.getElementById('scanner-corners').style.display === 'none') {
+        toggle.checked = shouldDefaultPerspectiveCorrection();
+      }
+    }
+
     document.getElementById('scan-capture-btn').addEventListener('click', () => {
       if (!scanner) return;
       const video = document.getElementById('scan-video');
@@ -424,7 +472,9 @@
       });
     });
 
-    function showCornerUI() {
+    function showCornerUI(options = {}) {
+      const { preserveCorners = false, preservePerspective = false } = options;
+
       // Show corners panel first so container has layout dimensions
       document.getElementById('scanner-live').style.display = 'none';
       document.getElementById('scanner-corners').style.display = 'block';
@@ -434,10 +484,15 @@
       cornerCanvas.height = frozenFrame.height;
       cornerCanvas.getContext('2d').drawImage(frozenFrame, 0, 0);
 
-      // Re-detect on the frozen frame (instead of trusting the last live-frame reading)
-      // so the initial handles align better with what was actually captured.
-      const frameCorners = detectCornersFromCanvasEnhanced(frozenFrame) || detectedCorners;
-      frameDetectedCorners = frameCorners;
+      if (!preserveCorners) {
+        // Re-detect on the frozen frame (instead of trusting the last live-frame reading)
+        // so the initial handles align better with what was actually captured.
+        const frameCorners = detectCornersFromCanvasEnhanced(frozenFrame) || detectedCorners;
+        frameDetectedCorners = frameCorners;
+      }
+      if (!preservePerspective) {
+        document.getElementById('scan-perspective-enabled').checked = shouldDefaultPerspectiveCorrection();
+      }
 
       // Read container size after it's visible
       requestAnimationFrame(() => {
@@ -633,6 +688,49 @@
       setHandlePos('bl', expanded.bottomLeftCorner.x / frozenFrame.width * w, expanded.bottomLeftCorner.y / frozenFrame.height * h);
       setHandlePos('br', expanded.bottomRightCorner.x / frozenFrame.width * w, expanded.bottomRightCorner.y / frozenFrame.height * h);
       updateCornerOutline();
+    }
+
+    function rotateCornerSetClockwise(corners, width, height) {
+      return {
+        topLeftCorner: { x: height - corners.bottomLeftCorner.y, y: corners.bottomLeftCorner.x },
+        topRightCorner: { x: height - corners.topLeftCorner.y, y: corners.topLeftCorner.x },
+        bottomRightCorner: { x: height - corners.topRightCorner.y, y: corners.topRightCorner.x },
+        bottomLeftCorner: { x: height - corners.bottomRightCorner.y, y: corners.bottomRightCorner.x }
+      };
+    }
+
+    function rotateCornerSet(corners, width, height, degrees) {
+      if (!corners) return null;
+      let normalized = normalizeRotation(degrees);
+      let result = {
+        topLeftCorner: { ...corners.topLeftCorner },
+        topRightCorner: { ...corners.topRightCorner },
+        bottomRightCorner: { ...corners.bottomRightCorner },
+        bottomLeftCorner: { ...corners.bottomLeftCorner }
+      };
+      let currentWidth = width;
+      let currentHeight = height;
+      while (normalized > 0) {
+        result = rotateCornerSetClockwise(result, currentWidth, currentHeight);
+        const nextWidth = currentHeight;
+        const nextHeight = currentWidth;
+        currentWidth = nextWidth;
+        currentHeight = nextHeight;
+        normalized -= 90;
+      }
+      return result;
+    }
+
+    function rotateFrozenFrame(degrees) {
+      if (!frozenFrame) return;
+      const normalized = normalizeRotation(degrees);
+      if (!normalized) return;
+      const nextFrame = rotateCanvas(frozenFrame, normalized);
+      if (frameDetectedCorners) {
+        frameDetectedCorners = rotateCornerSet(frameDetectedCorners, frozenFrame.width, frozenFrame.height, normalized);
+      }
+      frozenFrame = nextFrame;
+      showCornerUI({ preserveCorners: true, preservePerspective: true });
     }
 
     function expandCornersWithPadding(corners, frameWidth, frameHeight, expandRatio, minPadPx) {
@@ -832,16 +930,19 @@
       const blS = { x: bl.x * scaleX, y: bl.y * scaleY };
       const brS = { x: br.x * scaleX, y: br.y * scaleY };
 
+      const corners = {
+        topLeftCorner: tlS, topRightCorner: trS,
+        bottomLeftCorner: blS, bottomRightCorner: brS
+      };
+      const usePerspective = document.getElementById('scan-perspective-enabled').checked;
       let result = null;
-      try {
-        const corners = {
-          topLeftCorner: tlS, topRightCorner: trS,
-          bottomLeftCorner: blS, bottomRightCorner: brS
-        };
-        const target = getTargetCropSize();
-        result = scanner.extractPaper(frozenFrame, target.width, target.height, corners);
-      } catch (err) {
-        console.warn('OpenCV crop failed, using fallback:', err);
+      if (usePerspective) {
+        try {
+          const target = getTargetCropSize();
+          result = scanner.extractPaper(frozenFrame, target.width, target.height, corners);
+        } catch (err) {
+          console.warn('OpenCV crop failed, using fallback:', err);
+        }
       }
 
       if (!result) {
@@ -887,6 +988,14 @@
       toast('Auto-fit applied.', 'success');
     });
 
+    document.getElementById('corner-rotate-left-btn').addEventListener('click', () => {
+      rotateFrozenFrame(-90);
+    });
+
+    document.getElementById('corner-rotate-right-btn').addEventListener('click', () => {
+      rotateFrozenFrame(90);
+    });
+
     document.getElementById('scan-retake-btn').addEventListener('click', () => {
       goBackToLive();
     });
@@ -908,6 +1017,7 @@
       document.getElementById('scanner-corners').style.display = 'none';
       document.getElementById('scan-preview').style.display = 'none';
       document.getElementById('scanner-live').style.display = 'block';
+      syncPerspectiveControl();
       refreshScanPagesUi();
       startHighlightLoop();
     }
@@ -1046,7 +1156,10 @@
       if (document.getElementById('scanner-corners').style.display !== 'none' && frozenFrame) {
         const corners = detectCornersFromCanvasEnhanced(frozenFrame);
         if (corners) frameDetectedCorners = corners;
+        document.getElementById('scan-perspective-enabled').checked = shouldDefaultPerspectiveCorrection();
         seedCornerHandlesFromCurrentLooseness();
+      } else {
+        syncPerspectiveControl();
       }
     });
     window.addEventListener('resize', updateGuideOverlay);
