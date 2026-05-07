@@ -177,6 +177,8 @@ describe('MagicIndex prompt guidance', () => {
     const prompt = buildMagicIndexRules({ userHint: 'This is a vehicle registration. Ignore old notice dates.' });
     assert.match(prompt, /Tax documents usually do not have actionable expiry dates/i);
     assert.match(prompt, /prefer final total/i);
+    assert.match(prompt, /policy numbers, claim numbers, VINs, plate numbers, account numbers, tax year/i);
+    assert.match(prompt, /Prefer document-defining identifiers and dates over incidental numeric strings/i);
     assert.match(prompt, /User hint: This is a vehicle registration/i);
   });
 });
