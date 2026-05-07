@@ -672,6 +672,34 @@ tr:hover td { background: var(--accent-bg); }
   display: flex; justify-content: center; gap: 1rem;
   padding: 1rem;
 }
+.scanner-crop-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.scanner-rotate-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.scanner-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+.scanner-toggle input {
+  margin: 0;
+}
+.scanner-preview-tools {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
 .scanner-capture-btn {
   width: 60px; height: 60px;
   border-radius: 50%;
