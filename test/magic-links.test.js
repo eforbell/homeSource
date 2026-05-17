@@ -212,6 +212,18 @@ describe('magic links API and deterministic scan', () => {
     assert.equal(res.status, 403);
   });
 
+  it('rejects invalid link list inputs cleanly', async () => {
+    const invalidDocRes = await authedGet('api/documents/not-a-number/links', parentCookie);
+    assert.equal(invalidDocRes.status, 400);
+    const invalidDocBody = await invalidDocRes.json();
+    assert.match(invalidDocBody.error, /Document id must be a positive integer/);
+
+    const invalidLimitRes = await authedGet('api/links?limit=abc', parentCookie);
+    assert.equal(invalidLimitRes.status, 400);
+    const invalidLimitBody = await invalidLimitRes.json();
+    assert.match(invalidLimitBody.error, /Limit must be a positive integer/);
+  });
+
   it('deletes links', async () => {
     const links = await (await authedGet(`api/documents/${oldPolicy.id}/links`, parentCookie)).json();
     const manualLink = links.find((link) => link.created_by === 'user');

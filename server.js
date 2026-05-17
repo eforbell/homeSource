@@ -889,13 +889,13 @@ app.post('/api/insights/scan', requireAuth, requireParent, async (req, res) => {
 app.get('/api/documents/:id/links', requireAuth, async (req, res) => {
   try {
     res.json(await magicLinks.listLinksForDocument(req.params.id));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.get('/api/links', requireAuth, requireParent, async (req, res) => {
   try {
     res.json(await magicLinks.listLinks(req.query));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.post('/api/documents/:id/links', requireAuth, requireParent, async (req, res) => {
