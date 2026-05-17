@@ -175,6 +175,34 @@ describe('magic links API and deterministic scan', () => {
     assert.equal(accepted.direction, 'outgoing');
   });
 
+  it('preserves reviewed agent link status across rescans', async () => {
+    const links = await (await authedGet(`api/documents/${newPolicy.id}/links`, parentCookie)).json();
+    const renewal = links.find((link) => link.link_type === 'renews' && link.related_document_id === oldPolicy.id);
+    assert.ok(renewal);
+
+    const dismissRes = await authedPut(`api/links/${renewal.id}`, parentCookie, { status: 'dismissed' });
+    assert.equal(dismissRes.status, 200);
+    const dismissed = await dismissRes.json();
+    assert.equal(dismissed.status, 'dismissed');
+
+    const rescanRes = await authedPost('api/links/scan', parentCookie, {});
+    assert.equal(rescanRes.status, 200);
+
+    const afterDismissRescan = await (await authedGet(`api/documents/${newPolicy.id}/links`, parentCookie)).json();
+    const dismissedRenewal = afterDismissRescan.find((link) => link.id === renewal.id);
+    assert.equal(dismissedRenewal.status, 'dismissed');
+
+    const acceptRes = await authedPut(`api/links/${renewal.id}`, parentCookie, { status: 'accepted' });
+    assert.equal(acceptRes.status, 200);
+
+    const secondRescanRes = await authedPost('api/links/scan', parentCookie, {});
+    assert.equal(secondRescanRes.status, 200);
+
+    const afterAcceptRescan = await (await authedGet(`api/documents/${newPolicy.id}/links`, parentCookie)).json();
+    const acceptedRenewal = afterAcceptRescan.find((link) => link.id === renewal.id);
+    assert.equal(acceptedRenewal.status, 'accepted');
+  });
+
   it('blocks kid writes to link routes', async () => {
     const res = await authedPost(`api/documents/${oldPolicy.id}/links`, kidCookie, {
       target_document_id: oldRegistration.id,
