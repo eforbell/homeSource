@@ -92,3 +92,19 @@
 }
 .form-textarea { resize: vertical; min-height: 80px; }
 .form-hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+
+
+/* Sovereign chassis interop: HomeSource owns shell spacing with .page-content + .app-sidebar. */
+#app {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+@media (min-width: 769px) {
+  body.app-has-nav #app {
+    margin-left: 0;
+    max-width: none;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
