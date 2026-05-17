@@ -18,6 +18,7 @@
       </div>
       <div class="btn-group">
         <button class="btn btn-primary" id="scan-btn">Scan now</button>
+        <button class="btn" id="scan-links-btn">Scan Related Documents</button>
       </div>
     </div>
 
@@ -72,6 +73,13 @@
       </div>
       <div id="insights-list"></div>
     </div>
+
+    <div class="card mt-2">
+      <div class="card-header">
+        <span class="card-title">Suggested Links</span>
+      </div>
+      <div id="suggested-links-list"></div>
+    </div>
   </div>
 
   <div class="modal-backdrop hidden" id="edit-modal">
@@ -118,6 +126,7 @@
     'use strict';
 
     let currentInsights = [];
+    let currentSuggestedLinks = [];
     let editingInsight = null;
 
     function esc(s) {
@@ -183,6 +192,11 @@
       renderInsights();
     }
 
+    async function loadSuggestedLinks() {
+      currentSuggestedLinks = await API.get('api/links?status=suggested&limit=25');
+      renderSuggestedLinks();
+    }
+
     function renderInsights() {
       const list = document.getElementById('insights-list');
       if (!currentInsights.length) {
@@ -227,6 +241,59 @@
           ` : ''}
         </div>
       `).join('');
+    }
+
+    function linkTypeLabel(type) {
+      return {
+        supersedes: 'Supersedes',
+        renews: 'Renews',
+        supplements: 'Supplements',
+        same_asset: 'Same asset',
+        same_account: 'Same account',
+        same_provider: 'Same provider',
+        relates_to: 'Relates to'
+      }[type] || type || 'Link';
+    }
+
+    function renderSuggestedLinks() {
+      const list = document.getElementById('suggested-links-list');
+      if (!currentSuggestedLinks.length) {
+        list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">No suggested links</div><p class="text-dim">Run related document scan to look for superseding and same-asset relationships.</p></div>';
+        return;
+      }
+
+      list.innerHTML = currentSuggestedLinks.map(link => `
+        <div class="insight-card">
+          <div class="flex-between gap-1" style="align-items:flex-start;">
+            <div>
+              <div class="flex gap-1" style="align-items:center; flex-wrap:wrap;">
+                <span class="badge badge-muted">${esc(linkTypeLabel(link.link_type))}</span>
+                <span class="text-xs text-dim">${Math.round(Number(link.confidence || 0) * 100)}%</span>
+              </div>
+              <h3 style="margin:0.5rem 0 0.35rem 0;">
+                <a href="document.html?id=${link.source_document_id}">${esc(link.source_document_title)}</a>
+                <span class="text-dim">→</span>
+                <a href="document.html?id=${link.target_document_id}">${esc(link.target_document_title)}</a>
+              </h3>
+              <p class="text-dim" style="margin:0;">${esc(link.reasoning || '')}</p>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-sm" onclick="updateLinkReview(${link.id}, 'accepted')">Accept</button>
+              <button class="btn btn-sm" onclick="updateLinkReview(${link.id}, 'dismissed')">Dismiss</button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function updateLinkReview(id, status) {
+      try {
+        await API.put(`api/links/${id}`, { status });
+        toast(`Link marked ${status}`, 'success');
+        await loadSuggestedLinks();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     }
 
     async function quickUpdate(id, status) {
@@ -289,7 +356,7 @@
       try {
         const result = await API.post('api/insights/scan', {});
         toast(`Scan finished: ${result.created_or_updated} updated, ${result.stale_count} stale`, 'success');
-        await Promise.all([loadSummary(), loadInsights()]);
+        await Promise.all([loadSummary(), loadInsights(), loadSuggestedLinks()]);
       } catch (err) {
         toast(err.message, 'error');
       } finally {
@@ -298,11 +365,27 @@
       }
     });
 
+    document.getElementById('scan-links-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('scan-links-btn');
+      btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      try {
+        const result = await API.post('api/links/scan', {});
+        toast(`Related document scan finished: ${result.created_or_updated} links updated`, 'success');
+        await loadSuggestedLinks();
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Scan Related Documents';
+      }
+    });
+
     ['filter-status', 'filter-severity', 'filter-category'].forEach(id => {
       document.getElementById(id).addEventListener('change', loadInsights);
     });
 
-    Promise.all([loadSummary(), loadInsights()]).catch(err => {
+    Promise.all([loadSummary(), loadInsights(), loadSuggestedLinks()]).catch(err => {
       console.error(err);
       toast(err.message, 'error');
     });

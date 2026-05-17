@@ -57,11 +57,12 @@ Why second:
 
 Artifact: `feature-4c-magic-links.md`
 
-Ship third. Adds related document graph, starting with deterministic/manual links before LLM suggestions.
+Ship third. Adds a relationship engine with **superseding as the lead use case**, starting with deterministic/manual links before any LLM ranking.
 
 Why third:
 
 - enables document-to-document navigation
+- makes stale/current document history manageable
 - creates foundation for asset registry
 - lower hallucination risk than gap detection
 

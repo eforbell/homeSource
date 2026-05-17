@@ -81,6 +81,14 @@
           </div>
           <div id="shares-list"></div>
         </div>
+
+        <div class="card mt-2" id="links-card" style="display:none;">
+          <div class="card-header">
+            <span class="card-title">Related Documents</span>
+            <button id="add-link-btn" class="btn btn-sm">+ Add Link</button>
+          </div>
+          <div id="links-list"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -218,6 +226,36 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="link-modal">
+    <div class="modal">
+      <div class="modal-title">Add Related Document</div>
+      <div class="form-group">
+        <label class="form-label">Document</label>
+        <select id="link-target" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Relationship</label>
+        <select id="link-type" class="form-select">
+          <option value="relates_to">Relates to</option>
+          <option value="same_asset">Same asset</option>
+          <option value="same_account">Same account</option>
+          <option value="same_provider">Same provider</option>
+          <option value="supersedes">Supersedes</option>
+          <option value="renews">Renews</option>
+          <option value="supplements">Supplements</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Reasoning</label>
+        <textarea id="link-reasoning" class="form-textarea" placeholder="Why are these documents related?"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('link-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-link-btn">Add Link</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
@@ -345,6 +383,8 @@
         // Share links
         document.getElementById('share-card').style.display = 'block';
         loadShares();
+        document.getElementById('links-card').style.display = 'block';
+        loadLinks();
 
       } catch (err) {
         document.getElementById('doc-title').textContent = 'Document not found';
@@ -404,6 +444,18 @@
       </details>`;
     }
 
+    function linkTypeLabel(link) {
+      const type = link.link_type;
+      const direction = link.direction;
+      if (type === 'supersedes') return direction === 'outgoing' ? 'Supersedes' : 'Superseded by';
+      if (type === 'renews') return direction === 'outgoing' ? 'Renews' : 'Renewed by';
+      if (type === 'supplements') return direction === 'outgoing' ? 'Supplements' : 'Supplemented by';
+      if (type === 'same_asset') return 'Same asset';
+      if (type === 'same_account') return 'Same account';
+      if (type === 'same_provider') return 'Same provider';
+      return 'Relates to';
+    }
+
     async function applyMagicIndexFromDocument(importItemId) {
       try {
         await API.post(`api/import/items/${importItemId}/apply-magicindex`, {});
@@ -438,6 +490,74 @@
           </div>`;
         }).join('');
       } catch {}
+    }
+
+    async function loadLinks() {
+      try {
+        const links = await API.get(`api/documents/${docId}/links`);
+        const list = document.getElementById('links-list');
+        if (!links.length) {
+          list.innerHTML = '<span class="text-dim text-sm">No related documents yet</span>';
+          return;
+        }
+        list.innerHTML = links.map(link => `
+          <div class="mb-1" style="padding:0.6rem 0; border-bottom:1px solid var(--border);">
+            <div class="flex-between gap-1" style="align-items:flex-start;">
+              <div>
+                <a href="document.html?id=${link.related_document_id}" style="font-weight:600;">${esc(link.related_document_title)}</a><br>
+                <span class="badge badge-muted">${esc(linkTypeLabel(link))}</span>
+                <span class="text-xs text-dim">${Math.round(Number(link.confidence || 0) * 100)}%</span>
+                ${link.status === 'suggested' ? `<span class="badge badge-warn">suggested</span>` : ''}
+              </div>
+              <div class="btn-group">
+                ${link.status === 'suggested' ? `<button class="btn btn-sm" onclick="updateLinkStatus(${link.id}, 'accepted')">Accept</button>
+                <button class="btn btn-sm" onclick="updateLinkStatus(${link.id}, 'dismissed')">Dismiss</button>` : ''}
+                <button class="btn btn-sm btn-danger" onclick="deleteLink(${link.id})">&times;</button>
+              </div>
+            </div>
+            <div class="text-dim text-sm mt-1">${esc(link.reasoning)}</div>
+            ${link.archive_candidate_document_id ? `<div class="mt-1">
+              <div class="text-xs text-dim">Suggested next step: archive stale document <strong>${esc(link.archive_candidate_document_title)}</strong> if you want the current set to stay uncluttered.</div>
+              <div class="btn-group mt-1">
+                <button class="btn btn-sm" onclick="archiveLinkedDocument(${link.archive_candidate_document_id})">Archive stale document</button>
+                <button class="btn btn-sm" onclick="toast('Keeping both documents active', 'success')">Keep both active</button>
+              </div>
+            </div>` : ''}
+          </div>
+        `).join('');
+      } catch {
+        document.getElementById('links-list').innerHTML = '<span class="text-dim text-sm">Related document links unavailable</span>';
+      }
+    }
+
+    async function updateLinkStatus(id, status) {
+      try {
+        await API.put(`api/links/${id}`, { status });
+        toast(`Link marked ${status}`, 'success');
+        await loadLinks();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    async function deleteLink(id) {
+      try {
+        await API.del(`api/links/${id}`);
+        toast('Link deleted', 'success');
+        await loadLinks();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    async function archiveLinkedDocument(targetDocId) {
+      try {
+        await API.del(`api/documents/${targetDocId}`);
+        toast('Document archived', 'success');
+        await Promise.all([loadLinks(), loadDocument()]);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     }
 
     function openEditModal() {
@@ -497,6 +617,35 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Queue re-analysis';
+      }
+    });
+
+    document.getElementById('add-link-btn').addEventListener('click', async () => {
+      const select = document.getElementById('link-target');
+      select.innerHTML = '';
+      try {
+        const docs = await API.get('api/documents?limit=200');
+        for (const doc of docs.documents || []) {
+          if (Number(doc.id) === Number(docId)) continue;
+          select.innerHTML += `<option value="${doc.id}">${esc(doc.title)} (${esc(doc.document_type)})</option>`;
+        }
+      } catch {}
+      document.getElementById('link-reasoning').value = '';
+      document.getElementById('link-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('save-link-btn').addEventListener('click', async () => {
+      try {
+        await API.post(`api/documents/${docId}/links`, {
+          target_document_id: Number(document.getElementById('link-target').value),
+          link_type: document.getElementById('link-type').value,
+          reasoning: document.getElementById('link-reasoning').value
+        });
+        document.getElementById('link-modal').classList.add('hidden');
+        toast('Link added', 'success');
+        await loadLinks();
+      } catch (err) {
+        toast(err.message, 'error');
       }
     });
 

@@ -14,7 +14,7 @@ Do **not** ship this full plan as one PR. MagicInsight should be delivered as or
 
 1. **4A — MagicInsight Foundation:** persisted `magic_data`, deterministic expiry scanner, staleness, review workflow, dashboard fix.
 2. **4B — Quality + Amount Normalization:** bad metadata detection, amount/key-fact normalization, document_quality insights.
-3. **4C — MagicLinks:** related-document graph, manual/deterministic links first, LLM links later.
+3. **4C — MagicLinks:** superseding-first document relationships, deterministic/manual links first, LLM ranking/explanations later.
 4. **4D — Household Gap Detection + Life Events:** optional DOB/legal names, deterministic milestones, private-provider-gated LLM gap detection.
 
 See `planning/features/feature-4-delivery-index.md` and the per-slice artifacts:

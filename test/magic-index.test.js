@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { getMagicIndexConfig } = require('../lib/magic-index/config');
-const { normalizeMagicIndexResult, normalizeTitle } = require('../lib/magic-index/schema');
+const { normalizeMagicIndexResult, normalizeTitle, normalizeKeyFactKey } = require('../lib/magic-index/schema');
 
 describe('MagicIndex config', () => {
   it('defaults off unless provider is marked private', () => {
@@ -55,11 +55,33 @@ describe('MagicIndex schema normalization', () => {
       confidence: 0.8
     });
     assert.equal(result.issued_date, '2023-12-01');
+    assert.equal(result.key_facts[0].key, 'statement_date');
+  });
+
+  it('prefers invoice date over order date when both are present', () => {
+    const result = normalizeMagicIndexResult({
+      title: 'Invoice',
+      issued_date: null,
+      key_facts: [
+        { label: 'Order Date', value: '09/06/17', confidence: 0.95 },
+        { label: 'Invoice Date', value: '09/07/17', confidence: 0.95 }
+      ],
+      confidence: 0.8
+    });
+    assert.equal(result.issued_date, '2017-09-07');
   });
 
   it('humanizes slug-like titles while preserving acronyms', () => {
     assert.equal(normalizeTitle('2.5t-trane-single_stage_airhandler'), '2.5t TRANE Single Stage Airhandler');
     assert.equal(normalizeTitle('hvac_invoice_pdf'), 'HVAC Invoice PDF');
+  });
+
+  it('canonicalizes common key fact labels', () => {
+    assert.equal(normalizeKeyFactKey('Policy Number'), 'policy_number');
+    assert.equal(normalizeKeyFactKey('VIN Number'), 'vin');
+    assert.equal(normalizeKeyFactKey('order_number'), 'order_number');
+    assert.equal(normalizeKeyFactKey('Project'), 'project_number');
+    assert.equal(normalizeKeyFactKey('Property Address'), 'property_address');
   });
 });
 
@@ -155,6 +177,8 @@ describe('MagicIndex prompt guidance', () => {
     const prompt = buildMagicIndexRules({ userHint: 'This is a vehicle registration. Ignore old notice dates.' });
     assert.match(prompt, /Tax documents usually do not have actionable expiry dates/i);
     assert.match(prompt, /prefer final total/i);
+    assert.match(prompt, /policy numbers, claim numbers, VINs, plate numbers, account numbers, tax year/i);
+    assert.match(prompt, /Prefer document-defining identifiers and dates over incidental numeric strings/i);
     assert.match(prompt, /User hint: This is a vehicle registration/i);
   });
 });
