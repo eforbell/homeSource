@@ -1,5 +1,21 @@
 /* Sovereign tokens — homeSource */
 :root {
   --font-display: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --accent: #3F8F7A;
+  --accent: #D97706;
+  --accent-pale: rgba(217, 119, 6, 0.18);
+  --accent-wash: rgba(217, 119, 6, 0.05);
+  --accent-soft: rgba(217, 119, 6, 0.1);
+  --accent-soft-strong: rgba(217, 119, 6, 0.18);
+  --accent-border-soft: rgba(217, 119, 6, 0.28);
+  --sidebar-w: 220px;
+}
+
+:root[data-theme="light"] {
+  --accent: #B45309;
+  --accent-pale: rgba(180, 83, 9, 0.18);
+  --accent-wash: rgba(180, 83, 9, 0.06);
+  --accent-soft: rgba(180, 83, 9, 0.1);
+  --accent-soft-strong: rgba(180, 83, 9, 0.18);
+  --accent-border-soft: rgba(180, 83, 9, 0.28);
+  --sidebar-w: 220px;
 }
