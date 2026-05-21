@@ -106,6 +106,34 @@ Export format: `homesource-backup-{datetime}.tar.gz` containing:
 
 Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup posture based on configurable expected frequency (default: 30 days).
 
+### Manual Decryption of Encrypted Document Files from Backup
+
+If a document file was uploaded in encrypted mode, the backup preserves that ciphertext as-is.
+You can decrypt an encrypted document locally using:
+
+```sh
+node bin/decrypt-backup-encrypted-doc.js \
+  --database /path/to/extracted-backup/database.json \
+  --backup-root /path/to/extracted-backup \
+  --passphrase "your passphrase" \
+  --doc-id 123
+```
+
+Or by exact title:
+
+```sh
+node bin/decrypt-backup-encrypted-doc.js \
+  --database /path/to/extracted-backup/database.json \
+  --backup-root /path/to/extracted-backup \
+  --passphrase "your passphrase" \
+  --title "Passport - Eric" \
+  --out-dir /tmp/decrypted
+```
+
+Notes:
+- This utility currently supports `passphrase` encrypted documents.
+- It uses the document's stored `encryption_metadata` envelope and decrypts fully offline.
+
 ## Environment Variables
 
 | Variable | Required | Default | Notes |
