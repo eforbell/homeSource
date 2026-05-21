@@ -134,4 +134,20 @@ describe('share link edge cases', () => {
     const accessRes = await fetch(url(`api/share/${link.token}`));
     assert.equal(accessRes.status, 404);
   });
+
+  it('blocks share link creation for encrypted docs', async () => {
+    const doc = await createTestDocument(parent.id, {
+      title: 'Encrypted Doc',
+      is_encrypted: true,
+      encryption_mode: 'passphrase',
+      encryption_metadata: { version: 1, mode: 'passphrase' }
+    });
+
+    const res = await authedPost(`api/documents/${doc.id}/share`, parentCookie, {
+      access_level: 'view'
+    });
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.match(data.error, /unavailable for encrypted documents/i);
+  });
 });

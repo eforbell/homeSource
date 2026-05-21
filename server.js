@@ -21,6 +21,7 @@ const magicLinks = require('./lib/magic-links');
 const { runExpiryScan } = require('./lib/scanners/expiry');
 const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
 const { scanDeterministicLinks } = require('./lib/scanners/magic-links-deterministic');
+const { isEncryptedDocument } = require('./lib/encryption-mode');
 const audit = require('./lib/audit');
 
 const app = express();
@@ -430,6 +431,7 @@ app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, 
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'MagicIndex re-analysis is unavailable for encrypted documents' });
     if (doc.metadata?.magicindex?.state === 'pending') {
       return res.status(409).json({ error: 'MagicIndex re-analysis already pending for this document' });
     }
@@ -470,6 +472,9 @@ app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) =>
 app.post('/api/documents/:id/files', requireAuth, async (req, res) => {
   try {
     if (req.member.role === 'kid') return res.status(403).json({ error: 'Parent access required' });
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'Adding files is unavailable for encrypted documents in v1' });
     const parts = await parseMultipart(req);
     const file = parts.file;
     if (!file || !file.data?.length) return res.status(400).json({ error: 'No file provided' });
@@ -612,6 +617,9 @@ app.get('/api/search', requireAuth, async (req, res) => {
 
 app.post('/api/documents/:id/share', requireAuth, requireParent, async (req, res) => {
   try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'Share links are unavailable for encrypted documents in v1' });
     const link = await createShareLink(req.params.id, req.member.id, req.body);
     await audit.log('share.created', 'share_link', link.id, req.member.id, { document_id: Number(req.params.id) });
     res.status(201).json(link);

@@ -78,6 +78,8 @@ CREATE TABLE documents (
   search_vector TSVECTOR,
   encryption_key_id INT REFERENCES encryption_keys(id),
   is_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+  encryption_mode TEXT NOT NULL DEFAULT 'plaintext' CHECK (encryption_mode IN ('plaintext', 'passphrase', 'timelock')),
+  encryption_metadata JSONB NOT NULL DEFAULT '{}',
   created_by INT REFERENCES family_members(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

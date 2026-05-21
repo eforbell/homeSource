@@ -271,6 +271,153 @@
     if (!docId) location.href = 'documents.html';
 
     let currentDoc = null;
+    let unlockedFiles = new Map();
+
+    function isEncryptedDoc(doc) {
+      return !!(doc && (doc.is_encrypted || (doc.encryption_mode && doc.encryption_mode !== 'plaintext')));
+    }
+
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+
+    function bytesToUtf8(bytes) {
+      return new TextDecoder().decode(bytes);
+    }
+
+    function safeFileName(name) {
+      const cleaned = String(name || 'decrypted-file').replace(/[\\/:*?"<>|]/g, '_').trim();
+      return cleaned || 'decrypted-file';
+    }
+
+    async function derivePassphraseKey(passphrase, salt) {
+      const passKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 600000, hash: 'SHA-256' },
+        passKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+      );
+    }
+
+    async function decryptEncryptedDocumentWithPassphrase(doc, passphrase) {
+      const files = (doc.files || []).filter(f => f.file_type === 'original');
+      const original = files[0];
+      if (!original) throw new Error('Encrypted file not found');
+
+      const env = doc.encryption_metadata?.files?.upload;
+      if (!env?.wrapped_dek?.salt_b64 || !env?.wrapped_dek?.wrap_iv_b64 || !env?.wrapped_dek?.wrapped_dek_b64 || !env?.iv_b64) {
+        throw new Error('Encrypted metadata is incomplete');
+      }
+
+      const salt = b64ToBytes(env.wrapped_dek.salt_b64);
+      const wrapIv = b64ToBytes(env.wrapped_dek.wrap_iv_b64);
+      const wrappedDek = b64ToBytes(env.wrapped_dek.wrapped_dek_b64);
+      const fileIv = b64ToBytes(env.iv_b64);
+      const wrapKey = await derivePassphraseKey(passphrase, salt);
+      const rawDek = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapIv, tagLength: 128 }, wrapKey, wrappedDek);
+      const contentKey = await crypto.subtle.importKey('raw', rawDek, { name: 'AES-GCM' }, false, ['decrypt']);
+
+      const encryptedBytes = new Uint8Array(await (await fetch(`api/documents/${doc.id}/files/${original.id}/download`)).arrayBuffer());
+      const plaintext = new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fileIv, tagLength: 128 },
+        contentKey,
+        encryptedBytes
+      ));
+
+      let fileMeta = { original_filename: 'decrypted-file.bin', mime_type: 'application/octet-stream' };
+      if (env.encrypted_file_meta?.payload_b64 && env.encrypted_file_meta?.iv_b64) {
+        const metaIv = b64ToBytes(env.encrypted_file_meta.iv_b64);
+        const metaPayload = b64ToBytes(env.encrypted_file_meta.payload_b64);
+        const metaBytes = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: metaIv, tagLength: 128 }, contentKey, metaPayload);
+        fileMeta = JSON.parse(bytesToUtf8(new Uint8Array(metaBytes)));
+      }
+
+      const blob = new Blob([plaintext], { type: fileMeta.mime_type || 'application/octet-stream' });
+      const objectUrl = URL.createObjectURL(blob);
+      unlockedFiles.set(original.id, { blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type });
+      return { fileId: original.id, blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type };
+    }
+
+    function renderEncryptedLockedState(doc) {
+      const preview = document.getElementById('file-preview');
+      preview.innerHTML = `
+        <div style="max-width:460px; margin:0 auto; text-align:left; padding:1rem;">
+          <div style="font-size:2rem; margin-bottom:0.5rem;">🔒</div>
+          <div style="font-weight:600; margin-bottom:0.5rem;">Encrypted Document</div>
+          <div class="text-dim text-sm mb-1">Mode: <strong>${esc(doc.encryption_mode || 'passphrase')}</strong></div>
+          <div class="text-dim text-sm mb-1">This file is encrypted client-side. Enter passphrase to decrypt locally in your browser.</div>
+          <div class="form-group mt-1">
+            <label class="form-label">Passphrase</label>
+            <input type="password" id="unlock-passphrase" class="form-input" placeholder="Enter passphrase">
+          </div>
+          <button id="unlock-btn" class="btn btn-primary">Unlock Document</button>
+          <div id="unlock-status" class="text-sm mt-1 text-dim"></div>
+        </div>`;
+
+      const tbody = document.querySelector('#files-table tbody');
+      const file = (doc.files || []).find(f => f.file_type === 'original');
+      tbody.innerHTML = file ? `<tr>
+        <td>Encrypted file</td>
+        <td class="text-dim text-sm">original</td>
+        <td class="text-dim text-sm">${formatBytes(file.file_size_bytes)}</td>
+        <td class="text-dim text-sm">Locked</td>
+      </tr>` : '<tr><td colspan="4" class="text-dim text-sm">No files</td></tr>';
+
+      document.getElementById('add-file-btn').style.display = 'none';
+      document.getElementById('create-share-btn').style.display = 'none';
+      const reanalyzeBtn = document.querySelector('#doc-actions button[onclick="openReanalyzeModal()"]');
+      if (reanalyzeBtn) reanalyzeBtn.disabled = true;
+
+      const unlockBtn = document.getElementById('unlock-btn');
+      unlockBtn.addEventListener('click', async () => {
+        const passphrase = document.getElementById('unlock-passphrase').value || '';
+        const status = document.getElementById('unlock-status');
+        if (!passphrase) {
+          status.textContent = 'Passphrase required';
+          return;
+        }
+        unlockBtn.disabled = true;
+        status.textContent = 'Decrypting locally...';
+        try {
+          const unlocked = await decryptEncryptedDocumentWithPassphrase(doc, passphrase);
+          status.textContent = 'Unlocked';
+          renderUnlockedFilePreview(unlocked);
+          tbody.innerHTML = `<tr>
+            <td>${esc(unlocked.name)}</td>
+            <td class="text-dim text-sm">original</td>
+            <td class="text-dim text-sm">${formatBytes(unlocked.blob.size)}</td>
+            <td class="flex gap-1"><button class="btn btn-sm btn-primary" id="preview-unlocked-btn">View</button><button class="btn btn-sm" id="download-unlocked-btn">Download</button></td>
+          </tr>`;
+          document.getElementById('preview-unlocked-btn').addEventListener('click', () => renderUnlockedFilePreview(unlocked));
+          document.getElementById('download-unlocked-btn').addEventListener('click', () => {
+            const a = document.createElement('a');
+            a.href = unlocked.objectUrl;
+            a.download = unlocked.name;
+            a.click();
+          });
+        } catch {
+          status.textContent = 'Unlock failed. Check passphrase and try again.';
+        } finally {
+          unlockBtn.disabled = false;
+        }
+      });
+    }
+
+    function renderUnlockedFilePreview(unlocked) {
+      const preview = document.getElementById('file-preview');
+      if ((unlocked.mime || '').startsWith('image/')) {
+        preview.innerHTML = `<div class="doc-preview-wrap fit-width"><img src="${unlocked.objectUrl}" class="doc-preview-img"></div>`;
+      } else if (unlocked.mime === 'application/pdf') {
+        preview.innerHTML = `<iframe src="${unlocked.objectUrl}" class="doc-preview-frame"></iframe>`;
+      } else {
+        preview.innerHTML = `<div class="flex-center" style="padding:2rem;"><a class="btn btn-primary" href="${unlocked.objectUrl}" download="${esc(unlocked.name)}">Download ${esc(unlocked.name)}</a></div>`;
+      }
+    }
 
     async function loadDocument() {
       try {
@@ -289,6 +436,8 @@
           <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>
         `;
 
+        const encryptedDoc = isEncryptedDoc(doc);
+
         // File preview
         const files = doc.files || [];
         const isMobile = window.innerWidth <= 768;
@@ -299,7 +448,7 @@
           ? (originalImg || thumbnail || pdfFile || files.find(f => f.file_type === 'original'))
           : (pdfFile || files.find(f => f.file_type === 'original'));
         const preview = document.getElementById('file-preview');
-        if (previewFile) {
+        if (!encryptedDoc && previewFile) {
           if (!isMobile && previewFile.mime_type === 'application/pdf') {
             preview.innerHTML = `<iframe src="api/documents/${docId}/files/${previewFile.id}/download" class="doc-preview-frame"></iframe>`;
           } else if (previewFile.mime_type.startsWith('image/') || (isMobile && thumbnail)) {
@@ -336,7 +485,7 @@
         // Files table
         const previewableFiles = files.filter(f => f.file_type !== 'thumbnail');
         const tbody = document.querySelector('#files-table tbody');
-        tbody.innerHTML = previewableFiles.map(f => {
+        tbody.innerHTML = !encryptedDoc ? previewableFiles.map(f => {
           const canPreview = f.mime_type === 'application/pdf' || f.mime_type.startsWith('image/');
           const isActive = previewFile && previewFile.id === f.id;
           return `<tr>
@@ -348,9 +497,9 @@
               <a href="api/documents/${docId}/files/${f.id}/download" class="btn btn-sm" target="_blank">Download</a>
             </td>
           </tr>`;
-        }).join('');
+        }).join('') : '';
 
-        document.getElementById('add-file-btn').style.display = 'inline-flex';
+        document.getElementById('add-file-btn').style.display = encryptedDoc ? 'none' : 'inline-flex';
 
         // Description
         if (doc.description) {
@@ -386,9 +535,18 @@
 
         // Share links
         document.getElementById('share-card').style.display = 'block';
-        loadShares();
+        if (encryptedDoc) {
+          document.getElementById('shares-list').innerHTML = '<span class="text-dim text-sm">Share links are unavailable for encrypted documents in v1.</span>';
+          document.getElementById('create-share-btn').style.display = 'none';
+        } else {
+          document.getElementById('create-share-btn').style.display = 'inline-flex';
+          loadShares();
+        }
         document.getElementById('links-card').style.display = 'block';
         loadLinks();
+        if (encryptedDoc) {
+          renderEncryptedLockedState(doc);
+        }
 
       } catch (err) {
         document.getElementById('doc-title').textContent = 'Document not found';
@@ -575,6 +733,10 @@
     }
 
     function openReanalyzeModal() {
+      if (isEncryptedDoc(currentDoc)) {
+        toast('MagicIndex re-analysis is unavailable for encrypted documents', 'error');
+        return;
+      }
       document.getElementById('reanalyze-hint').value = currentDoc?.metadata?.magicindex?.user_hint || '';
       document.getElementById('reanalyze-modal').classList.remove('hidden');
     }
