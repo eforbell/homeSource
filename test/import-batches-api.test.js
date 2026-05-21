@@ -145,3 +145,18 @@ describe('multi-page scan upload', () => {
     assert.ok(originalPdf);
   });
 });
+
+describe('URL import encryption guard', () => {
+  it('rejects encrypted mode for URL imports', async () => {
+    const res = await authedPost('api/import/url', parentCookie, {
+      url: 'https://example.com/test.pdf',
+      title: 'Should Fail',
+      document_type: 'other',
+      encryption_mode: 'passphrase',
+      encryption_metadata: { version: 1, mode: 'passphrase' }
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /not supported for URL import/i);
+  });
+});
