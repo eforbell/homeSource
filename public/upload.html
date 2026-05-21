@@ -207,8 +207,26 @@
       </div>
       <div class="form-group">
         <label class="form-label">MagicIndex</label>
-        <label style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
+        <label id="magicindex-label" style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
         <div class="form-hint" id="magicindex-hint">Loading MagicIndex config...</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Encryption</label>
+        <label style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="encrypt-enabled"> <span>Encrypt this document before upload</span></label>
+        <div class="form-hint">Encrypted documents are locked server-side. MagicIndex, shares, and server previews are disabled for encrypted docs.</div>
+      </div>
+      <div id="encrypt-fields" class="form-group" style="display:none;">
+        <label class="form-label">Passphrase</label>
+        <input type="password" id="encrypt-passphrase" class="form-input" placeholder="Strong passphrase">
+        <label class="form-label mt-1">Confirm passphrase</label>
+        <input type="password" id="encrypt-passphrase-confirm" class="form-input" placeholder="Re-enter passphrase">
+        <label class="form-label mt-1">Encryption Scheme</label>
+        <select id="encrypt-kdf-scheme" class="form-select">
+          <option value="pbkdf2" selected>PBKDF2 (Compatible default)</option>
+          <option value="argon2id">Argon2id (Higher security, slower)</option>
+        </select>
+        <div class="form-hint" id="encrypt-kdf-hint">PBKDF2 is widely compatible and faster. Argon2id is more resistant to brute-force attacks but uses more browser memory and time.</div>
+        <div class="form-hint">No recovery in this version. If you lose the passphrase, this file cannot be decrypted.</div>
       </div>
 
       <button id="submit-btn" class="btn btn-primary" style="width:100%; margin-top:0.5rem;">Save Document</button>
@@ -220,6 +238,7 @@
 
   <script src="api.js"></script>
   <script src="nav.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js" integrity="sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi" crossorigin="anonymous"></script>
   <script>
     'use strict';
 
@@ -227,6 +246,8 @@
     let activeTab = 'scan';
     let scanBlob = null;
     let scannedPages = [];
+    const PBKDF2_ITERATIONS = 600000;
+    const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
     async function loadMagicIndexConfig() {
       try {
@@ -251,6 +272,37 @@
         activeTab = tab.dataset.tab;
       });
     });
+
+    document.getElementById('encrypt-enabled').addEventListener('change', () => {
+      const enabled = document.getElementById('encrypt-enabled').checked;
+      document.getElementById('encrypt-fields').style.display = enabled ? 'block' : 'none';
+      const magicIndexCheckbox = document.getElementById('magicindex-enabled');
+      const magicIndexLabel = document.getElementById('magicindex-label');
+      magicIndexCheckbox.disabled = enabled;
+      magicIndexLabel.style.opacity = enabled ? '0.65' : '1';
+      if (enabled) {
+        magicIndexCheckbox.checked = false;
+      }
+    });
+
+    (function configureKdfOptions() {
+      const select = document.getElementById('encrypt-kdf-scheme');
+      const hint = document.getElementById('encrypt-kdf-hint');
+      const argon2Available = !!(window.argon2 && typeof window.argon2.hash === 'function');
+      if (!argon2Available) {
+        const argon2Option = select.querySelector('option[value="argon2id"]');
+        if (argon2Option) argon2Option.disabled = true;
+        select.value = 'pbkdf2';
+        hint.textContent = 'Argon2id is unavailable in this browser/session; PBKDF2 will be used.';
+      }
+      select.addEventListener('change', () => {
+        if (select.value === 'argon2id') {
+          hint.textContent = 'Argon2id selected: stronger brute-force resistance, higher CPU/memory cost.';
+        } else {
+          hint.textContent = 'PBKDF2 selected: broad compatibility and faster unlock/encrypt.';
+        }
+      });
+    })();
 
     // ── Client-side image compression ────────────────────────
 
@@ -322,6 +374,128 @@
       if (!document.getElementById('meta-title').value) {
         document.getElementById('meta-title').value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
       }
+    }
+
+    function toBase64(bytes) {
+      const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < arr.length; i += chunk) {
+        binary += String.fromCharCode(...arr.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    function fromUtf8(text) {
+      return new TextEncoder().encode(text);
+    }
+
+    async function derivePbkdf2Key(passphrase, saltBytes) {
+      const passKey = await crypto.subtle.importKey(
+        'raw',
+        fromUtf8(passphrase),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+      );
+      return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+        passKey,
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+    }
+
+    async function deriveArgon2idKey(passphrase, saltBytes) {
+      if (!window.argon2 || typeof window.argon2.hash !== 'function') {
+        throw new Error('Argon2id is unavailable in this browser');
+      }
+      const result = await window.argon2.hash({
+        pass: passphrase,
+        salt: saltBytes,
+        time: ARGON2ID_PARAMS.iterations,
+        mem: ARGON2ID_PARAMS.memory_kib,
+        parallelism: ARGON2ID_PARAMS.parallelism,
+        hashLen: ARGON2ID_PARAMS.hash_len,
+        type: window.argon2.ArgonType.Argon2id
+      });
+      const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
+      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    }
+
+    async function encryptSelectedFileWithPassphrase(file, passphrase) {
+      const plaintext = new Uint8Array(await file.arrayBuffer());
+
+      const contentKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      const contentIv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertextBuffer = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: contentIv, tagLength: 128 },
+        contentKey,
+        plaintext
+      );
+
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const wrapIv = crypto.getRandomValues(new Uint8Array(12));
+      const kdfScheme = document.getElementById('encrypt-kdf-scheme').value === 'argon2id' ? 'argon2id' : 'pbkdf2';
+      const wrapKey = kdfScheme === 'argon2id'
+        ? await deriveArgon2idKey(passphrase, salt)
+        : await derivePbkdf2Key(passphrase, salt);
+      const rawContentKey = new Uint8Array(await crypto.subtle.exportKey('raw', contentKey));
+      const wrappedDek = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: wrapIv, tagLength: 128 },
+        wrapKey,
+        rawContentKey
+      );
+
+      const metaIv = crypto.getRandomValues(new Uint8Array(12));
+      const encryptedMeta = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: metaIv, tagLength: 128 },
+        contentKey,
+        fromUtf8(JSON.stringify({ original_filename: file.name, mime_type: file.type || 'application/octet-stream' }))
+      );
+
+      const encryptedFile = new File(
+        [ciphertextBuffer],
+        `${crypto.randomUUID()}.enc`,
+        { type: file.type || 'application/pdf' }
+      );
+
+      return {
+        file: encryptedFile,
+        metadata: {
+          version: 1,
+          mode: 'passphrase',
+          policy: {
+            plaintext_metadata: 'minimal',
+            server_plaintext_processing: false
+          },
+          files: {
+            upload: {
+              cipher: 'aes-256-gcm',
+              iv_b64: toBase64(contentIv),
+              tag_length_bits: 128,
+              wrapped_dek: {
+                kind: kdfScheme === 'argon2id' ? 'passphrase_argon2id' : 'passphrase_pbkdf2',
+                salt_b64: toBase64(salt),
+                ...(kdfScheme === 'argon2id'
+                  ? { argon2id: { ...ARGON2ID_PARAMS } }
+                  : { pbkdf2: { iterations: PBKDF2_ITERATIONS, hash: 'SHA-256', derived_bits: 256 } }),
+                wrap_iv_b64: toBase64(wrapIv),
+                wrapped_dek_b64: toBase64(new Uint8Array(wrappedDek))
+              },
+              encrypted_file_meta: {
+                iv_b64: toBase64(metaIv),
+                payload_b64: toBase64(new Uint8Array(encryptedMeta))
+              }
+            }
+          }
+        }
+      };
     }
 
     // ── Scanner ───────────────────────────────────────────────
@@ -1220,6 +1394,32 @@
       status.style.color = 'var(--text-dim)';
       const magicindexEnabled = document.getElementById('magicindex-enabled').checked;
       const phaseTimer = startProgressPhases(status, magicindexEnabled);
+      const encryptEnabled = document.getElementById('encrypt-enabled').checked;
+      const passphrase = document.getElementById('encrypt-passphrase').value;
+      const passphraseConfirm = document.getElementById('encrypt-passphrase-confirm').value;
+      if (encryptEnabled) {
+        if (activeTab === 'url') {
+          stopProgressPhases(phaseTimer);
+          status.style.display = 'none';
+          btn.disabled = false;
+          toast('Encrypted mode is not available for URL import yet', 'error');
+          return;
+        }
+        if (!passphrase || passphrase.length < 8) {
+          stopProgressPhases(phaseTimer);
+          status.style.display = 'none';
+          btn.disabled = false;
+          toast('Use a passphrase with at least 8 characters', 'error');
+          return;
+        }
+        if (passphrase !== passphraseConfirm) {
+          stopProgressPhases(phaseTimer);
+          status.style.display = 'none';
+          btn.disabled = false;
+          toast('Passphrase confirmation does not match', 'error');
+          return;
+        }
+      }
 
       const ownerIds = [...document.querySelectorAll('.owner-cb:checked')].map(cb => Number(cb.value));
 
@@ -1230,9 +1430,10 @@
         issued_date: document.getElementById('meta-issued').value || undefined,
         expiry_date: document.getElementById('meta-expiry').value || undefined,
         owner_ids: ownerIds.length ? ownerIds : undefined,
-        magicindex_enabled: magicindexEnabled,
+        magicindex_enabled: encryptEnabled ? false : magicindexEnabled,
         source_type: activeTab === 'scan' ? 'scan' : activeTab === 'url' ? 'url_import' : 'upload'
       };
+      if (encryptEnabled) metadata.encryption_mode = 'passphrase';
       if (activeTab === 'scan') {
         metadata.extra_metadata = {
           scan_filter: document.getElementById('scan-document-filter').checked ? 'document' : 'none'
@@ -1259,6 +1460,7 @@
               }
             }
             if (scannedPages.length > 1) {
+              if (encryptEnabled) throw new Error('Encrypted mode is not available for multi-page scan uploads yet');
               status.textContent = `Uploading ${scannedPages.length} scan pages...`;
               const doc = await API.uploadScanPages('api/documents/scan-multi', scannedPages.map((p) => p.blob), metadata);
               stopProgressPhases(phaseTimer);
@@ -1273,8 +1475,15 @@
             status.textContent = 'Compressing...';
             selectedFile = await compressImage(selectedFile);
           }
-          status.textContent = `Uploading ${formatBytes(selectedFile.size)}...`;
-          const doc = await API.upload('api/documents', selectedFile, metadata);
+          let uploadFile = selectedFile;
+          if (encryptEnabled) {
+            status.textContent = 'Encrypting locally...';
+            const encrypted = await encryptSelectedFileWithPassphrase(selectedFile, passphrase);
+            uploadFile = encrypted.file;
+            metadata.encryption_metadata = encrypted.metadata;
+          }
+          status.textContent = `Uploading ${formatBytes(uploadFile.size)}...`;
+          const doc = await API.upload('api/documents', uploadFile, metadata);
           stopProgressPhases(phaseTimer);
           toast('Document saved!', 'success');
           location.href = `document.html?id=${doc.id}`;

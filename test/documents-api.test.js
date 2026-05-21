@@ -2,7 +2,7 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, createTestDocument, getPool } = require('./helpers');
+const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, authedFetch, createTestDocument, getPool } = require('./helpers');
 const { saveFileRecord } = require('../lib/files');
 
 let parent, kid, parentCookie, kidCookie;
@@ -83,6 +83,17 @@ describe('document CRUD', () => {
     assert.equal(doc.description, 'Updated description');
   });
 
+  it('blocks mutation of encryption fields through generic update endpoint', async () => {
+    const res = await authedPut(`api/documents/${docId}`, parentCookie, {
+      encryption_mode: 'plaintext',
+      is_encrypted: false,
+      encryption_metadata: {}
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /immutable via this endpoint/i);
+  });
+
   it('returns 404 for non-existent document', async () => {
     const res = await authedGet('api/documents/99999', parentCookie);
     assert.equal(res.status, 404);
@@ -107,6 +118,56 @@ describe('document CRUD', () => {
     const listData = await listRes.json();
     const found = listData.documents.find(d => d.id === docId);
     assert.equal(found, undefined, 'archived doc should not appear in active list');
+  });
+});
+
+describe('encrypted document upload flags', () => {
+  it('persists encryption mode and metadata from upload', async () => {
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n% encrypted test\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'encrypted-test.pdf');
+    form.append('metadata', JSON.stringify({
+      title: 'Encrypted Upload',
+      document_type: 'other',
+      encryption_mode: 'passphrase',
+      encryption_metadata: { version: 1, mode: 'passphrase', files: { upload: { cipher: 'aes-256-gcm' } } }
+    }));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 201);
+    const created = await res.json();
+
+    const detailRes = await authedGet(`api/documents/${created.id}`, parentCookie);
+    assert.equal(detailRes.status, 200);
+    const detail = await detailRes.json();
+    assert.equal(detail.is_encrypted, true);
+    assert.equal(detail.encryption_mode, 'passphrase');
+    assert.equal(detail.encryption_metadata.mode, 'passphrase');
+    assert.equal(detail.encryption_key_id, null);
+  });
+
+  it('blocks adding files to encrypted documents', async () => {
+    const encrypted = await createTestDocument(parent.id, {
+      title: 'Encrypted File Add Block',
+      is_encrypted: true,
+      encryption_mode: 'passphrase',
+      encryption_metadata: { version: 1, mode: 'passphrase' }
+    });
+
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'extra.pdf');
+
+    const res = await authedFetch(`api/documents/${encrypted.id}/files`, parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.match(data.error, /unavailable for encrypted documents/i);
   });
 });
 
@@ -172,6 +233,7 @@ describe('document owners', () => {
 
 describe('MagicIndex re-analysis', () => {
   let doc;
+  let encryptedDoc;
 
   before(async () => {
     doc = await createTestDocument(parent.id, {
@@ -184,6 +246,13 @@ describe('MagicIndex re-analysis', () => {
       original_filename: 'test-reanalyze.pdf',
       mime_type: 'application/pdf',
       file_size_bytes: 128
+    });
+
+    encryptedDoc = await createTestDocument(parent.id, {
+      title: 'Encrypted Reanalyze Blocked',
+      is_encrypted: true,
+      encryption_mode: 'passphrase',
+      encryption_metadata: { version: 1, mode: 'passphrase' }
     });
   });
 
@@ -223,6 +292,15 @@ describe('MagicIndex re-analysis', () => {
       user_hint: 'Try again'
     });
     assert.equal(res.status, 409);
+  });
+
+  it('blocks re-analysis for encrypted documents', async () => {
+    const res = await authedPost(`api/documents/${encryptedDoc.id}/magicindex/reanalyze`, parentCookie, {
+      user_hint: 'Try'
+    });
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.match(data.error, /unavailable for encrypted documents/i);
   });
 
   after(async () => {
