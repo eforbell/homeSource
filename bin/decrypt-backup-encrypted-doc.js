@@ -4,7 +4,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const argon2 = require('argon2-browser');
 
 const { subtle } = crypto.webcrypto;
 const PBKDF2_ITERATIONS = 600000;
@@ -66,21 +65,22 @@ async function deriveWrapKey(passphrase, salt) {
 }
 
 async function deriveArgon2idWrapKey(passphrase, salt, params = {}) {
+  if (typeof crypto.argon2Sync !== 'function') {
+    throw new Error('Node runtime does not support crypto.argon2Sync (required for passphrase_argon2id backup decryption)');
+  }
   const memory_kib = Number(params.memory_kib || 65536);
   const iterations = Number(params.iterations || 3);
   const parallelism = Number(params.parallelism || 1);
   const hash_len = Number(params.hash_len || 32);
-  const result = await argon2.hash({
-    pass: passphrase,
-    salt: new Uint8Array(salt),
-    time: iterations,
-    mem: memory_kib,
+  const key = crypto.argon2Sync('argon2id', {
+    message: Buffer.from(passphrase, 'utf8'),
+    nonce: Buffer.from(salt),
+    memory: memory_kib,
+    passes: iterations,
     parallelism,
-    hashLen: hash_len,
-    type: argon2.ArgonType.Argon2id
+    tagLength: hash_len
   });
-  const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
-  return subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  return subtle.importKey('raw', key, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
 }
 
 function findDocument(documents, args) {

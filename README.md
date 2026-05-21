@@ -133,6 +133,7 @@ node bin/decrypt-backup-encrypted-doc.js \
 Notes:
 - This utility supports `passphrase` encrypted documents using both `passphrase_pbkdf2` and `passphrase_argon2id` wrapped-key schemes.
 - It uses the document's stored `encryption_metadata` envelope and decrypts fully offline.
+- For `passphrase_argon2id`, use a Node runtime that includes `crypto.argon2Sync` support.
 
 ## Environment Variables
 
