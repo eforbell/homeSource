@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "archiver": "^7.0.0",
+    "argon2-browser": "^1.18.0",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
     "pdf-lib": "^1.17.1",

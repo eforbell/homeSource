@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const argon2 = require('argon2-browser');
 
 const { subtle } = crypto.webcrypto;
 const PBKDF2_ITERATIONS = 600000;
@@ -64,6 +65,24 @@ async function deriveWrapKey(passphrase, salt) {
   );
 }
 
+async function deriveArgon2idWrapKey(passphrase, salt, params = {}) {
+  const memory_kib = Number(params.memory_kib || 65536);
+  const iterations = Number(params.iterations || 3);
+  const parallelism = Number(params.parallelism || 1);
+  const hash_len = Number(params.hash_len || 32);
+  const result = await argon2.hash({
+    pass: passphrase,
+    salt: new Uint8Array(salt),
+    time: iterations,
+    mem: memory_kib,
+    parallelism,
+    hashLen: hash_len,
+    type: argon2.ArgonType.Argon2id
+  });
+  const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
+  return subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+}
+
 function findDocument(documents, args) {
   if (args['doc-id']) {
     const id = Number(args['doc-id']);
@@ -118,11 +137,14 @@ async function main() {
   const wrappedDek = toBytesB64(uploadMeta.wrapped_dek.wrapped_dek_b64);
   const contentIv = toBytesB64(uploadMeta.iv_b64);
   const wrapKind = String(uploadMeta.wrapped_dek.kind || 'passphrase_pbkdf2');
-  if (wrapKind !== 'passphrase_pbkdf2') {
-    throw new Error(`Unsupported wrapped_dek.kind "${wrapKind}" in this CLI. Current CLI supports passphrase_pbkdf2 only.`);
+  let wrapKey;
+  if (wrapKind === 'passphrase_argon2id') {
+    wrapKey = await deriveArgon2idWrapKey(String(args.passphrase), salt, uploadMeta.wrapped_dek.argon2id || {});
+  } else if (wrapKind === 'passphrase_pbkdf2') {
+    wrapKey = await deriveWrapKey(String(args.passphrase), salt);
+  } else {
+    throw new Error(`Unsupported wrapped_dek.kind "${wrapKind}" in this CLI`);
   }
-
-  const wrapKey = await deriveWrapKey(String(args.passphrase), salt);
   const rawDek = await subtle.decrypt({ name: 'AES-GCM', iv: wrapIv, tagLength: 128 }, wrapKey, wrappedDek);
   const contentKey = await subtle.importKey('raw', rawDek, 'AES-GCM', false, ['decrypt']);
 
