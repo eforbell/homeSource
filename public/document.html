@@ -264,7 +264,7 @@
 
   <script src="api.js"></script>
   <script src="nav.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js" integrity="sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi" crossorigin="anonymous"></script>
   <script>
     'use strict';
 
@@ -294,10 +294,12 @@
       return cleaned || 'decrypted-file';
     }
 
-    async function derivePbkdf2Key(passphrase, salt) {
+    async function derivePbkdf2Key(passphrase, salt, params = {}) {
+      const iterations = Number(params.iterations || 600000);
+      const hash = String(params.hash || 'SHA-256');
       const passKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
       return crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 600000, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt, iterations, hash },
         passKey,
         { name: 'AES-GCM', length: 256 },
         false,
@@ -343,7 +345,7 @@
       const wrapKind = String(env.wrapped_dek.kind || 'passphrase_pbkdf2');
       const wrapKey = wrapKind === 'passphrase_argon2id'
         ? await deriveArgon2idKey(passphrase, salt, env.wrapped_dek.argon2id || {})
-        : await derivePbkdf2Key(passphrase, salt);
+        : await derivePbkdf2Key(passphrase, salt, env.wrapped_dek.pbkdf2 || {});
       const rawDek = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapIv, tagLength: 128 }, wrapKey, wrappedDek);
       const contentKey = await crypto.subtle.importKey('raw', rawDek, { name: 'AES-GCM' }, false, ['decrypt']);
 

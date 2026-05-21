@@ -33,6 +33,13 @@ describe('normalizeEncryptionInput', () => {
       /must match/
     );
   });
+
+  it('rejects encrypted mode without metadata version 1', () => {
+    assert.throws(
+      () => normalizeEncryptionInput({ encryption_mode: 'passphrase', encryption_metadata: { mode: 'passphrase' } }),
+      /version = 1 is required/
+    );
+  });
 });
 
 describe('isEncryptedDocument', () => {

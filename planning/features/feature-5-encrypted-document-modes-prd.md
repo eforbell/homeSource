@@ -95,7 +95,7 @@ Result: encrypted docs store only encrypted file entries intended for direct cli
       "wrapped_dek": {
         "kind": "passphrase_argon2id",
         "salt_b64": "...",
-        "argon2": {
+        "argon2id": {
           "memory_kib": 65536,
           "iterations": 3,
           "parallelism": 1,

@@ -420,6 +420,9 @@ app.post('/api/documents/scan-multi', requireAuth, async (req, res) => {
 app.put('/api/documents/:id', requireAuth, async (req, res) => {
   try {
     if (req.member.role === 'kid') return res.status(403).json({ error: 'Parent access required' });
+    const forbidden = ['is_encrypted', 'encryption_mode', 'encryption_metadata', 'encryption_key_id'];
+    const found = forbidden.filter((k) => req.body && Object.prototype.hasOwnProperty.call(req.body, k));
+    if (found.length) return res.status(400).json({ error: `Encryption fields are immutable via this endpoint: ${found.join(', ')}` });
     const doc = await updateDocument(req.params.id, req.body);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     await audit.log('document.updated', 'document', doc.id, req.member.id, { fields: Object.keys(req.body) });

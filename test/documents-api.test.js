@@ -83,6 +83,17 @@ describe('document CRUD', () => {
     assert.equal(doc.description, 'Updated description');
   });
 
+  it('blocks mutation of encryption fields through generic update endpoint', async () => {
+    const res = await authedPut(`api/documents/${docId}`, parentCookie, {
+      encryption_mode: 'plaintext',
+      is_encrypted: false,
+      encryption_metadata: {}
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /immutable via this endpoint/i);
+  });
+
   it('returns 404 for non-existent document', async () => {
     const res = await authedGet('api/documents/99999', parentCookie);
     assert.equal(res.status, 404);
