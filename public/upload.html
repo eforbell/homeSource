@@ -207,7 +207,7 @@
       </div>
       <div class="form-group">
         <label class="form-label">MagicIndex</label>
-        <label style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
+        <label id="magicindex-label" style="display:flex; gap:.5rem; align-items:center;"><input type="checkbox" id="magicindex-enabled"> <span>Analyze and auto-fill high-confidence metadata</span></label>
         <div class="form-hint" id="magicindex-hint">Loading MagicIndex config...</div>
       </div>
       <div class="form-group">
@@ -268,8 +268,12 @@
     document.getElementById('encrypt-enabled').addEventListener('change', () => {
       const enabled = document.getElementById('encrypt-enabled').checked;
       document.getElementById('encrypt-fields').style.display = enabled ? 'block' : 'none';
+      const magicIndexCheckbox = document.getElementById('magicindex-enabled');
+      const magicIndexLabel = document.getElementById('magicindex-label');
+      magicIndexCheckbox.disabled = enabled;
+      magicIndexLabel.style.opacity = enabled ? '0.65' : '1';
       if (enabled) {
-        document.getElementById('magicindex-enabled').checked = false;
+        magicIndexCheckbox.checked = false;
       }
     });
 
@@ -411,7 +415,7 @@
       const encryptedFile = new File(
         [ciphertextBuffer],
         `${crypto.randomUUID()}.enc`,
-        { type: 'application/octet-stream' }
+        { type: file.type || 'application/pdf' }
       );
 
       return {
