@@ -117,6 +117,10 @@ async function main() {
   const wrapIv = toBytesB64(uploadMeta.wrapped_dek.wrap_iv_b64);
   const wrappedDek = toBytesB64(uploadMeta.wrapped_dek.wrapped_dek_b64);
   const contentIv = toBytesB64(uploadMeta.iv_b64);
+  const wrapKind = String(uploadMeta.wrapped_dek.kind || 'passphrase_pbkdf2');
+  if (wrapKind !== 'passphrase_pbkdf2') {
+    throw new Error(`Unsupported wrapped_dek.kind "${wrapKind}" in this CLI. Current CLI supports passphrase_pbkdf2 only.`);
+  }
 
   const wrapKey = await deriveWrapKey(String(args.passphrase), salt);
   const rawDek = await subtle.decrypt({ name: 'AES-GCM', iv: wrapIv, tagLength: 128 }, wrapKey, wrappedDek);

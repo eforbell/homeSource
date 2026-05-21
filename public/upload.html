@@ -220,6 +220,12 @@
         <input type="password" id="encrypt-passphrase" class="form-input" placeholder="Strong passphrase">
         <label class="form-label mt-1">Confirm passphrase</label>
         <input type="password" id="encrypt-passphrase-confirm" class="form-input" placeholder="Re-enter passphrase">
+        <label class="form-label mt-1">Encryption Scheme</label>
+        <select id="encrypt-kdf-scheme" class="form-select">
+          <option value="pbkdf2" selected>PBKDF2 (Compatible default)</option>
+          <option value="argon2id">Argon2id (Higher security, slower)</option>
+        </select>
+        <div class="form-hint" id="encrypt-kdf-hint">PBKDF2 is widely compatible and faster. Argon2id is more resistant to brute-force attacks but uses more browser memory and time.</div>
         <div class="form-hint">No recovery in this version. If you lose the passphrase, this file cannot be decrypted.</div>
       </div>
 
@@ -232,6 +238,7 @@
 
   <script src="api.js"></script>
   <script src="nav.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js"></script>
   <script>
     'use strict';
 
@@ -240,6 +247,7 @@
     let scanBlob = null;
     let scannedPages = [];
     const PBKDF2_ITERATIONS = 600000;
+    const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
     async function loadMagicIndexConfig() {
       try {
@@ -276,6 +284,25 @@
         magicIndexCheckbox.checked = false;
       }
     });
+
+    (function configureKdfOptions() {
+      const select = document.getElementById('encrypt-kdf-scheme');
+      const hint = document.getElementById('encrypt-kdf-hint');
+      const argon2Available = !!(window.argon2 && typeof window.argon2.hash === 'function');
+      if (!argon2Available) {
+        const argon2Option = select.querySelector('option[value="argon2id"]');
+        if (argon2Option) argon2Option.disabled = true;
+        select.value = 'pbkdf2';
+        hint.textContent = 'Argon2id is unavailable in this browser/session; PBKDF2 will be used.';
+      }
+      select.addEventListener('change', () => {
+        if (select.value === 'argon2id') {
+          hint.textContent = 'Argon2id selected: stronger brute-force resistance, higher CPU/memory cost.';
+        } else {
+          hint.textContent = 'PBKDF2 selected: broad compatibility and faster unlock/encrypt.';
+        }
+      });
+    })();
 
     // ── Client-side image compression ────────────────────────
 
@@ -363,7 +390,7 @@
       return new TextEncoder().encode(text);
     }
 
-    async function deriveKeyFromPassphrase(passphrase, saltBytes) {
+    async function derivePbkdf2Key(passphrase, saltBytes) {
       const passKey = await crypto.subtle.importKey(
         'raw',
         fromUtf8(passphrase),
@@ -378,6 +405,23 @@
         true,
         ['encrypt', 'decrypt']
       );
+    }
+
+    async function deriveArgon2idKey(passphrase, saltBytes) {
+      if (!window.argon2 || typeof window.argon2.hash !== 'function') {
+        throw new Error('Argon2id is unavailable in this browser');
+      }
+      const result = await window.argon2.hash({
+        pass: passphrase,
+        salt: saltBytes,
+        time: ARGON2ID_PARAMS.iterations,
+        mem: ARGON2ID_PARAMS.memory_kib,
+        parallelism: ARGON2ID_PARAMS.parallelism,
+        hashLen: ARGON2ID_PARAMS.hash_len,
+        type: window.argon2.ArgonType.Argon2id
+      });
+      const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
+      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
     }
 
     async function encryptSelectedFileWithPassphrase(file, passphrase) {
@@ -397,7 +441,10 @@
 
       const salt = crypto.getRandomValues(new Uint8Array(16));
       const wrapIv = crypto.getRandomValues(new Uint8Array(12));
-      const wrapKey = await deriveKeyFromPassphrase(passphrase, salt);
+      const kdfScheme = document.getElementById('encrypt-kdf-scheme').value === 'argon2id' ? 'argon2id' : 'pbkdf2';
+      const wrapKey = kdfScheme === 'argon2id'
+        ? await deriveArgon2idKey(passphrase, salt)
+        : await derivePbkdf2Key(passphrase, salt);
       const rawContentKey = new Uint8Array(await crypto.subtle.exportKey('raw', contentKey));
       const wrappedDek = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: wrapIv, tagLength: 128 },
@@ -433,13 +480,11 @@
               iv_b64: toBase64(contentIv),
               tag_length_bits: 128,
               wrapped_dek: {
-                kind: 'passphrase_pbkdf2',
+                kind: kdfScheme === 'argon2id' ? 'passphrase_argon2id' : 'passphrase_pbkdf2',
                 salt_b64: toBase64(salt),
-                pbkdf2: {
-                  iterations: PBKDF2_ITERATIONS,
-                  hash: 'SHA-256',
-                  derived_bits: 256
-                },
+                ...(kdfScheme === 'argon2id'
+                  ? { argon2id: { ...ARGON2ID_PARAMS } }
+                  : { pbkdf2: { iterations: PBKDF2_ITERATIONS, hash: 'SHA-256', derived_bits: 256 } }),
                 wrap_iv_b64: toBase64(wrapIv),
                 wrapped_dek_b64: toBase64(new Uint8Array(wrappedDek))
               },
