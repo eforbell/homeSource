@@ -189,6 +189,7 @@
             <option value="property">Property</option>
             <option value="vehicle">Vehicle</option>
             <option value="notice">Notice</option>
+            <option value="employment">Employment</option>
             <option value="other" selected>Other</option>
           </select>
         </div>
@@ -218,6 +219,15 @@
       <div id="encrypt-fields" class="form-group" style="display:none;">
         <label class="form-label">Passphrase</label>
         <input type="password" id="encrypt-passphrase" class="form-input" placeholder="Strong passphrase">
+        <div id="passphrase-strength" style="display:none; margin-top:0.35rem;">
+          <div style="display:flex; gap:3px; height:4px;">
+            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+          </div>
+          <div id="passphrase-strength-text" class="form-hint" style="margin-top:0.2rem;"></div>
+        </div>
         <label class="form-label mt-1">Confirm passphrase</label>
         <input type="password" id="encrypt-passphrase-confirm" class="form-input" placeholder="Re-enter passphrase">
         <label class="form-label mt-1">Encryption Scheme</label>
@@ -284,6 +294,51 @@
         magicIndexCheckbox.checked = false;
       }
     });
+
+    (function configurePassphraseStrength() {
+      const COMMON_PASSPHRASES = new Set([
+        'password', 'password1', '12345678', '123456789', '1234567890',
+        'qwerty123', 'letmein12', 'welcome1', 'changeme', 'trustno1',
+        'iloveyou', 'sunshine1', 'princess1', 'football1', 'abcdefgh',
+        'abc12345', 'monkey123', 'dragon12', 'master12', 'passw0rd'
+      ]);
+      const input = document.getElementById('encrypt-passphrase');
+      const meter = document.getElementById('passphrase-strength');
+      const segments = meter.querySelectorAll('.strength-seg');
+      const label = document.getElementById('passphrase-strength-text');
+
+      function scorePassphrase(pp) {
+        if (!pp) return { score: 0, text: '' };
+        if (COMMON_PASSPHRASES.has(pp.toLowerCase())) return { score: 1, text: 'Common passphrase \u2014 easily guessed' };
+        let score = 0;
+        if (pp.length >= 8) score++;
+        if (pp.length >= 12) score++;
+        if (pp.length >= 20) score++;
+        if (/[a-z]/.test(pp) && /[A-Z]/.test(pp)) score++;
+        if (/\d/.test(pp)) score++;
+        if (/[^a-zA-Z0-9]/.test(pp)) score++;
+        const unique = new Set(pp).size;
+        if (unique < pp.length * 0.4) score = Math.max(1, score - 1);
+        if (score <= 1) return { score: 1, text: 'Weak \u2014 try a longer, more varied passphrase' };
+        if (score <= 2) return { score: 2, text: 'Fair \u2014 consider adding length or special characters' };
+        if (score <= 4) return { score: 3, text: 'Good' };
+        return { score: 4, text: 'Strong' };
+      }
+
+      const COLORS = ['', '#ef4444', '#f59e0b', '#22c55e', '#16a34a'];
+
+      input.addEventListener('input', () => {
+        const pp = input.value;
+        if (!pp) { meter.style.display = 'none'; return; }
+        meter.style.display = 'block';
+        const { score, text } = scorePassphrase(pp);
+        segments.forEach((seg, i) => {
+          seg.style.background = i < score ? COLORS[score] : 'var(--border)';
+        });
+        label.textContent = text;
+        label.style.color = COLORS[score];
+      });
+    })();
 
     (function configureKdfOptions() {
       const select = document.getElementById('encrypt-kdf-scheme');

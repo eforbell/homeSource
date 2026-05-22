@@ -65,7 +65,7 @@ CREATE TABLE documents (
   document_type TEXT NOT NULL CHECK (document_type IN (
     'warranty', 'insurance', 'certificate', 'manual',
     'receipt', 'contract', 'medical', 'legal', 'tax',
-    'identification', 'property', 'vehicle', 'notice', 'other'
+    'identification', 'property', 'vehicle', 'notice', 'employment', 'other'
   )),
   source_type TEXT NOT NULL CHECK (source_type IN (
     'scan', 'upload', 'url_import'
