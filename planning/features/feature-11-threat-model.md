@@ -357,7 +357,7 @@ wrapping and the UI for managing beneficiaries.
 ### S1: Server database stolen (disk theft, backup leak)
 - **Impact without PKI**: Metadata visible; passphrase-encrypted docs require offline brute-force of passphrase
 - **Impact with PKI**: Metadata visible; documents require member private keys (hardware-bound = infeasible; passphrase-protected = offline brute-force of member passphrase)
-- **Mitigation**: Hardware keys make this a non-issue for key extraction. Passphrase-protected member keys should use Argon2id with strong parameters.
+- **Mitigation**: Hardware keys make this a non-issue for key extraction. Passphrase-protected member keys use PBKDF2-SHA256 (600,000 iterations, OWASP recommendation) for KEK derivation in the browser. Argon2id is preferred but unavailable in native Web Crypto; adding a WASM Argon2id dependency is deferred to Phase 2 if warranted. PBKDF2 at this iteration count provides adequate offline resistance for a wrapping key protecting an already-random X25519 private key.
 
 ### S2: Vault owner dies unexpectedly
 - **Without quorum**: Beneficiaries need the owner's passphrase (may be unknown) or recovery code (may not exist)
@@ -398,7 +398,7 @@ wrapping and the UI for managing beneficiaries.
 | Key agreement for DEK wrapping | ECDH + HKDF-SHA256 → AES-KW | Standard NIST curve key agreement; AES Key Wrap for DEK |
 | Secret sharing | Shamir over GF(256) | Standard threshold scheme; well-understood math |
 | Member private key protection (hardware) | WebAuthn PRF extension | Derives symmetric key from hardware credential |
-| Member private key protection (passphrase) | Argon2id → AES-256-GCM | Consistent with existing passphrase mode |
+| Member private key protection (passphrase) | PBKDF2-SHA256 (600k iter) → AES-KW | Native Web Crypto; Argon2id WASM deferred to Phase 2 |
 | Key fingerprinting | SHA-256 of public key, displayed as hex | For out-of-band verification (D1 Option C) |
 
 ### Open crypto questions
