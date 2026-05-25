@@ -105,6 +105,16 @@
     return { wrappedDek, ephemeralPublicKey, salt };
   }
 
+  async function importMemberPublicKey(publicKeyRaw) {
+    return crypto.subtle.importKey(
+      'raw',
+      publicKeyRaw,
+      { name: 'X25519' },
+      false,
+      []
+    );
+  }
+
   async function unwrapDekAsOwner(wrappedDekBytes, ephemeralPublicKeyRaw, salt, ownerPrivateKey) {
     const ephemeralPublicKey = await crypto.subtle.importKey(
       'raw', ephemeralPublicKeyRaw, { name: 'X25519' }, false, []
@@ -281,6 +291,7 @@
     deriveKekFromPassphrase: deriveKekFromPassphrase,
     wrapPrivateKey: wrapPrivateKey,
     unwrapPrivateKey: unwrapPrivateKey,
+    importMemberPublicKey: importMemberPublicKey,
     wrapDekForOwner: wrapDekForOwner,
     unwrapDekAsOwner: unwrapDekAsOwner,
     generateRecoveryMnemonic: generateRecoveryMnemonic,

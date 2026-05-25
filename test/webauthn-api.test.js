@@ -115,6 +115,27 @@ describe('WebAuthn key registration API', () => {
     assert.equal(updated.recovery_enabled, true);
   });
 
+  it('only lets the key owner fetch wrapped key material', async () => {
+    const key = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: Buffer.from('material-key').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"def"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Material Test',
+    });
+
+    const ownerRes = await authedFetch(`api/members/${parent.id}/keys/${key.id}/material`, parentCookie);
+    assert.equal(ownerRes.status, 200);
+    const ownerData = await ownerRes.json();
+    assert.match(ownerData.encrypted_private_key, /wrapped_private_key_b64/);
+
+    const otherRes = await authedFetch(`api/members/${parent.id}/keys/${key.id}/material`, kidCookie);
+    assert.equal(otherRes.status, 403);
+  });
+
   it('allows kids to open the settings page for self-service key registration', async () => {
     const res = await fetch(url('settings.html'), {
       headers: { Cookie: kidCookie },

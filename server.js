@@ -520,6 +520,19 @@ app.post('/api/members/:id/keys/:keyId/recovery', requireAuth, async (req, res) 
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.get('/api/members/:id/keys/:keyId/material', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only read key material for yourself' });
+    }
+    const key = await pki.getMemberKeyMaterial(keyId, memberId);
+    if (!key) return res.status(404).json({ error: 'Key not found' });
+    res.json(key);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
   try {
     const memberId = Number(req.params.id);
