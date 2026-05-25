@@ -95,9 +95,9 @@ h3 { font-size: 1.1rem; }
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding: 1.5rem;
-  padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0));
+  padding-bottom: calc(1.5rem + var(--bottom-bar-h, 72px) + env(safe-area-inset-bottom, 0));
   z-index: 201;
-  max-height: min(80dvh, calc(100dvh - 0.75rem));
+  max-height: calc(100dvh - var(--bottom-bar-h, 72px) - env(safe-area-inset-bottom, 0) - 0.75rem);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
