@@ -388,7 +388,7 @@ app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
     if (req.member.id !== memberId && req.member.role !== 'parent') {
       return res.status(403).json({ error: 'Access denied' });
     }
-    const revoked = await pki.revokeMemberKey(keyId, req.member.id);
+    const revoked = await pki.revokeMemberKey(keyId, memberId, req.member.id);
     if (!revoked) return res.status(404).json({ error: 'Key not found or already revoked' });
     res.json({ ok: true, revoked });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -397,6 +397,9 @@ app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
 app.post('/api/members/:id/keys/:keyId/verify-fingerprint', requireAuth, async (req, res) => {
   try {
     const memberId = Number(req.params.id);
+    if (req.member.role === 'kid' && req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const keyId = Number(req.params.keyId);
     const key = await pki.getMemberKey(keyId, memberId);
     if (!key) return res.status(404).json({ error: 'Key not found' });

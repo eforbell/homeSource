@@ -51,6 +51,10 @@ CREATE TABLE encryption_keys (
   last_used_at TIMESTAMPTZ
 );
 
+CREATE UNIQUE INDEX idx_encryption_keys_member_fingerprint
+  ON encryption_keys (member_id, key_fingerprint)
+  WHERE key_type = 'member' AND revoked_at IS NULL;
+
 -- ── Key holders (multi-sig support, day 2) ──────────────────────────────────
 
 CREATE TABLE key_holders (

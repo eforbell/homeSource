@@ -15,3 +15,8 @@ ALTER TABLE encryption_keys
     CHECK (protection_tier IN ('hardware', 'platform', 'passphrase')),
   ADD COLUMN IF NOT EXISTS label TEXT,
   ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+
+-- Prevent duplicate keypair registration for a member
+CREATE UNIQUE INDEX IF NOT EXISTS idx_encryption_keys_member_fingerprint
+  ON encryption_keys (member_id, key_fingerprint)
+  WHERE key_type = 'member' AND revoked_at IS NULL;
