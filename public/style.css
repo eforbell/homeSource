@@ -97,6 +97,11 @@ h3 { font-size: 1.1rem; }
   padding: 1.5rem;
   padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0));
   z-index: 201;
+  max-height: min(80dvh, calc(100dvh - 0.75rem));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
 }
 .more-sheet-brand {
   display: flex; align-items: center; gap: 0.75rem;
