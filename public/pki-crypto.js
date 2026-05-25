@@ -1,6 +1,17 @@
 'use strict';
 
-(function(exports) {
+  (function(exports) {
+
+  function toBufferSource(value, label) {
+    if (value instanceof ArrayBuffer) return value;
+    if (ArrayBuffer.isView(value)) {
+      return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+    }
+    if (Array.isArray(value)) {
+      return Uint8Array.from(value).buffer;
+    }
+    throw new TypeError(`${label || 'Value'} must be a BufferSource`);
+  }
 
   // ── Key generation ──
 
@@ -27,7 +38,7 @@
   // ── PRF-based key protection ──
 
   async function deriveKekFromPrf(prfOutput) {
-    const keyMaterial = await crypto.subtle.importKey('raw', prfOutput, 'HKDF', false, ['deriveKey']);
+    const keyMaterial = await crypto.subtle.importKey('raw', toBufferSource(prfOutput, 'PRF output'), 'HKDF', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('homesource-member-kek-v1') },
       keyMaterial,
@@ -277,7 +288,8 @@
     buildPkiEnvelope: buildPkiEnvelope,
     toBase64: toBase64,
     fromBase64: fromBase64,
-    loadBip39Wordlist: loadBip39Wordlist
+    loadBip39Wordlist: loadBip39Wordlist,
+    toBufferSource: toBufferSource
   };
 
   if (typeof module !== 'undefined' && module.exports) {

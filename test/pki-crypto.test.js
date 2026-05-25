@@ -45,6 +45,13 @@ describe('PKICrypto', () => {
       assert.ok(kek);
       assert.equal(kek.algorithm.name, 'AES-KW');
     });
+
+    it('accepts array-shaped PRF output from provider implementations', async () => {
+      const prfOutput = Array.from(crypto.getRandomValues(new Uint8Array(32)));
+      const kek = await PKICrypto.deriveKekFromPrf(prfOutput);
+      assert.ok(kek);
+      assert.equal(kek.algorithm.name, 'AES-KW');
+    });
   });
 
   describe('Passphrase-based KEK derivation', () => {
