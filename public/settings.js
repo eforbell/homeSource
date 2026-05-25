@@ -534,10 +534,30 @@
       });
       if (!credential) throw new Error('WebAuthn ceremony was cancelled');
 
-      const clientExtensionResults = credential.getClientExtensionResults ? credential.getClientExtensionResults() : {};
-      const prfResult = clientExtensionResults?.prf?.results?.first;
-      if (!clientExtensionResults?.prf?.enabled || !prfResult) {
-        throw new Error('This credential did not expose the PRF extension. Choose the passphrase fallback or try a different authenticator.');
+      const registrationPayload = await API.post(`api/members/${reg.member.id}/keys/webauthn/complete`, {
+        registration_response: credentialToJSON(credential),
+        client_authenticator_attachment: credential.authenticatorAttachment || null,
+        transports: typeof credential.response?.getTransports === 'function'
+          ? credential.response.getTransports()
+          : [],
+      });
+
+      reg.message = 'Credential registered. One more touch confirms PRF support for encryption.';
+      renderRegistrationModal();
+
+      const assertionOptions = await API.post(`api/members/${reg.member.id}/keys/webauthn/assertion-options`, {
+        credential_id: registrationPayload.verification.credential_id,
+      });
+
+      const assertion = await navigator.credentials.get({
+        publicKey: toPublicKeyRequestOptions(assertionOptions.options),
+      });
+      if (!assertion) throw new Error('WebAuthn assertion was cancelled');
+
+      const assertionExtensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
+      const prfResult = assertionExtensionResults?.prf?.results?.first;
+      if (!prfResult) {
+        throw new Error('This credential did not expose the PRF extension during sign-in. Choose the passphrase fallback or try a different authenticator/browser.');
       }
 
       const keypair = await PKICrypto.generateMemberKeypair();
@@ -548,19 +568,13 @@
       reg.pending = {
         mode: 'webauthn',
         requestedMethod,
-        registrationResponse: credentialToJSON(credential),
+        credentialId: registrationPayload.verification.credential_id,
+        assertionResponse: credentialToJSON(assertion),
         publicKey: PKICrypto.toBase64(keypair.publicKeyRaw),
         encryptedPrivateKey: JSON.stringify({
           kind: 'webauthn_prf_v1',
           wrapped_private_key_b64: PKICrypto.toBase64(wrappedPrivateKey),
         }),
-        clientExtensionResults: {
-          prf: { enabled: clientExtensionResults?.prf?.enabled === true },
-        },
-        clientAuthenticatorAttachment: credential.authenticatorAttachment || null,
-        transports: typeof credential.response?.getTransports === 'function'
-          ? credential.response.getTransports()
-          : [],
         privateKey: keypair.privateKey,
         label: '',
       };
@@ -639,14 +653,11 @@
     try {
       let savedPayload;
       if (reg.pending.mode === 'webauthn') {
-        savedPayload = await API.post(`api/members/${reg.member.id}/keys/webauthn/complete`, {
-          registration_response: reg.pending.registrationResponse,
+        savedPayload = await API.post(`api/members/${reg.member.id}/keys/webauthn/finalize`, {
+          assertion_response: reg.pending.assertionResponse,
           public_key: reg.pending.publicKey,
           encrypted_private_key: reg.pending.encryptedPrivateKey,
           label,
-          client_extension_results: reg.pending.clientExtensionResults,
-          client_authenticator_attachment: reg.pending.clientAuthenticatorAttachment,
-          transports: reg.pending.transports,
         });
       } else {
         const key = await API.post(`api/members/${reg.member.id}/keys`, {
@@ -779,20 +790,55 @@
     return options;
   }
 
+  function toPublicKeyRequestOptions(optionsJSON) {
+    const options = JSON.parse(JSON.stringify(optionsJSON));
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.allowCredentials = (options.allowCredentials || []).map((credential) => ({
+      ...credential,
+      id: base64urlToBuffer(credential.id),
+    }));
+    if (options.extensions?.prf?.evalByCredential) {
+      const converted = {};
+      for (const [credentialId, value] of Object.entries(options.extensions.prf.evalByCredential)) {
+        converted[credentialId] = {};
+        if (value.first) converted[credentialId].first = base64urlToBuffer(value.first);
+        if (value.second) converted[credentialId].second = base64urlToBuffer(value.second);
+      }
+      options.extensions = {
+        ...options.extensions,
+        prf: {
+          ...options.extensions.prf,
+          evalByCredential: converted,
+        },
+      };
+    }
+    return options;
+  }
+
   function credentialToJSON(credential) {
+    const response = {
+      clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+    };
+    if ('attestationObject' in credential.response) {
+      response.attestationObject = bufferToBase64url(credential.response.attestationObject);
+      response.transports = typeof credential.response.getTransports === 'function'
+        ? credential.response.getTransports()
+        : [];
+    }
+    if ('authenticatorData' in credential.response) {
+      response.authenticatorData = bufferToBase64url(credential.response.authenticatorData);
+      response.signature = bufferToBase64url(credential.response.signature);
+      response.userHandle = credential.response.userHandle
+        ? bufferToBase64url(credential.response.userHandle)
+        : null;
+    }
     return {
       id: credential.id,
       rawId: bufferToBase64url(credential.rawId),
       type: credential.type,
       authenticatorAttachment: credential.authenticatorAttachment || null,
       clientExtensionResults: normalizeExtensionResults(credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}),
-      response: {
-        clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
-        attestationObject: bufferToBase64url(credential.response.attestationObject),
-        transports: typeof credential.response.getTransports === 'function'
-          ? credential.response.getTransports()
-          : [],
-      },
+      response,
     };
   }
 
@@ -801,6 +847,7 @@
     if (results?.prf) {
       normalized.prf = {};
       if (typeof results.prf.enabled === 'boolean') normalized.prf.enabled = results.prf.enabled;
+      if (results.prf.results?.first) normalized.prf.results = { first: bufferToBase64url(results.prf.results.first) };
     }
     return normalized;
   }

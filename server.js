@@ -446,6 +446,44 @@ app.post('/api/members/:id/keys/webauthn/complete', requireAuth, async (req, res
     const member = await getMember(memberId);
     if (!member) return res.status(404).json({ error: 'Member not found' });
     const result = await webauthn.completeMemberKeyRegistration(req, member, req.body || {});
+    await audit.log('webauthn.credential_registered', 'family_member', memberId, req.member.id, {
+      credential_id: result.verification.credential_id,
+      requested_method: result.verification.requested_method,
+      prf_enabled_on_create: result.verification.prf_enabled_on_create,
+    });
+    res.status(201).json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/webauthn/assertion-options', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only assert keys for yourself' });
+    }
+    if (!webauthn.isSecureWebAuthnContext(req)) {
+      return res.status(400).json({ error: 'WebAuthn requires HTTPS or localhost' });
+    }
+    const member = await getMember(memberId);
+    if (!member) return res.status(404).json({ error: 'Member not found' });
+    const credentialId = String(req.body?.credential_id || '').trim();
+    if (!credentialId) {
+      return res.status(400).json({ error: 'credential_id is required' });
+    }
+    const options = await webauthn.createMemberKeyAssertionOptions(req, member, credentialId);
+    res.json(options);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/webauthn/finalize', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only register keys for yourself' });
+    }
+    const member = await getMember(memberId);
+    if (!member) return res.status(404).json({ error: 'Member not found' });
+    const result = await webauthn.finalizeMemberKeyRegistration(req, member, req.body || {});
     await audit.log('key.registered', 'encryption_key', result.key.id, req.member.id, {
       protection_tier: result.key.protection_tier,
       protection_tier_verified: result.key.credential_verified === true,

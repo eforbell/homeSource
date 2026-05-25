@@ -78,6 +78,20 @@ describe('WebAuthn key registration API', () => {
     assert.match(data.error, /registration_response/i);
   });
 
+  it('requires a credential id for assertion options', async () => {
+    const res = await authedPost(`api/members/${parent.id}/keys/webauthn/assertion-options`, parentCookie, {});
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /credential_id/i);
+  });
+
+  it('requires assertion payload fields for ceremony finalization', async () => {
+    const res = await authedPost(`api/members/${parent.id}/keys/webauthn/finalize`, parentCookie, {});
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /No pending WebAuthn assertion|assertion_response/i);
+  });
+
   it('lets a member save recovery wrap for a live key', async () => {
     const key = await pki.registerMemberKey({
       memberId: parent.id,
