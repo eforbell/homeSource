@@ -41,6 +41,17 @@
       <div id="members-list"></div>
     </div>
 
+    <!-- Encryption keys -->
+    <div class="card mt-2" id="keys-card">
+      <div class="card-header">
+        <div>
+          <span class="card-title">Encryption Keys</span>
+          <div class="form-hint">Register a verified key ceremony for your account. Parents can also review household key posture.</div>
+        </div>
+      </div>
+      <div id="keys-list"></div>
+    </div>
+
     <!-- Tags management -->
     <div class="card mt-2">
       <div class="card-header">
@@ -99,7 +110,7 @@
         <input type="password" id="new-member-pass" class="form-input">
       </div>
       <div class="modal-actions">
-        <button class="btn" onclick="document.getElementById('member-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn" data-close-modal="member-modal">Cancel</button>
         <button class="btn btn-primary" id="save-member-btn">Add</button>
       </div>
     </div>
@@ -118,7 +129,7 @@
         <input type="color" id="tag-color" value="#d97706" class="form-input" style="height:40px; padding:4px;">
       </div>
       <div class="modal-actions">
-        <button class="btn" onclick="document.getElementById('tag-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn" data-close-modal="tag-modal">Cancel</button>
         <button class="btn btn-primary" id="save-tag-btn">Save</button>
       </div>
     </div>
@@ -138,9 +149,24 @@
         <select id="merge-target" class="form-select"></select>
       </div>
       <div class="modal-actions">
-        <button class="btn" onclick="document.getElementById('merge-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn" data-close-modal="merge-modal">Cancel</button>
         <button class="btn btn-primary" id="merge-btn">Merge</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Key registration modal -->
+  <div class="modal-backdrop hidden" id="key-registration-modal">
+    <div class="modal" style="max-width:640px; width:min(100%, 640px);">
+      <div class="modal-head" style="margin-bottom:1rem;">
+        <div>
+          <h2 id="key-modal-title">Register Encryption Key</h2>
+          <div class="modal-sub" id="key-modal-subtitle">Create a key that only you can use to unlock PKI-encrypted documents.</div>
+        </div>
+        <button class="modal-close" data-close-modal="key-registration-modal" aria-label="Close registration wizard">&times;</button>
+      </div>
+      <div class="modal-body" id="key-registration-body"></div>
+      <div class="modal-foot" id="key-registration-actions"></div>
     </div>
   </div>
 
@@ -159,200 +185,8 @@
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
+  <script src="pki-crypto.js"></script>
   <script src="nav.js"></script>
-  <script>
-    'use strict';
-
-    function showConfirm(title, message) {
-      return new Promise(resolve => {
-        document.getElementById('confirm-title').textContent = title;
-        document.getElementById('confirm-message').textContent = message;
-        const modal = document.getElementById('confirm-modal');
-        const okBtn = document.getElementById('confirm-ok-btn');
-        const cancelBtn = document.getElementById('confirm-cancel-btn');
-        modal.classList.remove('hidden');
-        function cleanup(result) {
-          modal.classList.add('hidden');
-          okBtn.removeEventListener('click', onOk);
-          cancelBtn.removeEventListener('click', onCancel);
-          resolve(result);
-        }
-        function onOk() { cleanup(true); }
-        function onCancel() { cleanup(false); }
-        okBtn.addEventListener('click', onOk);
-        cancelBtn.addEventListener('click', onCancel);
-      });
-    }
-
-    // Theme
-    const themeSelect = document.getElementById('theme-select');
-    themeSelect.value = window.SourceTheme?.getPreference() || 'system';
-    themeSelect.addEventListener('change', () => window.SourceTheme?.setPreference(themeSelect.value));
-
-    // Members
-    async function loadMembers() {
-      try {
-        const members = await API.get('api/members');
-        document.getElementById('members-list').innerHTML = members.map(m =>
-          `<div class="flex-between mb-1" style="padding:0.5rem 0; border-bottom:1px solid var(--border);">
-            <div class="flex gap-1" style="align-items:center;">
-              <span style="font-size:1.3rem;">${m.avatar_emoji}</span>
-              <div>
-                <strong>${esc(m.name)}</strong>
-                <span class="text-xs text-muted">${m.role}</span>
-                ${m.has_passphrase ? '<span class="text-xs" style="color:var(--good);">🔑</span>' : ''}
-              </div>
-            </div>
-          </div>`
-        ).join('');
-      } catch {}
-    }
-
-    document.getElementById('add-member-btn').addEventListener('click', () => {
-      document.getElementById('member-modal').classList.remove('hidden');
-    });
-
-    document.getElementById('save-member-btn').addEventListener('click', async () => {
-      try {
-        await API.post('api/members', {
-          name: document.getElementById('new-member-name').value,
-          role: document.getElementById('new-member-role').value,
-          avatar_emoji: document.getElementById('new-member-avatar').value,
-          passphrase: document.getElementById('new-member-pass').value || undefined
-        });
-        document.getElementById('member-modal').classList.add('hidden');
-        toast('Member added', 'success');
-        loadMembers();
-      } catch (err) { toast(err.message, 'error'); }
-    });
-
-    // Tags
-    let allTags = [];
-    let editingTagId = null;
-
-    async function loadTags() {
-      try {
-        allTags = await API.get('api/tags');
-        document.getElementById('tags-list').innerHTML = allTags.length
-          ? allTags.map(t =>
-            `<div class="flex-between mb-1" style="padding:0.4rem 0;">
-              <span class="tag" style="background:${t.color}22;color:${t.color};cursor:pointer;" onclick="editTag(${t.id})">${esc(t.name)}</span>
-              <div class="flex gap-1">
-                <span class="text-xs text-muted">${t.document_count} docs</span>
-                <button class="btn btn-sm" onclick="editTag(${t.id})" title="Edit">&#9998;</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteTag(${t.id})" title="Delete">&times;</button>
-              </div>
-            </div>`).join('')
-          : '<span class="text-dim text-sm">No tags yet</span>';
-      } catch {}
-    }
-
-    document.getElementById('add-tag-btn').addEventListener('click', () => {
-      editingTagId = null;
-      document.getElementById('tag-modal-title').textContent = 'Add Tag';
-      document.getElementById('tag-name').value = '';
-      document.getElementById('tag-color').value = '#d97706';
-      document.getElementById('tag-modal').classList.remove('hidden');
-    });
-
-    function editTag(id) {
-      const t = allTags.find(tag => tag.id === id);
-      if (!t) return;
-      editingTagId = id;
-      document.getElementById('tag-modal-title').textContent = 'Edit Tag';
-      document.getElementById('tag-name').value = t.name;
-      document.getElementById('tag-color').value = t.color;
-      document.getElementById('tag-modal').classList.remove('hidden');
-    }
-    window.editTag = editTag;
-
-    document.getElementById('save-tag-btn').addEventListener('click', async () => {
-      const name = document.getElementById('tag-name').value.trim();
-      const color = document.getElementById('tag-color').value;
-      if (!name) return toast('Name required', 'error');
-      try {
-        if (editingTagId) {
-          await API.put(`api/tags/${editingTagId}`, { name, color });
-          toast('Tag updated', 'success');
-        } else {
-          await API.post('api/tags', { name, color });
-          toast('Tag created', 'success');
-        }
-        document.getElementById('tag-modal').classList.add('hidden');
-        loadTags();
-      } catch (err) { toast(err.message, 'error'); }
-    });
-
-    async function deleteTag(id) {
-      const t = allTags.find(tag => tag.id === id);
-      if (!await showConfirm('Delete Tag', `Delete "${t ? t.name : id}"? This will unlink it from ${t ? t.document_count : '?'} documents.`)) return;
-      try {
-        await API.del(`api/tags/${id}`);
-        toast('Tag deleted', 'success');
-        loadTags();
-      } catch (err) { toast(err.message, 'error'); }
-    }
-    window.deleteTag = deleteTag;
-
-    // Merge
-    document.getElementById('merge-tags-btn').addEventListener('click', () => {
-      const sourceSelect = document.getElementById('merge-source');
-      const targetSelect = document.getElementById('merge-target');
-      const options = allTags.map(t => `<option value="${t.id}">${esc(t.name)} (${t.document_count} docs)</option>`).join('');
-      sourceSelect.innerHTML = options;
-      targetSelect.innerHTML = options;
-      if (allTags.length > 1) targetSelect.selectedIndex = 1;
-      document.getElementById('merge-modal').classList.remove('hidden');
-    });
-
-    document.getElementById('merge-btn').addEventListener('click', async () => {
-      const sourceId = Number(document.getElementById('merge-source').value);
-      const targetId = Number(document.getElementById('merge-target').value);
-      if (sourceId === targetId) return toast('Source and target must be different', 'error');
-      const source = allTags.find(t => t.id === sourceId);
-      const target = allTags.find(t => t.id === targetId);
-      if (!await showConfirm('Merge Tags', `Merge "${source?.name}" into "${target?.name}"? All documents will be reassigned and "${source?.name}" will be deleted.`)) return;
-      try {
-        await API.post(`api/tags/${targetId}/merge`, { source_id: sourceId });
-        document.getElementById('merge-modal').classList.add('hidden');
-        toast(`Merged into "${target?.name}"`, 'success');
-        loadTags();
-      } catch (err) { toast(err.message, 'error'); }
-    });
-
-    // Audit log
-    async function loadAudit() {
-      try {
-        const logs = await API.get('api/audit?limit=30');
-        document.getElementById('audit-tbody').innerHTML = logs.map(l =>
-          `<tr>
-            <td class="text-sm text-dim">${new Date(l.created_at).toLocaleString()}</td>
-            <td>${l.actor_avatar || ''} ${esc(l.actor_name || 'System')}</td>
-            <td>${l.action}</td>
-            <td class="text-sm text-dim">${l.entity_type ? `${l.entity_type} #${l.entity_id}` : ''}</td>
-          </tr>`
-        ).join('') || '<tr><td colspan="4" class="text-dim text-center">No activity yet</td></tr>';
-      } catch {}
-    }
-
-    // Logout
-    document.getElementById('logout-btn').addEventListener('click', async () => {
-      await API.post('api/auth/logout', {});
-      location.href = './login';
-    });
-
-    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-    function toast(msg, type = 'success') {
-      const el = document.createElement('div');
-      el.className = `toast toast-${type}`;
-      el.textContent = msg;
-      document.getElementById('toasts').appendChild(el);
-      setTimeout(() => el.remove(), 4000);
-    }
-
-    loadMembers();
-    loadTags();
-    loadAudit();
-  </script>
+  <script src="settings.js"></script>
 </body>
 </html>

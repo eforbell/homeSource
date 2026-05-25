@@ -24,11 +24,15 @@ const { scanDeterministicLinks } = require('./lib/scanners/magic-links-determini
 const { isEncryptedDocument } = require('./lib/encryption-mode');
 const audit = require('./lib/audit');
 const pki = require('./lib/pki');
+const webauthn = require('./lib/webauthn');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
 const DEFAULT_SOVEREIGN_FONT_SANS_CSS_URL = 'https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap';
 const DEFAULT_SOVEREIGN_FONT_MONO_CSS_URL = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap';
+
+app.disable('x-powered-by');
+app.set('trust proxy', true);
 
 function buildSovereignFontsCss() {
   const source = String(process.env.SOVEREIGN_FONT_SOURCE || 'google').trim().toLowerCase();
@@ -50,6 +54,35 @@ function buildSovereignFontsCss() {
 
 
 ensureDirs();
+
+app.use((req, res, next) => {
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Permissions-Policy', [
+    'camera=(self)',
+    'microphone=()',
+    'geolocation=()',
+    'publickey-credentials-create=(self)',
+    'publickey-credentials-get=(self)'
+  ].join(', '));
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "connect-src 'self'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "script-src 'self' 'unsafe-inline'",
+    "frame-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "media-src 'self' blob:"
+  ].join('; '));
+  next();
+});
 
 app.use((req, res, next) => {
   if (req.headers['content-type']?.startsWith('multipart/')) return next();
@@ -97,7 +130,7 @@ const HTML_PAGES = new Set([
   '/', '/index.html', '/documents.html', '/document.html', '/upload.html',
   '/import.html', '/search.html', '/backup.html', '/settings.html', '/insights.html'
 ]);
-const PARENT_ONLY_PAGES = new Set(['/settings.html', '/backup.html', '/import.html', '/insights.html']);
+const PARENT_ONLY_PAGES = new Set(['/backup.html', '/import.html', '/insights.html']);
 
 app.use(async (req, res, next) => {
   if (req.method !== 'GET') return next();
@@ -365,7 +398,8 @@ app.post('/api/members/:id/keys', requireAuth, async (req, res) => {
       credentialId: credential_id || null,
       prfEnabled: !!prf_enabled,
       protectionTier: protection_tier || 'passphrase',
-      label: label || null
+      label: label || null,
+      verificationMethod: (protection_tier || 'passphrase') === 'passphrase' ? 'passphrase' : 'manual',
     });
     await audit.log('key.registered', 'encryption_key', key.id, req.member.id, {
       protection_tier: key.protection_tier,
@@ -374,6 +408,77 @@ app.post('/api/members/:id/keys', requireAuth, async (req, res) => {
       label: key.label
     });
     res.status(201).json(key);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/webauthn/options', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only register keys for yourself' });
+    }
+    if (!webauthn.isSecureWebAuthnContext(req)) {
+      return res.status(400).json({ error: 'WebAuthn requires HTTPS or localhost' });
+    }
+    const member = await getMember(memberId);
+    if (!member) return res.status(404).json({ error: 'Member not found' });
+    const requestedMethod = req.body?.requested_method;
+    if (!['security_key', 'passkey'].includes(requestedMethod)) {
+      return res.status(400).json({ error: 'requested_method must be "security_key" or "passkey"' });
+    }
+    const existingKeys = await pki.listMemberKeys(memberId);
+    const options = await webauthn.createMemberKeyRegistrationOptions(
+      req,
+      member,
+      existingKeys.filter((key) => key.credential_id).map((key) => key.credential_id),
+      requestedMethod
+    );
+    res.json(options);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/webauthn/complete', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only register keys for yourself' });
+    }
+    const member = await getMember(memberId);
+    if (!member) return res.status(404).json({ error: 'Member not found' });
+    const result = await webauthn.completeMemberKeyRegistration(req, member, req.body || {});
+    await audit.log('key.registered', 'encryption_key', result.key.id, req.member.id, {
+      protection_tier: result.key.protection_tier,
+      protection_tier_verified: result.key.credential_verified === true,
+      prf_enabled: result.key.prf_enabled,
+      label: result.key.label,
+      verification_method: result.key.verification_method
+    });
+    res.status(201).json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/:keyId/recovery', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only save recovery data for yourself' });
+    }
+    const { recovery_wrapped_private_key, recovery_type } = req.body || {};
+    if (!recovery_wrapped_private_key) {
+      return res.status(400).json({ error: 'recovery_wrapped_private_key is required' });
+    }
+    const updated = await pki.saveRecoveryWrap(
+      keyId,
+      memberId,
+      recovery_wrapped_private_key,
+      recovery_type || 'mnemonic_bip39'
+    );
+    if (!updated) return res.status(404).json({ error: 'Key not found' });
+    await audit.log('key.recovery_enabled', 'encryption_key', keyId, req.member.id, {
+      recovery_type: recovery_type || 'mnemonic_bip39'
+    });
+    res.json(updated);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 

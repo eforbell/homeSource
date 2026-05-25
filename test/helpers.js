@@ -36,6 +36,7 @@ async function resetDatabase() {
     'magic_data',
     'processing_jobs', 'import_items', 'import_batches',
     'audit_log', 'backup_log',
+    'webauthn_challenges',
     'share_links', 'document_tags', 'document_owners', 'document_files',
     'documents', 'key_holders', 'encryption_keys',
     'tags', 'sessions', 'app_config', 'family_members'
