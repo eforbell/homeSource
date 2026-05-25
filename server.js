@@ -443,18 +443,11 @@ app.get('/api/documents/:id', requireAuth, async (req, res) => {
 
 app.get('/api/documents/:id/magicindex-status', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT id, title, description, metadata,
-         COALESCE(
-           (SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name)
-            FROM document_tags dt JOIN tags t ON dt.tag_id = t.id
-            WHERE dt.document_id = d.id), '[]'
-         ) AS tags
-       FROM documents d WHERE d.id = $1`,
-      [req.params.id]
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Document not found' });
-    const doc = rows[0];
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const mi = doc.metadata?.magicindex || null;
     res.json({
       state: mi?.state || null,
@@ -712,7 +705,14 @@ app.post('/api/documents/:id/share', requireAuth, requireParent, async (req, res
 });
 
 app.get('/api/documents/:id/shares', requireAuth, async (req, res) => {
-  try { res.json(await listShareLinks(req.params.id)); }
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(await listShareLinks(req.params.id));
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
