@@ -23,6 +23,7 @@ const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
 const { scanDeterministicLinks } = require('./lib/scanners/magic-links-deterministic');
 const { isEncryptedDocument } = require('./lib/encryption-mode');
 const audit = require('./lib/audit');
+const pki = require('./lib/pki');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -329,6 +330,80 @@ app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Member not found' });
     res.json(rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── PKI Key Management ─────────────────────────────────────────────────────
+
+app.get('/api/members/:id/keys', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    // Kids can only see their own keys
+    if (req.member.role === 'kid' && req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(await pki.listMemberKeys(memberId));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    // Members can only register keys for themselves
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only register keys for yourself' });
+    }
+    const { public_key, encrypted_private_key, algorithm, credential_id, prf_enabled, key_fingerprint, protection_tier, label } = req.body;
+    if (!public_key || !encrypted_private_key) {
+      return res.status(400).json({ error: 'public_key and encrypted_private_key are required' });
+    }
+    if (!key_fingerprint) {
+      return res.status(400).json({ error: 'key_fingerprint is required' });
+    }
+    const key = await pki.registerMemberKey({
+      memberId,
+      publicKey: public_key,
+      encryptedPrivateKey: encrypted_private_key,
+      algorithm: algorithm || 'x25519',
+      credentialId: credential_id || null,
+      prfEnabled: !!prf_enabled,
+      keyFingerprint: key_fingerprint,
+      protectionTier: protection_tier || 'passphrase',
+      label: label || null
+    });
+    await audit.log('key.registered', 'encryption_key', key.id, req.member.id, {
+      protection_tier: key.protection_tier,
+      prf_enabled: key.prf_enabled,
+      label: key.label
+    });
+    res.status(201).json(key);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    // Only the key owner or a parent can revoke
+    if (req.member.id !== memberId && req.member.role !== 'parent') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const revoked = await pki.revokeMemberKey(keyId, req.member.id);
+    if (!revoked) return res.status(404).json({ error: 'Key not found or already revoked' });
+    res.json({ ok: true, revoked });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/:keyId/verify-fingerprint', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    const key = await pki.getMemberKey(keyId, memberId);
+    if (!key) return res.status(404).json({ error: 'Key not found' });
+    const { expected_fingerprint } = req.body;
+    if (!expected_fingerprint) return res.status(400).json({ error: 'expected_fingerprint required' });
+    const match = key.key_fingerprint === expected_fingerprint;
+    res.json({ match, server_fingerprint: key.key_fingerprint });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
