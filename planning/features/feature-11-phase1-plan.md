@@ -159,7 +159,8 @@ async function deriveKekFromPrf(prfOutput)
 
 // ── Passphrase-based key protection (fallback) ──
 async function deriveKekFromPassphrase(passphrase, salt)
-  // Argon2id(passphrase, salt) → 256-bit key → import as AES-KW
+  // PBKDF2-SHA256(passphrase, salt, 600000 iterations) → 256-bit AES-KW key
+  // Phase 1 tradeoff: native Web Crypto, no WASM dep. Argon2id preferred; revisit Phase 2.
   // Returns { kek: CryptoKey, salt: Uint8Array }
 
 // ── Private key wrapping ──
@@ -640,21 +641,21 @@ the other is client-side crypto with no shared code.
 
 ## Open items before implementation starts
 
-1. **WebAuthn server library**: Need a lightweight library for WebAuthn
-   registration/authentication verification on the server side. Options:
-   - `@simplewebauthn/server` (npm) — well-maintained, TypeScript,
-     handles attestation parsing and assertion verification
-   - `fido2-lib` — lower-level, more control
-   - Evaluate and decide before Chunk 1 begins
+1. ~~**WebAuthn server library**~~: **Decided — `@simplewebauthn/server`**.
+   Actively maintained, clean API, good TypeScript types. `fido2-lib` is in
+   archive/maintenance mode. Cross-app consideration: bitcoin-accounting
+   (Python) can use `py_webauthn` which follows the same WebAuthn spec surface.
 
-2. **X25519 in Node.js for tests**: Node.js 20+ supports X25519 via
-   `crypto.subtle` (Web Crypto) and `crypto.generateKeyPairSync('x25519')`.
-   Verify test compatibility with the homeSource Node version.
+2. ~~**X25519 in Node.js for tests**~~: **Confirmed — Node v22.22.2 on prod**.
+   Full X25519 support via `crypto.subtle` and `crypto.generateKeyPairSync('x25519')`.
+   No polyfill needed for tests or runtime.
 
-3. **Ephemeral keypair vs self-ECDH**: The plan uses an ephemeral keypair
-   pattern (ECIES-like) for document wrapping. This avoids the degenerate
-   `ECDH(owner_priv, owner_pub)` case and matches standard practice.
-   Confirm this is the right approach before Chunk 2 implementation.
+3. ~~**Ephemeral keypair vs self-ECDH**~~: **Confirmed — ECIES pattern**.
+   One ephemeral keypair per encrypt, one static keypair per recipient. Provides
+   forward secrecy per-document: ephemeral private key exists only in memory
+   during encryption. Static key compromise alone cannot decrypt past documents.
 
-4. **Recovery code format**: Base32 with dashes (Crockford encoding?
-   BIP39 wordlist? Raw hex?). Decide UX before Chunk 3.
+4. ~~**Recovery code format**~~: **Decided — BIP39 mnemonic wordlist**.
+   Familiar pattern for this household (bitcoiners). Human-readable, easy to
+   write down, lower transcription error rate than hex/Base32. 12 words (128-bit
+   entropy) for recovery KEK derivation. Mnemonic → HKDF → AES-KW key.

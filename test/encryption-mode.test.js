@@ -40,6 +40,39 @@ describe('normalizeEncryptionInput', () => {
       /version = 1 is required/
     );
   });
+
+  it('normalizes pki mode with valid envelope', () => {
+    const meta = {
+      version: 1,
+      mode: 'pki',
+      files: {
+        upload: {
+          cipher: 'aes-256-gcm',
+          wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' },
+          holders: [{ member_id: 1, encryption_key_id: 1, key_fingerprint: 'abcd', role: 'owner' }]
+        }
+      }
+    };
+    const out = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: meta });
+    assert.equal(out.is_encrypted, true);
+    assert.equal(out.encryption_mode, 'pki');
+  });
+
+  it('rejects pki mode without wrapped_dek', () => {
+    const meta = { version: 1, mode: 'pki', files: { upload: { holders: [{ member_id: 1 }] } } };
+    assert.throws(
+      () => normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: meta }),
+      /PKI envelope/
+    );
+  });
+
+  it('rejects pki mode without holders', () => {
+    const meta = { version: 1, mode: 'pki', files: { upload: { wrapped_dek: { kind: 'pki_x25519' } } } };
+    assert.throws(
+      () => normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: meta }),
+      /PKI envelope/
+    );
+  });
 });
 
 describe('isEncryptedDocument', () => {

@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { pool } = require('./lib/db');
 const { hashPassphrase, verifyPassphrase, createSession, validateSession, destroySession, cleanExpiredSessions, authEnabled, parseCookie, requireAuth, requireParent } = require('./lib/auth');
-const { listDocuments, getDocument, createDocument, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount } = require('./lib/documents');
+const { listDocuments, getDocument, createDocument, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount, canMemberAccessDocument } = require('./lib/documents');
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
@@ -23,6 +23,7 @@ const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
 const { scanDeterministicLinks } = require('./lib/scanners/magic-links-deterministic');
 const { isEncryptedDocument } = require('./lib/encryption-mode');
 const audit = require('./lib/audit');
+const pki = require('./lib/pki');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -332,6 +333,80 @@ app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── PKI Key Management ─────────────────────────────────────────────────────
+
+app.get('/api/members/:id/keys', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    // Kids can only see their own keys
+    if (req.member.role === 'kid' && req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(await pki.listMemberKeys(memberId));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    // Members can only register keys for themselves
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only register keys for yourself' });
+    }
+    const { public_key, encrypted_private_key, algorithm, credential_id, prf_enabled, protection_tier, label } = req.body;
+    if (!public_key || !encrypted_private_key) {
+      return res.status(400).json({ error: 'public_key and encrypted_private_key are required' });
+    }
+    const key = await pki.registerMemberKey({
+      memberId,
+      publicKey: public_key,
+      encryptedPrivateKey: encrypted_private_key,
+      algorithm: algorithm || 'x25519',
+      credentialId: credential_id || null,
+      prfEnabled: !!prf_enabled,
+      protectionTier: protection_tier || 'passphrase',
+      label: label || null
+    });
+    await audit.log('key.registered', 'encryption_key', key.id, req.member.id, {
+      protection_tier: key.protection_tier,
+      protection_tier_verified: false,
+      prf_enabled: key.prf_enabled,
+      label: key.label
+    });
+    res.status(201).json(key);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    // Only the key owner or a parent can revoke
+    if (req.member.id !== memberId && req.member.role !== 'parent') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const revoked = await pki.revokeMemberKey(keyId, memberId, req.member.id);
+    if (!revoked) return res.status(404).json({ error: 'Key not found or already revoked' });
+    res.json({ ok: true, revoked });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/:keyId/verify-fingerprint', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    if (req.member.role === 'kid' && req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const keyId = Number(req.params.keyId);
+    const key = await pki.getMemberKey(keyId, memberId);
+    if (!key) return res.status(404).json({ error: 'Key not found' });
+    const { expected_fingerprint } = req.body;
+    if (!expected_fingerprint) return res.status(400).json({ error: 'expected_fingerprint required' });
+    const match = key.key_fingerprint === expected_fingerprint;
+    res.json({ match, server_fingerprint: key.key_fingerprint });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Documents CRUD ──────────────────────────────────────────────────────────
 
 app.get('/api/documents', requireAuth, async (req, res) => {
@@ -358,6 +433,9 @@ app.get('/api/documents/:id', requireAuth, async (req, res) => {
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     await audit.log('document.viewed', 'document', doc.id, req.member.id);
     res.json(doc);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -365,18 +443,11 @@ app.get('/api/documents/:id', requireAuth, async (req, res) => {
 
 app.get('/api/documents/:id/magicindex-status', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT id, title, description, metadata,
-         COALESCE(
-           (SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name)
-            FROM document_tags dt JOIN tags t ON dt.tag_id = t.id
-            WHERE dt.document_id = d.id), '[]'
-         ) AS tags
-       FROM documents d WHERE d.id = $1`,
-      [req.params.id]
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Document not found' });
-    const doc = rows[0];
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const mi = doc.metadata?.magicindex || null;
     res.json({
       state: mi?.state || null,
@@ -499,9 +570,13 @@ app.post('/api/documents/:id/files', requireAuth, async (req, res) => {
 
 app.get('/api/documents/:id/files/:fileId/download', requireAuth, async (req, res) => {
   try {
+    const docId = Number(req.params.id);
+    if (!(await canMemberAccessDocument(docId, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const { rows } = await pool.query(
       'SELECT df.* FROM document_files df WHERE df.id = $1 AND df.document_id = $2',
-      [req.params.fileId, req.params.id]
+      [req.params.fileId, docId]
     );
     const file = rows[0];
     if (!file) return res.status(404).json({ error: 'File not found' });
@@ -509,7 +584,7 @@ app.get('/api/documents/:id/files/:fileId/download', requireAuth, async (req, re
     const filePath = getFilePath(file.stored_filename);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
 
-    await audit.log('document.downloaded', 'document', Number(req.params.id), req.member.id, { file_id: file.id });
+    await audit.log('document.downloaded', 'document', docId, req.member.id, { file_id: file.id });
     res.setHeader('Content-Type', file.mime_type);
     res.setHeader('Content-Disposition', `inline; filename="${file.original_filename}"`);
     fs.createReadStream(filePath).pipe(res);
@@ -630,7 +705,14 @@ app.post('/api/documents/:id/share', requireAuth, requireParent, async (req, res
 });
 
 app.get('/api/documents/:id/shares', requireAuth, async (req, res) => {
-  try { res.json(await listShareLinks(req.params.id)); }
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(await listShareLinks(req.params.id));
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

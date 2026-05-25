@@ -35,9 +35,10 @@ async function resetDatabase() {
     'magic_links',
     'magic_data',
     'processing_jobs', 'import_items', 'import_batches',
-    'audit_log', 'backup_log', 'key_holders', 'encryption_keys',
-    'share_links', 'document_tags', 'tags', 'document_owners',
-    'document_files', 'documents', 'sessions', 'app_config', 'family_members'
+    'audit_log', 'backup_log',
+    'share_links', 'document_tags', 'document_owners', 'document_files',
+    'documents', 'key_holders', 'encryption_keys',
+    'tags', 'sessions', 'app_config', 'family_members'
   ];
   for (const table of tables) {
     await pool.query(`DELETE FROM ${table}`);

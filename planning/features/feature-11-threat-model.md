@@ -357,7 +357,7 @@ wrapping and the UI for managing beneficiaries.
 ### S1: Server database stolen (disk theft, backup leak)
 - **Impact without PKI**: Metadata visible; passphrase-encrypted docs require offline brute-force of passphrase
 - **Impact with PKI**: Metadata visible; documents require member private keys (hardware-bound = infeasible; passphrase-protected = offline brute-force of member passphrase)
-- **Mitigation**: Hardware keys make this a non-issue for key extraction. Passphrase-protected member keys should use Argon2id with strong parameters.
+- **Mitigation**: Hardware keys make this a non-issue for key extraction. Passphrase-protected member keys use PBKDF2-SHA256 (600,000 iterations) for Phase 1 because it is available in native Web Crypto and avoids introducing a WASM Argon2id dependency during the initial PKI rollout. This is a deliberate implementation tradeoff, not a claim of equivalence to Argon2id. Argon2id remains the preferred long-term choice because it provides stronger resistance to offline password guessing via memory-hardness. Revisit in Phase 2 before claiming stronger passphrase-hardening posture.
 
 ### S2: Vault owner dies unexpectedly
 - **Without quorum**: Beneficiaries need the owner's passphrase (may be unknown) or recovery code (may not exist)
@@ -398,7 +398,7 @@ wrapping and the UI for managing beneficiaries.
 | Key agreement for DEK wrapping | ECDH + HKDF-SHA256 → AES-KW | Standard NIST curve key agreement; AES Key Wrap for DEK |
 | Secret sharing | Shamir over GF(256) | Standard threshold scheme; well-understood math |
 | Member private key protection (hardware) | WebAuthn PRF extension | Derives symmetric key from hardware credential |
-| Member private key protection (passphrase) | Argon2id → AES-256-GCM | Consistent with existing passphrase mode |
+| Member private key protection (passphrase) | PBKDF2-SHA256 (600k iter) → AES-KW | Phase 1 tradeoff: native Web Crypto, no WASM dep. Argon2id preferred long-term; revisit Phase 2 |
 | Key fingerprinting | SHA-256 of public key, displayed as hex | For out-of-band verification (D1 Option C) |
 
 ### Open crypto questions

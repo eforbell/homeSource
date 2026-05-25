@@ -1,9 +1,9 @@
 'use strict';
 
-const { describe, it, before, after } = require('node:test');
+const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, authedFetch, createTestDocument, getPool } = require('./helpers');
-const { saveFileRecord } = require('../lib/files');
+const { saveFileRecord, storeFile } = require('../lib/files');
 
 let parent, kid, parentCookie, kidCookie;
 let pool;
@@ -200,6 +200,44 @@ describe('kid access control', () => {
   });
 });
 
+describe('cross-member document auth surfaces', () => {
+  let parentDoc;
+  let parentFile;
+
+  before(async () => {
+    parentDoc = await createTestDocument(parent.id, {
+      title: 'Parent Protected Doc',
+      metadata: { magicindex: { state: 'complete', queued_at: new Date().toISOString() } }
+    });
+    const stored = await storeFile(Buffer.from('%PDF-1.4\n% auth test\n%%EOF'), 'parent-protected.pdf', 'application/pdf');
+    parentFile = await saveFileRecord(parentDoc.id, stored);
+    const shareRes = await authedPost(`api/documents/${parentDoc.id}/share`, parentCookie, {
+      access_level: 'view'
+    });
+    assert.equal(shareRes.status, 201);
+  });
+
+  it('kid cannot view parent document detail', async () => {
+    const res = await authedGet(`api/documents/${parentDoc.id}`, kidCookie);
+    assert.equal(res.status, 403);
+  });
+
+  it('kid cannot view parent magicindex status', async () => {
+    const res = await authedGet(`api/documents/${parentDoc.id}/magicindex-status`, kidCookie);
+    assert.equal(res.status, 403);
+  });
+
+  it('kid cannot list parent share links', async () => {
+    const res = await authedGet(`api/documents/${parentDoc.id}/shares`, kidCookie);
+    assert.equal(res.status, 403);
+  });
+
+  it('kid cannot download parent file', async () => {
+    const res = await authedGet(`api/documents/${parentDoc.id}/files/${parentFile.id}/download`, kidCookie);
+    assert.equal(res.status, 403);
+  });
+});
+
 describe('document owners', () => {
   let doc;
 
@@ -305,5 +343,138 @@ describe('MagicIndex re-analysis', () => {
 
   after(async () => {
     await pool.query('DELETE FROM processing_jobs WHERE document_id = $1', [doc.id]);
+  });
+});
+
+describe('PKI upload validation', () => {
+  const pki = require('../lib/pki');
+  let parentKey;
+  let kidKey;
+
+  function buildPkiMetadata(holderOverrides = {}) {
+    return {
+      title: 'PKI Upload',
+      document_type: 'other',
+      encryption_mode: 'pki',
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            wrapped_dek: {
+              kind: 'pki_x25519',
+              ephemeral_public_key_b64: 'abc',
+              hkdf_salt_b64: 'def',
+              wrapped_dek_b64: 'ghi'
+            },
+            holders: [{
+              member_id: parent.id,
+              encryption_key_id: parentKey.id,
+              key_fingerprint: parentKey.key_fingerprint,
+              role: 'owner',
+              ...holderOverrides
+            }]
+          }
+        }
+      }
+    };
+  }
+
+  beforeEach(async () => {
+    const parentPublicKey = Buffer.from(`parent-key-${Date.now()}-${Math.random()}`).toString('base64');
+    const kidPublicKey = Buffer.from(`kid-key-${Date.now()}-${Math.random()}`).toString('base64');
+    parentKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: parentPublicKey,
+      encryptedPrivateKey: 'parent-enc',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Parent PKI Key'
+    });
+    kidKey = await pki.registerMemberKey({
+      memberId: kid.id,
+      publicKey: kidPublicKey,
+      encryptedPrivateKey: 'kid-enc',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Kid PKI Key'
+    });
+  });
+
+  it('persists validated encryption_key_id for PKI upload', async () => {
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n% pki test\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'pki-valid.pdf');
+    form.append('metadata', JSON.stringify(buildPkiMetadata()));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 201);
+    const created = await res.json();
+    assert.equal(created.encryption_key_id, parentKey.id);
+
+    const detailRes = await authedGet(`api/documents/${created.id}`, parentCookie);
+    assert.equal(detailRes.status, 200);
+    const detail = await detailRes.json();
+    assert.equal(detail.encryption_key_id, parentKey.id);
+  });
+
+  it('rejects PKI upload bound to another member key', async () => {
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n% pki foreign key\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'pki-foreign.pdf');
+    form.append('metadata', JSON.stringify(buildPkiMetadata({
+      encryption_key_id: kidKey.id,
+      key_fingerprint: kidKey.key_fingerprint
+    })));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /uploading member/i);
+  });
+
+  it('rejects PKI upload with mismatched fingerprint', async () => {
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n% pki bad fingerprint\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'pki-fingerprint.pdf');
+    form.append('metadata', JSON.stringify(buildPkiMetadata({
+      key_fingerprint: 'dead:beef:dead:beef:dead:beef:dead:beef:dead:beef:dead:beef:dead:beef:dead:beef'
+    })));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /fingerprint mismatch/i);
+  });
+
+  it('rejects PKI upload with revoked key', async () => {
+    await pki.revokeMemberKey(parentKey.id, parent.id, parent.id);
+
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n% pki revoked key\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'pki-revoked.pdf');
+    form.append('metadata', JSON.stringify(buildPkiMetadata()));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /revoked/i);
   });
 });

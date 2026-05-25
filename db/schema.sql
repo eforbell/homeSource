@@ -41,8 +41,19 @@ CREATE TABLE encryption_keys (
   encrypted_private_key TEXT,
   algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ
+  revoked_at TIMESTAMPTZ,
+  member_id INT REFERENCES family_members(id),
+  credential_id TEXT,
+  prf_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  key_fingerprint TEXT,
+  protection_tier TEXT NOT NULL DEFAULT 'passphrase' CHECK (protection_tier IN ('hardware', 'platform', 'passphrase')),
+  label TEXT,
+  last_used_at TIMESTAMPTZ
 );
+
+CREATE UNIQUE INDEX idx_encryption_keys_member_fingerprint
+  ON encryption_keys (member_id, key_fingerprint)
+  WHERE key_type = 'member' AND revoked_at IS NULL;
 
 -- ── Key holders (multi-sig support, day 2) ──────────────────────────────────
 
@@ -78,7 +89,7 @@ CREATE TABLE documents (
   search_vector TSVECTOR,
   encryption_key_id INT REFERENCES encryption_keys(id),
   is_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
-  encryption_mode TEXT NOT NULL DEFAULT 'plaintext' CHECK (encryption_mode IN ('plaintext', 'passphrase', 'timelock')),
+  encryption_mode TEXT NOT NULL DEFAULT 'plaintext' CHECK (encryption_mode IN ('plaintext', 'passphrase', 'timelock', 'pki')),
   encryption_metadata JSONB NOT NULL DEFAULT '{}',
   created_by INT REFERENCES family_members(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

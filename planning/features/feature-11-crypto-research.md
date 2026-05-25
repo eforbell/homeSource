@@ -270,7 +270,7 @@ const kek = await crypto.subtle.deriveKey(
 | **HKDF** | HKDF-SHA256 (native Web Crypto) | Mandatory step between ECDH output and KEK. Domain separation via `info` parameter. |
 | **Secret sharing** | `shamir-secret-sharing` (privy-io) | Only doubly-audited JS SSS library (Cure53 + Zellic). GF(2^8), zero dependencies, Apache-2.0. Pin version, vendor if needed. |
 | **Member key protection (hardware)** | WebAuthn PRF extension | Deterministic 32-byte secret derived from FIDO2 credential. Check `enabled` at create-time; fallback to passphrase when unavailable. |
-| **Member key protection (passphrase)** | Argon2id → AES-256-GCM | Consistent with existing passphrase encryption mode. Fallback for members without PRF-capable authenticators. |
+| **Member key protection (passphrase)** | PBKDF2-SHA256 (600k iter) → AES-KW | Phase 1: native Web Crypto, avoids WASM Argon2id dependency. Argon2id remains preferred long-term for stronger offline resistance; revisit Phase 2. |
 | **Document content encryption** | AES-256-GCM | Unchanged from v1. Authentication tag serves as Shamir reconstruction integrity check. |
 | **Fallback crypto library** | `@noble/curves` (if needed) | 3 professional audits, MIT, minimal deps. Only needed if native Web Crypto is insufficient for a specific operation. |
 
