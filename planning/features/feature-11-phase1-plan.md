@@ -159,7 +159,8 @@ async function deriveKekFromPrf(prfOutput)
 
 // ── Passphrase-based key protection (fallback) ──
 async function deriveKekFromPassphrase(passphrase, salt)
-  // Argon2id(passphrase, salt) → 256-bit key → import as AES-KW
+  // PBKDF2-SHA256(passphrase, salt, 600000 iterations) → 256-bit AES-KW key
+  // Phase 1 tradeoff: native Web Crypto, no WASM dep. Argon2id preferred; revisit Phase 2.
   // Returns { kek: CryptoKey, salt: Uint8Array }
 
 // ── Private key wrapping ──
