@@ -2,7 +2,7 @@
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { startServer, stopServer, resetDatabase, createMember, loginAs, authedPost, authedFetch, getPool, url } = require('./helpers');
+const { startServer, stopServer, resetDatabase, createMember, loginAs, authedPost, authedDel, authedFetch, getPool, url } = require('./helpers');
 const pki = require('../lib/pki');
 
 let pool;
@@ -168,6 +168,27 @@ describe('WebAuthn key registration API', () => {
 
     const otherRes = await authedFetch(`api/members/${parent.id}/keys/${key.id}/material`, kidCookie);
     assert.equal(otherRes.status, 403);
+  });
+
+  it('only lets the key owner revoke a key', async () => {
+    const key = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: Buffer.from('revoke-key').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"def"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Revoke Test',
+    });
+
+    const otherRes = await authedDel(`api/members/${parent.id}/keys/${key.id}`, kidCookie);
+    assert.equal(otherRes.status, 403);
+    const otherData = await otherRes.json();
+    assert.match(otherData.error, /revoke keys for yourself/i);
+
+    const ownerRes = await authedDel(`api/members/${parent.id}/keys/${key.id}`, parentCookie);
+    assert.equal(ownerRes.status, 200);
   });
 
   it('allows kids to open the settings page for self-service key registration', async () => {

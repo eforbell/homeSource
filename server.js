@@ -552,9 +552,8 @@ app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
   try {
     const memberId = Number(req.params.id);
     const keyId = Number(req.params.keyId);
-    // Only the key owner or a parent can revoke
-    if (req.member.id !== memberId && req.member.role !== 'parent') {
-      return res.status(403).json({ error: 'Access denied' });
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only revoke keys for yourself' });
     }
     const revoked = await pki.revokeMemberKey(keyId, memberId, req.member.id);
     if (!revoked) return res.status(404).json({ error: 'Key not found or already revoked' });
