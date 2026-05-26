@@ -9,6 +9,10 @@ describe('ALLOWED_MIME', () => {
     assert.ok(ALLOWED_MIME.has('application/pdf'));
   });
 
+  it('includes opaque ciphertext blobs for encrypted uploads', () => {
+    assert.ok(ALLOWED_MIME.has('application/octet-stream'));
+  });
+
   it('includes common image types', () => {
     assert.ok(ALLOWED_MIME.has('image/jpeg'));
     assert.ok(ALLOWED_MIME.has('image/png'));
