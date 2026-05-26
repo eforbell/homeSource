@@ -749,8 +749,9 @@
         return;
       }
 
+      const previouslySelectedId = pkiSelect.value;
       pkiSelect.innerHTML = memberKeys.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
-      const selected = memberKeys.find((key) => String(key.id) === String(pkiSelect.value)) || preferredPkiKey(memberKeys);
+      const selected = memberKeys.find((key) => String(key.id) === String(previouslySelectedId)) || preferredPkiKey(memberKeys);
       if (selected) pkiSelect.value = String(selected.id);
       if (!selected) {
         pkiHint.textContent = 'No usable encryption keys are currently available.';
