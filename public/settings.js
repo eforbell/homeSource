@@ -547,6 +547,7 @@
 
       const assertionOptions = await API.post(`api/members/${reg.member.id}/keys/webauthn/assertion-options`, {
         credential_id: registrationPayload.verification.credential_id,
+        prf_salt_b64: payload.prf_salt,
       });
 
       const assertion = await navigator.credentials.get({
