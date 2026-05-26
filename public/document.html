@@ -522,6 +522,10 @@
           console.error(err);
         }
       }
+      const holderDisplayName = holder
+        ? ((doc.owners || []).find((owner) => Number(owner.id) === Number(holder.member_id))?.name
+          || (holder.member_id === currentMember?.id ? 'You' : `Member #${holder.member_id}`))
+        : null;
       const requiresKeyPassphrase = !!(isPki && keyInfo?.key && (keyInfo.key.protection_tier === 'passphrase' || keyInfo.key.verification_method === 'passphrase'));
       preview.innerHTML = isPki ? `
         <div style="width:100%; max-width:460px; margin:0 auto; text-align:left; padding:1rem; box-sizing:border-box; overflow-wrap:anywhere; word-break:break-word;">
@@ -529,7 +533,7 @@
           <div style="font-weight:600; margin-bottom:0.5rem;">Encrypted Document</div>
           <div class="text-dim text-sm mb-1">Mode: <strong>pki</strong></div>
           <div class="text-dim text-sm mb-1">This document is encrypted to a registered member key. It will be unlocked locally in your browser.</div>
-          ${holder ? `<div class="text-dim text-sm mb-1"><strong>Required holder:</strong><div style="margin-top:0.15rem;">${holder.member_id === currentMember?.id ? 'You' : `Member #${holder.member_id}`}</div></div>` : ''}
+          ${holder ? `<div class="text-dim text-sm mb-1"><strong>Required holder:</strong><div style="margin-top:0.15rem;">${esc(holderDisplayName)}</div></div>` : ''}
           ${holder?.key_fingerprint ? `<div class="text-dim text-sm mb-1"><strong>Fingerprint:</strong><div style="margin-top:0.15rem; overflow-wrap:anywhere; word-break:break-word;">${esc(holder.key_fingerprint)}</div></div>` : ''}
           ${keyInfo?.key ? `<div class="text-dim text-sm mb-1"><strong>Key:</strong><div style="margin-top:0.15rem; overflow-wrap:anywhere; word-break:break-word;">${esc(keyInfo.key.label || 'Unnamed key')} · <strong>Protection:</strong> ${esc(keyInfo.key.protection_tier || 'unknown')}</div></div>` : '<div class="text-dim text-sm mb-1">Unable to load key details.</div>'}
           ${requiresKeyPassphrase ? `
