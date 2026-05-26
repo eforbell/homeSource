@@ -82,7 +82,7 @@ app.use((req, res, next) => {
     "img-src 'self' data: blob:",
     "font-src 'self' data: https://fonts.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://docs.opencv.org",
     "frame-src 'self' blob:",
     "worker-src 'self' blob:",
     "media-src 'self' blob:"

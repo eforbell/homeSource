@@ -20,7 +20,7 @@ describe('security headers', () => {
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
     assert.match(res.headers.get('content-security-policy') || '', /default-src 'self'/);
-    assert.match(res.headers.get('content-security-policy') || '', /script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https:\/\/cdn\.jsdelivr\.net/);
+    assert.match(res.headers.get('content-security-policy') || '', /script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https:\/\/cdn\.jsdelivr\.net https:\/\/docs\.opencv\.org/);
     assert.match(res.headers.get('permissions-policy') || '', /publickey-credentials-create=\(self\)/);
   });
 });
