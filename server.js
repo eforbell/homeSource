@@ -467,10 +467,25 @@ app.post('/api/members/:id/keys/webauthn/assertion-options', requireAuth, async 
     const member = await getMember(memberId);
     if (!member) return res.status(404).json({ error: 'Member not found' });
     const credentialId = String(req.body?.credential_id || '').trim();
+    const prfSaltB64 = String(req.body?.prf_salt_b64 || '').trim();
     if (!credentialId) {
       return res.status(400).json({ error: 'credential_id is required' });
     }
+    if (!prfSaltB64) {
+      return res.status(400).json({ error: 'prf_salt_b64 is required' });
+    }
     const options = await webauthn.createMemberKeyAssertionOptions(req, member, credentialId);
+    options.options.extensions = {
+      ...(options.options.extensions || {}),
+      prf: {
+        evalByCredential: {
+          [credentialId]: {
+            first: prfSaltB64,
+          },
+        },
+      },
+    };
+    options.prf_salt = prfSaltB64;
     res.json(options);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });

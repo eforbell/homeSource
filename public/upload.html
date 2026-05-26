@@ -626,10 +626,12 @@
       return payload;
     }
 
-    async function getAssertionPrfResult(memberId, credentialId, progress) {
+    async function getAssertionPrfResult(memberId, credentialId, prfSaltB64, progress) {
+      if (!prfSaltB64) throw new Error('This WebAuthn key is missing its PRF salt. Re-register the key.');
       progress?.('Requesting key assertion…');
       const payload = await API.post(`api/members/${memberId}/keys/webauthn/assertion-options`, {
-        credential_id: credentialId
+        credential_id: credentialId,
+        prf_salt_b64: prfSaltB64
       });
       console.info('[HomeSource] PKI upload: assertion options received', { credentialId });
       progress?.('Complete your security-key sign-in…');
@@ -653,7 +655,8 @@
 
     async function deriveMemberKekForUpload(key, passphrase, progress) {
       if (key.credential_verified && key.verification_method === 'webauthn' && key.credential_id) {
-        const prfResult = await getAssertionPrfResult(currentMember.id, key.credential_id, progress);
+        const wrapped = parseWrappedMemberKey(key);
+        const prfResult = await getAssertionPrfResult(currentMember.id, key.credential_id, wrapped.prf_salt_b64, progress);
         progress?.('Deriving upload key…');
         return PKICrypto.deriveKekFromPrf(prfResult);
       }

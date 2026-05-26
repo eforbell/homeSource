@@ -85,6 +85,15 @@ describe('WebAuthn key registration API', () => {
     assert.match(data.error, /credential_id/i);
   });
 
+  it('requires the stored PRF salt for assertion options', async () => {
+    const res = await authedPost(`api/members/${parent.id}/keys/webauthn/assertion-options`, parentCookie, {
+      credential_id: 'credential-123',
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /prf_salt_b64/i);
+  });
+
   it('requires assertion payload fields for ceremony finalization', async () => {
     const res = await authedPost(`api/members/${parent.id}/keys/webauthn/finalize`, parentCookie, {});
     assert.equal(res.status, 400);

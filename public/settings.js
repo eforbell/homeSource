@@ -586,6 +586,7 @@
         publicKey: PKICrypto.toBase64(keypair.publicKeyRaw),
         encryptedPrivateKey: JSON.stringify({
           kind: 'webauthn_prf_v1',
+          prf_salt_b64: assertionOptions.prf_salt,
           wrapped_private_key_b64: PKICrypto.toBase64(wrappedPrivateKey),
         }),
         privateKey: keypair.privateKey,
