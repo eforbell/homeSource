@@ -251,7 +251,6 @@
           <label class="form-label">Encryption Key</label>
           <select id="encrypt-pki-key" class="form-select"></select>
           <div id="encrypt-pki-hint" class="form-hint">Loading your registered keys…</div>
-          <div class="form-hint" style="margin-top:0.35rem; color:var(--warn);">Beta: PKI upload encryption is ready for testing. In-app key-based unlock from the document view lands next.</div>
           <div id="encrypt-pki-passphrase-wrap" style="display:none; margin-top:0.75rem;">
             <label class="form-label">Unlock Key Passphrase</label>
             <input type="password" id="encrypt-pki-passphrase" class="form-input" placeholder="Enter the passphrase you used when registering this key">
@@ -633,23 +632,14 @@
         credential_id: credentialId,
         prf_salt_b64: prfSaltB64
       });
-      console.info('[HomeSource] PKI upload: assertion options received', { credentialId });
       progress?.('Complete your security-key sign-in…');
       const assertion = await navigator.credentials.get({
         publicKey: toPublicKeyRequestOptions(payload.options)
       });
       if (!assertion) throw new Error('WebAuthn assertion was cancelled');
-      console.info('[HomeSource] PKI upload: assertion returned', {
-        credentialId,
-        authenticatorAttachment: assertion.authenticatorAttachment || null
-      });
       const extensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
       const prfResult = extensionResults?.prf?.results?.first;
       if (!prfResult) throw new Error('This key did not expose the PRF extension during sign-in');
-      console.info('[HomeSource] PKI upload: PRF result extracted', {
-        credentialId,
-        constructorName: prfResult?.constructor?.name || typeof prfResult
-      });
       return prfResult;
     }
 
@@ -682,7 +672,6 @@
         PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
         kek
       );
-      console.info('[HomeSource] PKI upload: member key unwrapped', { keyId: material.id });
       const ownerPublicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(material.public_key));
       progress?.('Generating document key…');
       const dek = await crypto.subtle.generateKey(
@@ -707,7 +696,6 @@
       );
       progress?.('Wrapping document key to your key…');
       const wrappedDek = await PKICrypto.wrapDekForOwner(dek, ownerPublicKey);
-      console.info('[HomeSource] PKI upload: document key wrapped', { keyId: material.id });
       const encryptedFile = new File(
         [ciphertextBuffer],
         `${crypto.randomUUID()}.enc`,

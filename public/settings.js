@@ -557,9 +557,6 @@
 
       const assertionExtensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
       const prfResult = assertionExtensionResults?.prf?.results?.first;
-      const prfDiagnostics = collectPrfDiagnostics(prfResult, assertionExtensionResults, assertion);
-      console.info('[HomeSource] assertion PRF diagnostics', prfDiagnostics);
-      reg.prfDiagnostics = prfDiagnostics;
       if (!prfResult) {
         throw new Error('This credential did not expose the PRF extension during sign-in. Choose the passphrase fallback or try a different authenticator/browser.');
       }
@@ -569,11 +566,6 @@
       try {
         kek = await PKICrypto.deriveKekFromPrf(prfResult);
       } catch (err) {
-        console.error('[HomeSource] PRF import failure diagnostics', {
-          ...prfDiagnostics,
-          error_name: err?.name || null,
-          error_message: err?.message || String(err),
-        });
         throw err;
       }
       const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
@@ -601,9 +593,6 @@
       reg.pending = null;
       reg.localFingerprint = null;
       renderRegistrationModal();
-      if (reg.prfDiagnostics) {
-        console.warn('[HomeSource] latest PRF diagnostics snapshot', reg.prfDiagnostics);
-      }
       toast(err.message || 'WebAuthn registration failed', 'error');
     }
   }
@@ -868,69 +857,6 @@
       if (results.prf.results?.first) normalized.prf.results = { first: bufferToBase64url(results.prf.results.first) };
     }
     return normalized;
-  }
-
-  function collectPrfDiagnostics(prfResult, extensionResults, assertion) {
-    const isArrayBuffer = prfResult instanceof ArrayBuffer;
-    const isView = ArrayBuffer.isView(prfResult);
-    let byteLength = null;
-    if (isArrayBuffer) byteLength = prfResult.byteLength;
-    else if (isView && typeof prfResult.byteLength === 'number') byteLength = prfResult.byteLength;
-    else if (prfResult && typeof prfResult === 'object' && typeof prfResult.byteLength === 'number') byteLength = prfResult.byteLength;
-
-    let preview = null;
-    try {
-      if (isArrayBuffer) {
-        preview = Array.from(new Uint8Array(prfResult).slice(0, 8));
-      } else if (isView) {
-        preview = Array.from(new Uint8Array(prfResult.buffer, prfResult.byteOffset || 0, Math.min(prfResult.byteLength || 0, 8)));
-      } else if (Array.isArray(prfResult)) {
-        preview = prfResult.slice(0, 8);
-      }
-    } catch {}
-
-    return {
-      provider_hint: guessPasskeyProvider(assertion, extensionResults),
-      constructor_name: prfResult?.constructor?.name || null,
-      typeof_value: typeof prfResult,
-      is_array_buffer: isArrayBuffer,
-      is_view: isView,
-      array_is_array: Array.isArray(prfResult),
-      byte_length: byteLength,
-      has_buffer: !!prfResult?.buffer,
-      own_keys: prfResult && typeof prfResult === 'object' ? Object.keys(prfResult).slice(0, 12) : [],
-      preview,
-      extension_results: sanitizeForLog(extensionResults),
-      authenticator_attachment: assertion?.authenticatorAttachment || null,
-      transports: typeof assertion?.response?.getTransports === 'function' ? assertion.response.getTransports() : [],
-      user_agent: navigator.userAgent,
-    };
-  }
-
-  function sanitizeForLog(value, depth = 0) {
-    if (depth > 3) return '[max-depth]';
-    if (value == null) return value;
-    if (value instanceof ArrayBuffer) return { type: 'ArrayBuffer', byteLength: value.byteLength };
-    if (ArrayBuffer.isView(value)) return { type: value.constructor?.name || 'TypedArray', byteLength: value.byteLength };
-    if (Array.isArray(value)) return value.slice(0, 6).map((entry) => sanitizeForLog(entry, depth + 1));
-    if (typeof value === 'object') {
-      const out = {};
-      for (const [key, entry] of Object.entries(value).slice(0, 20)) {
-        out[key] = sanitizeForLog(entry, depth + 1);
-      }
-      return out;
-    }
-    return value;
-  }
-
-  function guessPasskeyProvider(assertion, extensionResults) {
-    const transports = typeof assertion?.response?.getTransports === 'function' ? assertion.response.getTransports() : [];
-    const ua = navigator.userAgent || '';
-    if (ua.includes('1Password')) return '1password';
-    if (ua.includes('Mac OS X') && assertion?.authenticatorAttachment === 'platform') return 'apple-platform-or-provider';
-    if (transports.includes('hybrid')) return 'hybrid-provider';
-    if (extensionResults?.prf && !extensionResults?.prf?.results) return 'provider-without-prf-results';
-    return 'unknown';
   }
 
   function base64urlToBuffer(value) {

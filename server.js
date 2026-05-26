@@ -76,7 +76,7 @@ app.use((req, res, next) => {
     "img-src 'self' data: blob:",
     "font-src 'self' data: https://fonts.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "script-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
     "frame-src 'self' blob:",
     "worker-src 'self' blob:",
     "media-src 'self' blob:"
