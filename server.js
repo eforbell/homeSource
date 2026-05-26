@@ -612,6 +612,19 @@ app.get('/api/documents/:id', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/documents/:id/key-info', requireAuth, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const info = await pki.getDocumentKeyInfo(doc.id);
+    if (!info) return res.status(404).json({ error: 'Document key info not found' });
+    res.json(info);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/documents/:id/magicindex-status', requireAuth, async (req, res) => {
   try {
     const doc = await getDocument(req.params.id);

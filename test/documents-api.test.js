@@ -503,6 +503,13 @@ describe('PKI upload validation', () => {
     const refreshedMaterialRes = await authedGet(`api/members/${parent.id}/keys/${parentKey.id}/material`, parentCookie);
     const refreshedMaterial = await refreshedMaterialRes.json();
     assert.ok(refreshedMaterial.last_used_at);
+
+    const keyInfoRes = await authedGet(`api/documents/${created.id}/key-info`, parentCookie);
+    assert.equal(keyInfoRes.status, 200);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.encryption_mode, 'pki');
+    assert.equal(keyInfo.encryption_key_id, parentKey.id);
+    assert.equal(keyInfo.key.id, parentKey.id);
   });
 
   it('rejects PKI upload bound to another member key', async () => {
