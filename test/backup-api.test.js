@@ -317,4 +317,53 @@ describe('backup export with encrypted documents', () => {
       fs.rmSync(outPrivateKey, { recursive: true, force: true });
     }
   });
+
+  it('decrypts an encrypted backup archive and then recovers a PKI document from it', async () => {
+    const fixture = await createRealPkiFixture('PKI Encrypted Archive Fixture');
+    const exportRes = await authedPost('api/backup/export', parentCookie, {
+      encrypted: true,
+      passphrase: 'outer-backup-passphrase'
+    });
+    assert.equal(exportRes.status, 200);
+    const payload = await exportRes.json();
+    const encryptedBackupPath = path.join(process.cwd(), 'data', 'test', 'exports', payload.file);
+    assert.ok(encryptedBackupPath.endsWith('.tar.gz.enc'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-enc-'));
+    const decryptedTarPath = path.join(tmpDir, 'backup.tar.gz');
+    const extractedDir = path.join(tmpDir, 'extracted');
+    const outRecovery = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-enc-recovery-out-'));
+    try {
+      execFileSync(process.execPath, [
+        'bin/decrypt-backup-archive.js',
+        '--input', encryptedBackupPath,
+        '--output', decryptedTarPath,
+        '--passphrase', 'outer-backup-passphrase'
+      ], { cwd: process.cwd(), stdio: 'pipe' });
+      assert.equal(fs.existsSync(decryptedTarPath), true);
+
+      fs.mkdirSync(extractedDir, { recursive: true });
+      execFileSync('tar', ['-xzf', decryptedTarPath, '-C', extractedDir], { stdio: 'pipe' });
+      const rootEntry = fs.readdirSync(extractedDir)[0];
+      const backupRoot = path.join(extractedDir, rootEntry);
+      const dbPath = path.join(backupRoot, 'database.json');
+
+      execFileSync(process.execPath, [
+        'bin/decrypt-backup-encrypted-doc.js',
+        '--database', dbPath,
+        '--backup-root', backupRoot,
+        '--mode', 'pki',
+        '--recovery-code', fixture.mnemonic,
+        '--doc-id', String(fixture.doc.id),
+        '--out-dir', outRecovery
+      ], { cwd: process.cwd(), stdio: 'pipe' });
+
+      const recoveryFiles = fs.readdirSync(outRecovery);
+      assert.equal(recoveryFiles.length, 1);
+      const recovered = fs.readFileSync(path.join(outRecovery, recoveryFiles[0]));
+      assert.deepEqual(recovered, fixture.plaintext);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(outRecovery, { recursive: true, force: true });
+    }
+  });
 });
