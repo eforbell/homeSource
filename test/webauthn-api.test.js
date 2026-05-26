@@ -85,13 +85,38 @@ describe('WebAuthn key registration API', () => {
     assert.match(data.error, /credential_id/i);
   });
 
-  it('requires the stored PRF salt for assertion options', async () => {
+  it('uses the stored PRF salt for assertion options', async () => {
+    await pool.query(
+      `INSERT INTO webauthn_credentials
+         (member_id, credential_id, credential_public_key, registration_prf_salt, counter,
+          credential_device_type, credential_backed_up, credential_attachment,
+          credential_transports, requested_method)
+       VALUES ($1, $2, $3, $4, 0, 'singleDevice', false, 'cross-platform', '[]'::jsonb, 'security_key')`,
+      [parent.id, 'credential-123', 'public-key-123', 'stored-prf-salt']
+    );
     const res = await authedPost(`api/members/${parent.id}/keys/webauthn/assertion-options`, parentCookie, {
       credential_id: 'credential-123',
     });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.options.extensions.prf.evalByCredential['credential-123'].first, 'stored-prf-salt');
+  });
+
+  it('rejects assertion options for credentials missing stored PRF salt', async () => {
+    await pool.query(
+      `INSERT INTO webauthn_credentials
+         (member_id, credential_id, credential_public_key, counter,
+          credential_device_type, credential_backed_up, credential_attachment,
+          credential_transports, requested_method)
+       VALUES ($1, $2, $3, 0, 'singleDevice', false, 'cross-platform', '[]'::jsonb, 'security_key')`,
+      [parent.id, 'credential-124', 'public-key-124']
+    );
+    const res = await authedPost(`api/members/${parent.id}/keys/webauthn/assertion-options`, parentCookie, {
+      credential_id: 'credential-124',
+    });
     assert.equal(res.status, 400);
     const data = await res.json();
-    assert.match(data.error, /prf_salt_b64/i);
+    assert.match(data.error, /registration PRF salt/i);
   });
 
   it('requires assertion payload fields for ceremony finalization', async () => {

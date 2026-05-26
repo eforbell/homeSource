@@ -101,6 +101,7 @@ CREATE TABLE webauthn_credentials (
   member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
   credential_id TEXT NOT NULL UNIQUE,
   credential_public_key TEXT NOT NULL,
+  registration_prf_salt TEXT,
   counter BIGINT NOT NULL DEFAULT 0,
   credential_device_type TEXT NOT NULL CHECK (credential_device_type IN ('singleDevice', 'multiDevice')),
   credential_backed_up BOOLEAN NOT NULL DEFAULT FALSE,

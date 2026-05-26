@@ -335,6 +335,9 @@
       state.registration.pending.privateKey = null;
       state.registration.pending.prfOutput = null;
     }
+    if (state.registration) {
+      state.registration.passphrase = '';
+    }
   }
 
   function renderRegistrationModal() {
@@ -547,11 +550,10 @@
 
       const assertionOptions = await API.post(`api/members/${reg.member.id}/keys/webauthn/assertion-options`, {
         credential_id: registrationPayload.verification.credential_id,
-        prf_salt_b64: payload.prf_salt,
       });
 
       const assertion = await navigator.credentials.get({
-        publicKey: toPublicKeyRequestOptions(assertionOptions.options),
+        publicKey: PKICrypto.toPublicKeyRequestOptions(assertionOptions.options),
       });
       if (!assertion) throw new Error('WebAuthn assertion was cancelled');
 
@@ -776,11 +778,11 @@
 
   function toPublicKeyCreationOptions(optionsJSON) {
     const options = JSON.parse(JSON.stringify(optionsJSON));
-    options.challenge = base64urlToBuffer(options.challenge);
-    options.user.id = base64urlToBuffer(options.user.id);
+    options.challenge = PKICrypto.base64urlToBuffer(options.challenge);
+    options.user.id = PKICrypto.base64urlToBuffer(options.user.id);
     options.excludeCredentials = (options.excludeCredentials || []).map((credential) => ({
       ...credential,
-      id: base64urlToBuffer(credential.id),
+      id: PKICrypto.base64urlToBuffer(credential.id),
     }));
     if (options.extensions?.prf?.eval?.first) {
       options.extensions = {
@@ -789,33 +791,8 @@
           ...options.extensions.prf,
           eval: {
             ...options.extensions.prf.eval,
-            first: base64urlToBuffer(options.extensions.prf.eval.first),
+            first: PKICrypto.base64urlToBuffer(options.extensions.prf.eval.first),
           },
-        },
-      };
-    }
-    return options;
-  }
-
-  function toPublicKeyRequestOptions(optionsJSON) {
-    const options = JSON.parse(JSON.stringify(optionsJSON));
-    options.challenge = base64urlToBuffer(options.challenge);
-    options.allowCredentials = (options.allowCredentials || []).map((credential) => ({
-      ...credential,
-      id: base64urlToBuffer(credential.id),
-    }));
-    if (options.extensions?.prf?.evalByCredential) {
-      const converted = {};
-      for (const [credentialId, value] of Object.entries(options.extensions.prf.evalByCredential)) {
-        converted[credentialId] = {};
-        if (value.first) converted[credentialId].first = base64urlToBuffer(value.first);
-        if (value.second) converted[credentialId].second = base64urlToBuffer(value.second);
-      }
-      options.extensions = {
-        ...options.extensions,
-        prf: {
-          ...options.extensions.prf,
-          evalByCredential: converted,
         },
       };
     }
@@ -857,15 +834,6 @@
       if (results.prf.results?.first) normalized.prf.results = { first: bufferToBase64url(results.prf.results.first) };
     }
     return normalized;
-  }
-
-  function base64urlToBuffer(value) {
-    const padLength = (4 - (value.length % 4)) % 4;
-    const base64 = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLength);
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes.buffer;
   }
 
   function bufferToBase64url(buffer) {

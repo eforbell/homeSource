@@ -32,7 +32,13 @@ const DEFAULT_SOVEREIGN_FONT_SANS_CSS_URL = 'https://fonts.googleapis.com/css2?f
 const DEFAULT_SOVEREIGN_FONT_MONO_CSS_URL = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap';
 
 app.disable('x-powered-by');
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
+
+function isHttpsRequest(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  if (forwardedProto) return forwardedProto === 'https';
+  return req.secure === true;
+}
 
 function buildSovereignFontsCss() {
   const source = String(process.env.SOVEREIGN_FONT_SOURCE || 'google').trim().toLowerCase();
@@ -304,7 +310,8 @@ app.post('/api/auth/login', async (req, res) => {
     if (!verifyPassphrase(passphrase, member.passphrase_hash)) return res.status(401).json({ error: 'Invalid credentials' });
 
     const session = await createSession(member.id);
-    res.setHeader('Set-Cookie', `hs_session=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`);
+    const secureCookie = isHttpsRequest(req);
+    res.setHeader('Set-Cookie', `hs_session=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${secureCookie ? '; Secure' : ''}`);
     res.json({ ok: true, member: { id: member.id, name: member.name, role: member.role, avatar_emoji: member.avatar_emoji } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -312,7 +319,8 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => {
   const token = parseCookie(req.headers.cookie, 'hs_session');
   await destroySession(token);
-  res.setHeader('Set-Cookie', 'hs_session=; Path=/; HttpOnly; Max-Age=0');
+  const secureCookie = isHttpsRequest(req);
+  res.setHeader('Set-Cookie', `hs_session=; Path=/; HttpOnly; Max-Age=0${secureCookie ? '; Secure' : ''}`);
   res.json({ ok: true });
 });
 
@@ -467,25 +475,10 @@ app.post('/api/members/:id/keys/webauthn/assertion-options', requireAuth, async 
     const member = await getMember(memberId);
     if (!member) return res.status(404).json({ error: 'Member not found' });
     const credentialId = String(req.body?.credential_id || '').trim();
-    const prfSaltB64 = String(req.body?.prf_salt_b64 || '').trim();
     if (!credentialId) {
       return res.status(400).json({ error: 'credential_id is required' });
     }
-    if (!prfSaltB64) {
-      return res.status(400).json({ error: 'prf_salt_b64 is required' });
-    }
     const options = await webauthn.createMemberKeyAssertionOptions(req, member, credentialId);
-    options.options.extensions = {
-      ...(options.options.extensions || {}),
-      prf: {
-        evalByCredential: {
-          [credentialId]: {
-            first: prfSaltB64,
-          },
-        },
-      },
-    };
-    options.prf_salt = prfSaltB64;
     res.json(options);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -1298,7 +1291,10 @@ app.get('/insights.html', (_req, res) => res.sendFile(path.join(__dirname, 'publ
 
 // ── Periodic cleanup ────────────────────────────────────────────────────────
 
-const _cleanupInterval = setInterval(() => cleanExpiredSessions().catch(() => {}), 60 * 60 * 1000);
+const _cleanupInterval = setInterval(() => {
+  cleanExpiredSessions().catch(() => {});
+  webauthn.cleanExpiredChallenges().catch(() => {});
+}, 60 * 60 * 1000);
 if (process.env.NODE_ENV === 'test') _cleanupInterval.unref();
 
 // ── Start ───────────────────────────────────────────────────────────────────

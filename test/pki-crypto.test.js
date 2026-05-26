@@ -151,12 +151,23 @@ describe('PKICrypto', () => {
     it('corrupted mnemonic fails validation', async () => {
       const { mnemonic } = await PKICrypto.generateRecoveryMnemonic();
       const words = mnemonic.split(' ');
-      words[0] = words[0] === 'abandon' ? 'ability' : 'abandon';
-      words[1] = words[1] === 'zoo' ? 'zone' : 'zoo';
-      await assert.rejects(
-        () => PKICrypto.deriveKekFromMnemonic(words.join(' ')),
-        /checksum/
-      );
+      const wordlist = await PKICrypto.loadBip39Wordlist();
+      let foundInvalid = null;
+      for (const candidate of wordlist) {
+        if (candidate === words[0]) continue;
+        const mutated = [...words];
+        mutated[0] = candidate;
+        try {
+          await PKICrypto.deriveKekFromMnemonic(mutated.join(' '));
+        } catch (err) {
+          if (/checksum/i.test(String(err?.message || err))) {
+            foundInvalid = mutated.join(' ');
+            break;
+          }
+        }
+      }
+      assert.ok(foundInvalid, 'expected to find a checksum-invalid mutation');
+      await assert.rejects(() => PKICrypto.deriveKekFromMnemonic(foundInvalid), /checksum/);
     });
 
     it('rejects wrong word count', async () => {

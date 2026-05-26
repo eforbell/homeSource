@@ -292,37 +292,6 @@
       return new TextDecoder().decode(bytes);
     }
 
-    function base64urlToBuffer(value) {
-      const padLength = (4 - (value.length % 4)) % 4;
-      const base64 = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLength);
-      return b64ToBytes(base64).buffer;
-    }
-
-    function toPublicKeyRequestOptions(optionsJSON) {
-      const options = JSON.parse(JSON.stringify(optionsJSON));
-      options.challenge = base64urlToBuffer(options.challenge);
-      options.allowCredentials = (options.allowCredentials || []).map((credential) => ({
-        ...credential,
-        id: base64urlToBuffer(credential.id),
-      }));
-      if (options.extensions?.prf?.evalByCredential) {
-        const converted = {};
-        for (const [credentialId, value] of Object.entries(options.extensions.prf.evalByCredential)) {
-          converted[credentialId] = {};
-          if (value.first) converted[credentialId].first = base64urlToBuffer(value.first);
-          if (value.second) converted[credentialId].second = base64urlToBuffer(value.second);
-        }
-        options.extensions = {
-          ...options.extensions,
-          prf: {
-            ...options.extensions.prf,
-            evalByCredential: converted,
-          },
-        };
-      }
-      return options;
-    }
-
     function safeFileName(name) {
       const cleaned = String(name || 'decrypted-file').replace(/[\\/:*?"<>|]/g, '_').trim();
       return cleaned || 'decrypted-file';
@@ -404,27 +373,14 @@
       return { fileId: original.id, blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type };
     }
 
-    function parseWrappedMemberKey(key) {
-      if (!key?.encrypted_private_key) throw new Error('This key is missing wrapped private key material');
-      const payload = typeof key.encrypted_private_key === 'string'
-        ? JSON.parse(key.encrypted_private_key)
-        : key.encrypted_private_key;
-      if (!payload?.kind || !payload?.wrapped_private_key_b64) {
-        throw new Error('Wrapped private key is malformed');
-      }
-      return payload;
-    }
-
-    async function getAssertionPrfResult(memberId, credentialId, prfSaltB64, statusEl) {
-      if (!prfSaltB64) throw new Error('This WebAuthn key is missing its PRF salt. Re-register the key.');
+    async function getAssertionPrfResult(memberId, credentialId, statusEl) {
       statusEl.textContent = 'Requesting key assertion...';
       const payload = await API.post(`api/members/${memberId}/keys/webauthn/assertion-options`, {
-        credential_id: credentialId,
-        prf_salt_b64: prfSaltB64
+        credential_id: credentialId
       });
       statusEl.textContent = 'Complete your security-key sign-in...';
       const assertion = await navigator.credentials.get({
-        publicKey: toPublicKeyRequestOptions(payload.options)
+        publicKey: PKICrypto.toPublicKeyRequestOptions(payload.options)
       });
       if (!assertion) throw new Error('WebAuthn assertion was cancelled');
       const extensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
@@ -435,14 +391,13 @@
 
     async function deriveMemberKekForUnlock(material, passphrase, statusEl) {
       if (material.credential_verified && material.verification_method === 'webauthn' && material.credential_id) {
-        const wrapped = parseWrappedMemberKey(material);
-        const prfResult = await getAssertionPrfResult(currentMember.id, material.credential_id, wrapped.prf_salt_b64, statusEl);
+        const prfResult = await getAssertionPrfResult(currentMember.id, material.credential_id, statusEl);
         statusEl.textContent = 'Deriving unlock key...';
         return PKICrypto.deriveKekFromPrf(prfResult);
       }
       if (material.protection_tier === 'passphrase' || material.verification_method === 'passphrase') {
         if (!passphrase) throw new Error('Passphrase required to unlock this key');
-        const wrapped = parseWrappedMemberKey(material);
+        const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
         if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
           throw new Error('Unsupported passphrase-wrapped key format');
         }
@@ -470,7 +425,7 @@
 
       statusEl.textContent = 'Loading your wrapped key...';
       const material = await API.get(`api/members/${currentMember.id}/keys/${holder.encryption_key_id}/material`);
-      const wrapped = parseWrappedMemberKey(material);
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
       const kek = await deriveMemberKekForUnlock(material, keyPassphrase, statusEl);
       statusEl.textContent = 'Unlocking member key...';
       const privateKey = await PKICrypto.unwrapPrivateKey(
