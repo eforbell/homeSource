@@ -217,26 +217,46 @@
         <div class="form-hint">Encrypted documents are locked server-side. MagicIndex, shares, and server previews are disabled for encrypted docs.</div>
       </div>
       <div id="encrypt-fields" class="form-group" style="display:none;">
-        <label class="form-label">Passphrase</label>
-        <input type="password" id="encrypt-passphrase" class="form-input" placeholder="Strong passphrase">
-        <div id="passphrase-strength" style="display:none; margin-top:0.35rem;">
-          <div style="display:flex; gap:3px; height:4px;">
-            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
-            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
-            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
-            <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
-          </div>
-          <div id="passphrase-strength-text" class="form-hint" style="margin-top:0.2rem;"></div>
-        </div>
-        <label class="form-label mt-1">Confirm passphrase</label>
-        <input type="password" id="encrypt-passphrase-confirm" class="form-input" placeholder="Re-enter passphrase">
-        <label class="form-label mt-1">Encryption Scheme</label>
-        <select id="encrypt-kdf-scheme" class="form-select">
-          <option value="pbkdf2" selected>PBKDF2 (Compatible default)</option>
-          <option value="argon2id">Argon2id (Higher security, slower)</option>
+        <label class="form-label">Encryption Mode</label>
+        <select id="encrypt-mode" class="form-select">
+          <option value="passphrase" selected>Passphrase</option>
+          <option value="pki">Your Key (PKI)</option>
         </select>
-        <div class="form-hint" id="encrypt-kdf-hint">PBKDF2 is widely compatible and faster. Argon2id is more resistant to brute-force attacks but uses more browser memory and time.</div>
-        <div class="form-hint">No recovery in this version. If you lose the passphrase, this file cannot be decrypted.</div>
+        <div class="form-hint">Passphrase works everywhere. Your Key uses your registered encryption key and keeps unlock tied to your verified ceremony.</div>
+
+        <div id="encrypt-passphrase-fields">
+          <label class="form-label mt-1">Passphrase</label>
+          <input type="password" id="encrypt-passphrase" class="form-input" placeholder="Strong passphrase">
+          <div id="passphrase-strength" style="display:none; margin-top:0.35rem;">
+            <div style="display:flex; gap:3px; height:4px;">
+              <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+              <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+              <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+              <div class="strength-seg" style="flex:1; border-radius:2px; background:var(--border);"></div>
+            </div>
+            <div id="passphrase-strength-text" class="form-hint" style="margin-top:0.2rem;"></div>
+          </div>
+          <label class="form-label mt-1">Confirm passphrase</label>
+          <input type="password" id="encrypt-passphrase-confirm" class="form-input" placeholder="Re-enter passphrase">
+          <label class="form-label mt-1">Encryption Scheme</label>
+          <select id="encrypt-kdf-scheme" class="form-select">
+            <option value="pbkdf2" selected>PBKDF2 (Compatible default)</option>
+            <option value="argon2id">Argon2id (Higher security, slower)</option>
+          </select>
+          <div class="form-hint" id="encrypt-kdf-hint">PBKDF2 is widely compatible and faster. Argon2id is more resistant to brute-force attacks but uses more browser memory and time.</div>
+          <div class="form-hint">No recovery in this version. If you lose the passphrase, this file cannot be decrypted.</div>
+        </div>
+
+        <div id="encrypt-pki-fields" style="display:none; margin-top:0.75rem;">
+          <label class="form-label">Encryption Key</label>
+          <select id="encrypt-pki-key" class="form-select"></select>
+          <div id="encrypt-pki-hint" class="form-hint">Loading your registered keys…</div>
+          <div id="encrypt-pki-passphrase-wrap" style="display:none; margin-top:0.75rem;">
+            <label class="form-label">Unlock Key Passphrase</label>
+            <input type="password" id="encrypt-pki-passphrase" class="form-input" placeholder="Enter the passphrase you used when registering this key">
+            <div class="form-hint">This passphrase only unwraps your member key locally so the upload can be encrypted to your key.</div>
+          </div>
+        </div>
       </div>
 
       <button id="submit-btn" class="btn btn-primary" style="width:100%; margin-top:0.5rem;">Save Document</button>
@@ -247,6 +267,7 @@
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
+  <script src="pki-crypto.js"></script>
   <script src="nav.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js" integrity="sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi" crossorigin="anonymous"></script>
   <script>
@@ -256,6 +277,8 @@
     let activeTab = 'scan';
     let scanBlob = null;
     let scannedPages = [];
+    let currentMember = null;
+    let memberKeys = [];
     const PBKDF2_ITERATIONS = 600000;
     const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
@@ -293,7 +316,11 @@
       if (enabled) {
         magicIndexCheckbox.checked = false;
       }
+      refreshEncryptionModeUI();
     });
+
+    document.getElementById('encrypt-mode').addEventListener('change', refreshEncryptionModeUI);
+    document.getElementById('encrypt-pki-key').addEventListener('change', refreshEncryptionModeUI);
 
     (function configurePassphraseStrength() {
       const COMMON_PASSPHRASES = new Set([
@@ -517,7 +544,7 @@
       const encryptedFile = new File(
         [ciphertextBuffer],
         `${crypto.randomUUID()}.enc`,
-        { type: file.type || 'application/pdf' }
+        { type: 'application/octet-stream' }
       );
 
       return {
@@ -551,6 +578,154 @@
           }
         }
       };
+    }
+
+    async function getAssertionPrfResult(memberId, credentialId, progress) {
+      progress?.('Requesting key assertion…');
+      const payload = await API.post(`api/members/${memberId}/keys/webauthn/assertion-options`, {
+        credential_id: credentialId
+      });
+      progress?.('Complete your security-key sign-in…');
+      const assertion = await navigator.credentials.get({
+        publicKey: PKICrypto.toPublicKeyRequestOptions(payload.options)
+      });
+      if (!assertion) throw new Error('WebAuthn assertion was cancelled');
+      const extensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
+      const prfResult = extensionResults?.prf?.results?.first;
+      if (!prfResult) throw new Error('This key did not expose the PRF extension during sign-in');
+      return prfResult;
+    }
+
+    async function deriveMemberKekForUpload(key, passphrase, progress) {
+      if (key.credential_verified && key.verification_method === 'webauthn' && key.credential_id) {
+        const prfResult = await getAssertionPrfResult(currentMember.id, key.credential_id, progress);
+        progress?.('Deriving upload key…');
+        return PKICrypto.deriveKekFromPrf(prfResult);
+      }
+      if (key.protection_tier === 'passphrase' || key.verification_method === 'passphrase') {
+        if (!passphrase) throw new Error('Enter your key passphrase to unlock this encryption key');
+        const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(key);
+        if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
+          throw new Error('Unsupported passphrase-wrapped key format');
+        }
+        progress?.('Deriving upload key…');
+        return (await PKICrypto.deriveKekFromPassphrase(passphrase, PKICrypto.fromBase64(wrapped.salt_b64))).kek;
+      }
+      throw new Error('This key cannot yet be used for upload encryption');
+    }
+
+    async function encryptSelectedFileWithPki(file, key, keyPassphrase, progress) {
+      progress?.('Loading wrapped key…');
+      const material = await API.get(`api/members/${currentMember.id}/keys/${key.id}/material`);
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+      const kek = await deriveMemberKekForUpload(material, keyPassphrase, progress);
+      progress?.('Unlocking member key…');
+      const privateKey = await PKICrypto.unwrapPrivateKey(
+        PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
+        kek
+      );
+      const ownerPublicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(material.public_key));
+      progress?.('Generating document key…');
+      const dek = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      const plaintext = new Uint8Array(await file.arrayBuffer());
+      progress?.('Encrypting file locally…');
+      const contentIv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertextBuffer = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: contentIv, tagLength: 128 },
+        dek,
+        plaintext
+      );
+      const metaIv = crypto.getRandomValues(new Uint8Array(12));
+      progress?.('Sealing file metadata…');
+      const encryptedMeta = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: metaIv, tagLength: 128 },
+        dek,
+        fromUtf8(JSON.stringify({ original_filename: file.name, mime_type: file.type || 'application/octet-stream' }))
+      );
+      progress?.('Wrapping document key to your key…');
+      const wrappedDek = await PKICrypto.wrapDekForOwner(dek, ownerPublicKey);
+      const encryptedFile = new File(
+        [ciphertextBuffer],
+        `${crypto.randomUUID()}.enc`,
+        { type: 'application/octet-stream' }
+      );
+      return {
+        file: encryptedFile,
+        metadata: PKICrypto.buildPkiEnvelope({
+          wrappedDek: wrappedDek.wrappedDek,
+          ephemeralPublicKey: wrappedDek.ephemeralPublicKey,
+          salt: wrappedDek.salt,
+          iv: contentIv,
+          memberId: currentMember.id,
+          encryptionKeyId: material.id,
+          keyFingerprint: material.key_fingerprint,
+          encryptedFileMeta: {
+            iv_b64: PKICrypto.toBase64(metaIv),
+            payload_b64: PKICrypto.toBase64(new Uint8Array(encryptedMeta))
+          }
+        })
+      };
+    }
+
+    function preferredPkiKey(keys) {
+      return [...keys].sort((a, b) => {
+        const score = (key) => (key.credential_verified ? 10 : 0) + (key.recovery_enabled ? 2 : 0);
+        const aTime = new Date(a.last_used_at || a.created_at || 0).getTime();
+        const bTime = new Date(b.last_used_at || b.created_at || 0).getTime();
+        return (score(b) - score(a)) || (bTime - aTime);
+      })[0] || null;
+    }
+
+    function formatPkiKeyOption(key) {
+      const label = key.label || (key.protection_tier === 'hardware' ? 'Security key' : key.protection_tier === 'platform' ? 'Passkey' : 'Passphrase key');
+      const shortFingerprint = (key.key_fingerprint || '').split(':').slice(0, 4).join(':');
+      const posture = key.credential_verified ? 'verified' : 'unverified';
+      return `${label} · ${shortFingerprint} · ${posture}`;
+    }
+
+    function refreshEncryptionModeUI() {
+      const enabled = document.getElementById('encrypt-enabled').checked;
+      const mode = document.getElementById('encrypt-mode').value;
+      const passphraseFields = document.getElementById('encrypt-passphrase-fields');
+      const pkiFields = document.getElementById('encrypt-pki-fields');
+      const pkiHint = document.getElementById('encrypt-pki-hint');
+      const pkiSelect = document.getElementById('encrypt-pki-key');
+      const pkiPassWrap = document.getElementById('encrypt-pki-passphrase-wrap');
+      passphraseFields.style.display = enabled && mode === 'passphrase' ? 'block' : 'none';
+      pkiFields.style.display = enabled && mode === 'pki' ? 'block' : 'none';
+      if (!enabled || mode !== 'pki') return;
+
+      if (!currentMember) {
+        pkiHint.textContent = 'Sign in again to load your encryption keys.';
+        pkiSelect.innerHTML = '';
+        pkiPassWrap.style.display = 'none';
+        return;
+      }
+
+      if (!memberKeys.length) {
+        pkiHint.innerHTML = 'You need to register an encryption key first. Go to <a href="settings.html">Settings → Encryption Keys</a>.';
+        pkiSelect.innerHTML = '';
+        pkiPassWrap.style.display = 'none';
+        return;
+      }
+
+      const previouslySelectedId = pkiSelect.value;
+      pkiSelect.innerHTML = memberKeys.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+      const selected = memberKeys.find((key) => String(key.id) === String(previouslySelectedId)) || preferredPkiKey(memberKeys);
+      if (selected) pkiSelect.value = String(selected.id);
+      if (!selected) {
+        pkiHint.textContent = 'No usable encryption keys are currently available.';
+        pkiPassWrap.style.display = 'none';
+        return;
+      }
+      const recovery = selected.recovery_enabled ? 'Recovery code on file.' : 'No recovery code yet.';
+      const verified = selected.credential_verified ? 'Verified ceremony.' : 'Unverified ceremony.';
+      pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery}`;
+      pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
     }
 
     // ── Scanner ───────────────────────────────────────────────
@@ -1422,6 +1597,7 @@
 
     async function loadMembers() {
       try {
+        currentMember = await API.get('api/auth/me');
         const members = await API.get('api/members');
         const container = document.getElementById('owner-checkboxes');
         for (const m of members) {
@@ -1432,6 +1608,13 @@
           label.innerHTML = `<input type="checkbox" value="${m.id}" class="owner-cb"> ${m.avatar_emoji} ${m.name}`;
           container.appendChild(label);
         }
+        try {
+          memberKeys = (await API.get(`api/members/${currentMember.id}/keys`))
+            .filter((key) => key.key_type === 'member' && !key.revoked_at);
+        } catch {
+          memberKeys = [];
+        }
+        refreshEncryptionModeUI();
       } catch {}
     }
 
@@ -1450,8 +1633,10 @@
       const magicindexEnabled = document.getElementById('magicindex-enabled').checked;
       const phaseTimer = startProgressPhases(status, magicindexEnabled);
       const encryptEnabled = document.getElementById('encrypt-enabled').checked;
+      const encryptionMode = document.getElementById('encrypt-mode').value === 'pki' ? 'pki' : 'passphrase';
       const passphrase = document.getElementById('encrypt-passphrase').value;
       const passphraseConfirm = document.getElementById('encrypt-passphrase-confirm').value;
+      const pkiPassphrase = document.getElementById('encrypt-pki-passphrase').value;
       if (encryptEnabled) {
         if (activeTab === 'url') {
           stopProgressPhases(phaseTimer);
@@ -1460,19 +1645,36 @@
           toast('Encrypted mode is not available for URL import yet', 'error');
           return;
         }
-        if (!passphrase || passphrase.length < 8) {
-          stopProgressPhases(phaseTimer);
-          status.style.display = 'none';
-          btn.disabled = false;
-          toast('Use a passphrase with at least 8 characters', 'error');
-          return;
-        }
-        if (passphrase !== passphraseConfirm) {
-          stopProgressPhases(phaseTimer);
-          status.style.display = 'none';
-          btn.disabled = false;
-          toast('Passphrase confirmation does not match', 'error');
-          return;
+        if (encryptionMode === 'passphrase') {
+          if (!passphrase || passphrase.length < 8) {
+            stopProgressPhases(phaseTimer);
+            status.style.display = 'none';
+            btn.disabled = false;
+            toast('Use a passphrase with at least 8 characters', 'error');
+            return;
+          }
+          if (passphrase !== passphraseConfirm) {
+            stopProgressPhases(phaseTimer);
+            status.style.display = 'none';
+            btn.disabled = false;
+            toast('Passphrase confirmation does not match', 'error');
+            return;
+          }
+        } else {
+          if (!currentMember) {
+            stopProgressPhases(phaseTimer);
+            status.style.display = 'none';
+            btn.disabled = false;
+            toast('Sign in again to load your encryption key', 'error');
+            return;
+          }
+          if (!memberKeys.length) {
+            stopProgressPhases(phaseTimer);
+            status.style.display = 'none';
+            btn.disabled = false;
+            toast('Register an encryption key in Settings before using PKI mode', 'error');
+            return;
+          }
         }
       }
 
@@ -1488,7 +1690,7 @@
         magicindex_enabled: encryptEnabled ? false : magicindexEnabled,
         source_type: activeTab === 'scan' ? 'scan' : activeTab === 'url' ? 'url_import' : 'upload'
       };
-      if (encryptEnabled) metadata.encryption_mode = 'passphrase';
+      if (encryptEnabled) metadata.encryption_mode = encryptionMode;
       if (activeTab === 'scan') {
         metadata.extra_metadata = {
           scan_filter: document.getElementById('scan-document-filter').checked ? 'document' : 'none'
@@ -1533,7 +1735,14 @@
           let uploadFile = selectedFile;
           if (encryptEnabled) {
             status.textContent = 'Encrypting locally...';
-            const encrypted = await encryptSelectedFileWithPassphrase(selectedFile, passphrase);
+            const encrypted = encryptionMode === 'pki'
+              ? await encryptSelectedFileWithPki(
+                selectedFile,
+                memberKeys.find((key) => String(key.id) === String(document.getElementById('encrypt-pki-key').value)) || preferredPkiKey(memberKeys),
+                pkiPassphrase,
+                (message) => { status.textContent = message; }
+              )
+              : await encryptSelectedFileWithPassphrase(selectedFile, passphrase);
             uploadFile = encrypted.file;
             metadata.encryption_metadata = encrypted.metadata;
           }
@@ -1569,6 +1778,12 @@
       if (b < 1024) return b + ' B';
       if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
       return (b / 1048576).toFixed(1) + ' MB';
+    }
+
+    function esc(value) {
+      const div = document.createElement('div');
+      div.textContent = value ?? '';
+      return div.innerHTML;
     }
 
     function toast(msg, type = 'success') {

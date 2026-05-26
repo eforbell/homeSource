@@ -264,6 +264,7 @@
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
+  <script src="pki-crypto.js"></script>
   <script src="nav.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js" integrity="sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi" crossorigin="anonymous"></script>
   <script>
@@ -273,6 +274,7 @@
     if (!docId) location.href = 'documents.html';
 
     let currentDoc = null;
+    let currentMember = null;
     let unlockedFiles = new Map();
 
     function isEncryptedDoc(doc) {
@@ -371,9 +373,132 @@
       return { fileId: original.id, blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type };
     }
 
-    function renderEncryptedLockedState(doc) {
+    async function getAssertionPrfResult(memberId, credentialId, statusEl) {
+      statusEl.textContent = 'Requesting key assertion...';
+      const payload = await API.post(`api/members/${memberId}/keys/webauthn/assertion-options`, {
+        credential_id: credentialId
+      });
+      statusEl.textContent = 'Complete your security-key sign-in...';
+      const assertion = await navigator.credentials.get({
+        publicKey: PKICrypto.toPublicKeyRequestOptions(payload.options)
+      });
+      if (!assertion) throw new Error('WebAuthn assertion was cancelled');
+      const extensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
+      const prfResult = extensionResults?.prf?.results?.first;
+      if (!prfResult) throw new Error('This key did not expose the PRF extension during sign-in');
+      return prfResult;
+    }
+
+    async function deriveMemberKekForUnlock(material, passphrase, statusEl) {
+      if (material.credential_verified && material.verification_method === 'webauthn' && material.credential_id) {
+        const prfResult = await getAssertionPrfResult(currentMember.id, material.credential_id, statusEl);
+        statusEl.textContent = 'Deriving unlock key...';
+        return PKICrypto.deriveKekFromPrf(prfResult);
+      }
+      if (material.protection_tier === 'passphrase' || material.verification_method === 'passphrase') {
+        if (!passphrase) throw new Error('Passphrase required to unlock this key');
+        const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+        if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
+          throw new Error('Unsupported passphrase-wrapped key format');
+        }
+        statusEl.textContent = 'Deriving unlock key...';
+        return (await PKICrypto.deriveKekFromPassphrase(passphrase, PKICrypto.fromBase64(wrapped.salt_b64))).kek;
+      }
+      throw new Error('This key cannot yet be used to unlock this document');
+    }
+
+    async function decryptEncryptedDocumentWithPki(doc, keyInfo, keyPassphrase, statusEl) {
+      const env = doc.encryption_metadata?.files?.upload;
+      const holder = env?.holders?.[0];
+      if (!env?.wrapped_dek?.wrapped_dek_b64 || !env?.wrapped_dek?.ephemeral_public_key_b64 || !env?.wrapped_dek?.hkdf_salt_b64 || !env?.iv_b64) {
+        throw new Error('PKI envelope is incomplete');
+      }
+      if (!holder?.encryption_key_id || !holder?.member_id) {
+        throw new Error('PKI holder metadata is incomplete');
+      }
+      if (!currentMember || Number(holder.member_id) !== Number(currentMember.id)) {
+        throw new Error('You are not authorized to unlock this document');
+      }
+      if (keyInfo?.key?.revoked_at) {
+        throw new Error('This key has been revoked. Contact the vault administrator.');
+      }
+
+      statusEl.textContent = 'Loading your wrapped key...';
+      const material = await API.get(`api/members/${currentMember.id}/keys/${holder.encryption_key_id}/material`);
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+      const kek = await deriveMemberKekForUnlock(material, keyPassphrase, statusEl);
+      statusEl.textContent = 'Unlocking member key...';
+      const privateKey = await PKICrypto.unwrapPrivateKey(
+        PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
+        kek
+      );
+      statusEl.textContent = 'Unwrapping document key...';
+      const dek = await PKICrypto.unwrapDekAsOwner(
+        PKICrypto.fromBase64(env.wrapped_dek.wrapped_dek_b64),
+        PKICrypto.fromBase64(env.wrapped_dek.ephemeral_public_key_b64),
+        PKICrypto.fromBase64(env.wrapped_dek.hkdf_salt_b64),
+        privateKey
+      );
+      const files = (doc.files || []).filter(f => f.file_type === 'original');
+      const original = files[0];
+      if (!original) throw new Error('Encrypted file not found');
+      statusEl.textContent = 'Decrypting locally...';
+      const encryptedBytes = new Uint8Array(await (await fetch(`api/documents/${doc.id}/files/${original.id}/download`)).arrayBuffer());
+      const plaintext = new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: PKICrypto.fromBase64(env.iv_b64), tagLength: Number(env.tag_length_bits || 128) },
+        dek,
+        encryptedBytes
+      ));
+      let fileMeta = { original_filename: 'decrypted-file.bin', mime_type: 'application/octet-stream' };
+      if (env.encrypted_file_meta?.payload_b64 && env.encrypted_file_meta?.iv_b64) {
+        const metaBytes = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: PKICrypto.fromBase64(env.encrypted_file_meta.iv_b64), tagLength: 128 },
+          dek,
+          PKICrypto.fromBase64(env.encrypted_file_meta.payload_b64)
+        );
+        fileMeta = JSON.parse(bytesToUtf8(new Uint8Array(metaBytes)));
+      }
+      const blob = new Blob([plaintext], { type: fileMeta.mime_type || 'application/octet-stream' });
+      const objectUrl = URL.createObjectURL(blob);
+      unlockedFiles.set(original.id, { blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type });
+      return { fileId: original.id, blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type };
+    }
+
+    async function renderEncryptedLockedState(doc) {
       const preview = document.getElementById('file-preview');
-      preview.innerHTML = `
+      const isPki = doc.encryption_mode === 'pki';
+      let keyInfo = null;
+      let holder = null;
+      if (isPki) {
+        try {
+          keyInfo = await API.get(`api/documents/${doc.id}/key-info`);
+          holder = keyInfo.encryption_metadata?.files?.upload?.holders?.[0] || null;
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      const holderDisplayName = holder
+        ? ((doc.owners || []).find((owner) => Number(owner.id) === Number(holder.member_id))?.name
+          || (holder.member_id === currentMember?.id ? 'You' : `Member #${holder.member_id}`))
+        : null;
+      const requiresKeyPassphrase = !!(isPki && keyInfo?.key && (keyInfo.key.protection_tier === 'passphrase' || keyInfo.key.verification_method === 'passphrase'));
+      preview.innerHTML = isPki ? `
+        <div style="width:100%; max-width:460px; margin:0 auto; text-align:left; padding:1rem; box-sizing:border-box; overflow-wrap:anywhere; word-break:break-word;">
+          <div style="font-size:2rem; margin-bottom:0.5rem;">🔐</div>
+          <div style="font-weight:600; margin-bottom:0.5rem;">Encrypted Document</div>
+          <div class="text-dim text-sm mb-1">Mode: <strong>pki</strong></div>
+          <div class="text-dim text-sm mb-1">This document is encrypted to a registered member key. It will be unlocked locally in your browser.</div>
+          ${holder ? `<div class="text-dim text-sm mb-1"><strong>Required holder:</strong><div style="margin-top:0.15rem;">${esc(holderDisplayName)}</div></div>` : ''}
+          ${holder?.key_fingerprint ? `<div class="text-dim text-sm mb-1"><strong>Fingerprint:</strong><div style="margin-top:0.15rem; overflow-wrap:anywhere; word-break:break-word;">${esc(holder.key_fingerprint)}</div></div>` : ''}
+          ${keyInfo?.key ? `<div class="text-dim text-sm mb-1"><strong>Key:</strong><div style="margin-top:0.15rem; overflow-wrap:anywhere; word-break:break-word;">${esc(keyInfo.key.label || 'Unnamed key')} · <strong>Protection:</strong> ${esc(keyInfo.key.protection_tier || 'unknown')}</div></div>` : '<div class="text-dim text-sm mb-1">Unable to load key details.</div>'}
+          ${requiresKeyPassphrase ? `
+            <div class="form-group mt-1">
+              <label class="form-label">Key Passphrase</label>
+              <input type="password" id="unlock-key-passphrase" class="form-input" placeholder="Enter the passphrase for your encryption key">
+            </div>` : ''}
+          <button id="unlock-btn" class="btn btn-primary">Unlock with Your Key</button>
+          <div id="unlock-status" class="text-sm mt-1 text-dim"></div>
+        </div>` : `
         <div style="max-width:460px; margin:0 auto; text-align:left; padding:1rem;">
           <div style="font-size:2rem; margin-bottom:0.5rem;">🔒</div>
           <div style="font-weight:600; margin-bottom:0.5rem;">Encrypted Document</div>
@@ -403,16 +528,19 @@
 
       const unlockBtn = document.getElementById('unlock-btn');
       unlockBtn.addEventListener('click', async () => {
-        const passphrase = document.getElementById('unlock-passphrase').value || '';
         const status = document.getElementById('unlock-status');
-        if (!passphrase) {
+        const passphrase = !isPki ? (document.getElementById('unlock-passphrase').value || '') : '';
+        const keyPassphrase = isPki ? (document.getElementById('unlock-key-passphrase')?.value || '') : '';
+        if (!isPki && !passphrase) {
           status.textContent = 'Passphrase required';
           return;
         }
         unlockBtn.disabled = true;
-        status.textContent = 'Decrypting locally...';
+        status.textContent = isPki ? 'Preparing key unlock...' : 'Decrypting locally...';
         try {
-          const unlocked = await decryptEncryptedDocumentWithPassphrase(doc, passphrase);
+          const unlocked = isPki
+            ? await decryptEncryptedDocumentWithPki(doc, keyInfo, keyPassphrase, status)
+            : await decryptEncryptedDocumentWithPassphrase(doc, passphrase);
           status.textContent = 'Unlocked';
           renderUnlockedFilePreview(unlocked);
           tbody.innerHTML = `<tr>
@@ -428,8 +556,15 @@
             a.download = unlocked.name;
             a.click();
           });
-        } catch {
-          status.textContent = 'Unlock failed. Check passphrase and try again.';
+        } catch (err) {
+          const message = String(err?.message || '');
+          if (isPki && /timed out|not allowed|operation was aborted|operation either timed out/i.test(message)) {
+            status.textContent = 'Key sign-in was cancelled or timed out. Try again when ready.';
+          } else if (isPki) {
+            status.textContent = err?.message || 'Unlock failed. Check your key and try again.';
+          } else {
+            status.textContent = err?.message || 'Unlock failed. Check passphrase and try again.';
+          }
         } finally {
           unlockBtn.disabled = false;
         }
@@ -449,6 +584,7 @@
 
     async function loadDocument() {
       try {
+        currentMember = await API.get('api/auth/me');
         const doc = await API.get(`api/documents/${docId}`);
         currentDoc = doc;
 
@@ -573,7 +709,7 @@
         document.getElementById('links-card').style.display = 'block';
         loadLinks();
         if (encryptedDoc) {
-          renderEncryptedLockedState(doc);
+          await renderEncryptedLockedState(doc);
         }
 
       } catch (err) {

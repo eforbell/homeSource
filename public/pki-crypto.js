@@ -1,6 +1,59 @@
 'use strict';
 
-(function(exports) {
+  (function(exports) {
+
+  function toBufferSource(value, label) {
+    if (value instanceof ArrayBuffer) return value;
+    if (ArrayBuffer.isView(value)) {
+      return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+    }
+    if (Array.isArray(value)) {
+      return Uint8Array.from(value).buffer;
+    }
+    throw new TypeError(`${label || 'Value'} must be a BufferSource`);
+  }
+
+  function base64urlToBuffer(value) {
+    const padLength = (4 - (value.length % 4)) % 4;
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLength);
+    return fromBase64(base64).buffer;
+  }
+
+  function toPublicKeyRequestOptions(optionsJSON) {
+    const options = JSON.parse(JSON.stringify(optionsJSON));
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.allowCredentials = (options.allowCredentials || []).map((credential) => ({
+      ...credential,
+      id: base64urlToBuffer(credential.id),
+    }));
+    if (options.extensions?.prf?.evalByCredential) {
+      const converted = {};
+      for (const [credentialId, value] of Object.entries(options.extensions.prf.evalByCredential)) {
+        converted[credentialId] = {};
+        if (value.first) converted[credentialId].first = base64urlToBuffer(value.first);
+        if (value.second) converted[credentialId].second = base64urlToBuffer(value.second);
+      }
+      options.extensions = {
+        ...options.extensions,
+        prf: {
+          ...options.extensions.prf,
+          evalByCredential: converted,
+        },
+      };
+    }
+    return options;
+  }
+
+  function parseWrappedPrivateKeyPayload(keyLike) {
+    if (!keyLike?.encrypted_private_key) throw new Error('This key is missing wrapped private key material');
+    const payload = typeof keyLike.encrypted_private_key === 'string'
+      ? JSON.parse(keyLike.encrypted_private_key)
+      : keyLike.encrypted_private_key;
+    if (!payload?.kind || !payload?.wrapped_private_key_b64) {
+      throw new Error('Wrapped private key is malformed');
+    }
+    return payload;
+  }
 
   // ── Key generation ──
 
@@ -27,7 +80,7 @@
   // ── PRF-based key protection ──
 
   async function deriveKekFromPrf(prfOutput) {
-    const keyMaterial = await crypto.subtle.importKey('raw', prfOutput, 'HKDF', false, ['deriveKey']);
+    const keyMaterial = await crypto.subtle.importKey('raw', toBufferSource(prfOutput, 'PRF output'), 'HKDF', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('homesource-member-kek-v1') },
       keyMaterial,
@@ -92,6 +145,16 @@
     const ephemeralPublicKey = new Uint8Array(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
 
     return { wrappedDek, ephemeralPublicKey, salt };
+  }
+
+  async function importMemberPublicKey(publicKeyRaw) {
+    return crypto.subtle.importKey(
+      'raw',
+      publicKeyRaw,
+      { name: 'X25519' },
+      false,
+      []
+    );
   }
 
   async function unwrapDekAsOwner(wrappedDekBytes, ephemeralPublicKeyRaw, salt, ownerPrivateKey) {
@@ -270,6 +333,7 @@
     deriveKekFromPassphrase: deriveKekFromPassphrase,
     wrapPrivateKey: wrapPrivateKey,
     unwrapPrivateKey: unwrapPrivateKey,
+    importMemberPublicKey: importMemberPublicKey,
     wrapDekForOwner: wrapDekForOwner,
     unwrapDekAsOwner: unwrapDekAsOwner,
     generateRecoveryMnemonic: generateRecoveryMnemonic,
@@ -277,7 +341,11 @@
     buildPkiEnvelope: buildPkiEnvelope,
     toBase64: toBase64,
     fromBase64: fromBase64,
-    loadBip39Wordlist: loadBip39Wordlist
+    loadBip39Wordlist: loadBip39Wordlist,
+    toBufferSource: toBufferSource,
+    base64urlToBuffer: base64urlToBuffer,
+    toPublicKeyRequestOptions: toPublicKeyRequestOptions,
+    parseWrappedPrivateKeyPayload: parseWrappedPrivateKeyPayload
   };
 
   if (typeof module !== 'undefined' && module.exports) {

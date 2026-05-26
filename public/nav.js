@@ -1,8 +1,18 @@
 'use strict';
 
-(function () {
+(async function () {
   const activePage = document.body.dataset.navPage || 'dashboard';
-  const navRole = document.body.dataset.navRole || 'parent';
+  let navRole = document.body.dataset.navRole || 'parent';
+  try {
+    const res = await fetch('api/auth/me');
+    if (res.ok) {
+      const me = await res.json();
+      if (me?.role === 'kid' || me?.role === 'parent') {
+        navRole = me.role;
+        document.body.dataset.navRole = me.role;
+      }
+    }
+  } catch {}
 
   const icons = {
     home: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10L10 3l7 7"/><path d="M5 8.5V16a1 1 0 001 1h3v-4h2v4h3a1 1 0 001-1V8.5"/></svg>',
@@ -28,7 +38,8 @@
   const kidItems = [
     { id: 'dashboard',  label: 'Dashboard',  icon: 'home',   href: './' },
     { id: 'documents',  label: 'My Docs',    icon: 'folder', href: 'documents.html' },
-    { id: 'search',     label: 'Search',     icon: 'search', href: 'search.html' }
+    { id: 'search',     label: 'Search',     icon: 'search', href: 'search.html' },
+    { id: 'settings',   label: 'Settings',   icon: 'gear',   href: 'settings.html' }
   ];
 
   const allItems = navRole === 'kid' ? kidItems : parentItems;

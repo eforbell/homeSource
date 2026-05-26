@@ -17,6 +17,7 @@
     "worker:import:once": "node bin/import-worker.js --once"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^13.3.0",
     "archiver": "^7.0.0",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",

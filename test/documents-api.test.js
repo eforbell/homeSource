@@ -2,8 +2,11 @@
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const { webcrypto } = require('node:crypto');
 const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, authedFetch, createTestDocument, getPool } = require('./helpers');
 const { saveFileRecord, storeFile } = require('../lib/files');
+if (!globalThis.crypto) globalThis.crypto = webcrypto;
+const PKICrypto = require('../public/pki-crypto');
 
 let parent, kid, parentCookie, kidCookie;
 let pool;
@@ -350,6 +353,7 @@ describe('PKI upload validation', () => {
   const pki = require('../lib/pki');
   let parentKey;
   let kidKey;
+  const parentKeyPassphrase = 'parent-key-passphrase';
 
   function buildPkiMetadata(holderOverrides = {}) {
     return {
@@ -381,29 +385,32 @@ describe('PKI upload validation', () => {
     };
   }
 
+  async function createPassphraseProtectedKey(memberId, label, passphrase) {
+    const keypair = await PKICrypto.generateMemberKeypair();
+    const { kek, salt } = await PKICrypto.deriveKekFromPassphrase(passphrase);
+    const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
+    return pki.registerMemberKey({
+      memberId,
+      publicKey: PKICrypto.toBase64(keypair.publicKeyRaw),
+      encryptedPrivateKey: JSON.stringify({
+        kind: 'passphrase_pbkdf2_v1',
+        kdf: 'pbkdf2-sha256',
+        iterations: 600000,
+        salt_b64: PKICrypto.toBase64(salt),
+        wrapped_private_key_b64: PKICrypto.toBase64(wrappedPrivateKey)
+      }),
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label,
+      verificationMethod: 'passphrase',
+    });
+  }
+
   beforeEach(async () => {
-    const parentPublicKey = Buffer.from(`parent-key-${Date.now()}-${Math.random()}`).toString('base64');
-    const kidPublicKey = Buffer.from(`kid-key-${Date.now()}-${Math.random()}`).toString('base64');
-    parentKey = await pki.registerMemberKey({
-      memberId: parent.id,
-      publicKey: parentPublicKey,
-      encryptedPrivateKey: 'parent-enc',
-      algorithm: 'x25519',
-      credentialId: null,
-      prfEnabled: false,
-      protectionTier: 'passphrase',
-      label: 'Parent PKI Key'
-    });
-    kidKey = await pki.registerMemberKey({
-      memberId: kid.id,
-      publicKey: kidPublicKey,
-      encryptedPrivateKey: 'kid-enc',
-      algorithm: 'x25519',
-      credentialId: null,
-      prfEnabled: false,
-      protectionTier: 'passphrase',
-      label: 'Kid PKI Key'
-    });
+    parentKey = await createPassphraseProtectedKey(parent.id, 'Parent PKI Key', parentKeyPassphrase);
+    kidKey = await createPassphraseProtectedKey(kid.id, 'Kid PKI Key', 'kid-key-passphrase');
   });
 
   it('persists validated encryption_key_id for PKI upload', async () => {
@@ -424,6 +431,85 @@ describe('PKI upload validation', () => {
     assert.equal(detailRes.status, 200);
     const detail = await detailRes.json();
     assert.equal(detail.encryption_key_id, parentKey.id);
+  });
+
+  it('stores ciphertext and encrypted metadata for a real PKI upload flow', async () => {
+    const file = new File([Buffer.from('%PDF-1.4\n% super secret family plan\n%%EOF')], 'family-plan.pdf', { type: 'application/pdf' });
+    const materialRes = await authedGet(`api/members/${parent.id}/keys/${parentKey.id}/material`, parentCookie);
+    assert.equal(materialRes.status, 200);
+    const material = await materialRes.json();
+    const wrapped = JSON.parse(material.encrypted_private_key);
+    const { kek } = await PKICrypto.deriveKekFromPassphrase(parentKeyPassphrase, PKICrypto.fromBase64(wrapped.salt_b64));
+    const privateKey = await PKICrypto.unwrapPrivateKey(PKICrypto.fromBase64(wrapped.wrapped_private_key_b64), kek);
+    const ownerPublicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(material.public_key));
+    const dek = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    const contentIv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertextBuffer = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: contentIv, tagLength: 128 },
+      dek,
+      new Uint8Array(await file.arrayBuffer())
+    );
+    const metaIv = crypto.getRandomValues(new Uint8Array(12));
+    const encryptedMeta = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: metaIv, tagLength: 128 },
+      dek,
+      new TextEncoder().encode(JSON.stringify({ original_filename: file.name, mime_type: file.type }))
+    );
+    assert.ok(privateKey);
+    const wrappedDek = await PKICrypto.wrapDekForOwner(dek, ownerPublicKey);
+    const envelope = PKICrypto.buildPkiEnvelope({
+      wrappedDek: wrappedDek.wrappedDek,
+      ephemeralPublicKey: wrappedDek.ephemeralPublicKey,
+      salt: wrappedDek.salt,
+      iv: contentIv,
+      memberId: parent.id,
+      encryptionKeyId: parentKey.id,
+      keyFingerprint: parentKey.key_fingerprint,
+      encryptedFileMeta: {
+        iv_b64: PKICrypto.toBase64(metaIv),
+        payload_b64: PKICrypto.toBase64(new Uint8Array(encryptedMeta))
+      }
+    });
+    const form = new FormData();
+    form.append('file', new Blob([ciphertextBuffer], { type: file.type }), 'family-plan.enc');
+    form.append('metadata', JSON.stringify({
+      title: 'Family Plan PKI',
+      document_type: 'other',
+      encryption_mode: 'pki',
+      encryption_metadata: envelope,
+      magicindex_enabled: true
+    }));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 201);
+    const created = await res.json();
+    assert.equal(created.encryption_key_id, parentKey.id);
+
+    const detailRes = await authedGet(`api/documents/${created.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.is_encrypted, true);
+    assert.equal(detail.encryption_mode, 'pki');
+    assert.equal(detail.metadata.magicindex.state, 'disabled');
+    assert.equal(detail.files.length, 1);
+    assert.equal(detail.files[0].file_type, 'original');
+    const downloadRes = await authedGet(`api/documents/${created.id}/files/${detail.files[0].id}/download`, parentCookie);
+    assert.equal(downloadRes.status, 200);
+    const storedBytes = Buffer.from(await downloadRes.arrayBuffer());
+    assert.notDeepEqual(storedBytes, Buffer.from('%PDF-1.4\n% super secret family plan\n%%EOF'));
+
+    const refreshedMaterialRes = await authedGet(`api/members/${parent.id}/keys/${parentKey.id}/material`, parentCookie);
+    const refreshedMaterial = await refreshedMaterialRes.json();
+    assert.ok(refreshedMaterial.last_used_at);
+
+    const keyInfoRes = await authedGet(`api/documents/${created.id}/key-info`, parentCookie);
+    assert.equal(keyInfoRes.status, 200);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.encryption_mode, 'pki');
+    assert.equal(keyInfo.encryption_key_id, parentKey.id);
+    assert.equal(keyInfo.key.id, parentKey.id);
   });
 
   it('rejects PKI upload bound to another member key', async () => {

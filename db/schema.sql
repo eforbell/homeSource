@@ -48,7 +48,16 @@ CREATE TABLE encryption_keys (
   key_fingerprint TEXT,
   protection_tier TEXT NOT NULL DEFAULT 'passphrase' CHECK (protection_tier IN ('hardware', 'platform', 'passphrase')),
   label TEXT,
-  last_used_at TIMESTAMPTZ
+  last_used_at TIMESTAMPTZ,
+  credential_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  verification_method TEXT NOT NULL DEFAULT 'manual' CHECK (verification_method IN ('manual', 'webauthn', 'passphrase')),
+  credential_transports JSONB NOT NULL DEFAULT '[]'::jsonb,
+  credential_device_type TEXT CHECK (credential_device_type IN ('singleDevice', 'multiDevice')),
+  credential_backed_up BOOLEAN,
+  credential_attachment TEXT CHECK (credential_attachment IN ('platform', 'cross-platform')),
+  verified_at TIMESTAMPTZ,
+  recovery_wrapped_private_key TEXT,
+  recovery_type TEXT CHECK (recovery_type IN ('mnemonic_bip39'))
 );
 
 CREATE UNIQUE INDEX idx_encryption_keys_member_fingerprint
@@ -66,6 +75,45 @@ CREATE TABLE key_holders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (encryption_key_id, member_id)
 );
+
+CREATE TABLE webauthn_challenges (
+  id SERIAL PRIMARY KEY,
+  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL CHECK (purpose IN ('member_key_registration', 'member_key_assertion')),
+  challenge TEXT NOT NULL,
+  rp_id TEXT NOT NULL,
+  expected_origin TEXT NOT NULL,
+  prf_salt TEXT,
+  requested_method TEXT CHECK (requested_method IN ('security_key', 'passkey')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_webauthn_challenges_member_purpose
+  ON webauthn_challenges (member_id, purpose, created_at DESC);
+
+CREATE INDEX idx_webauthn_challenges_expires
+  ON webauthn_challenges (expires_at);
+
+CREATE TABLE webauthn_credentials (
+  id SERIAL PRIMARY KEY,
+  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+  credential_id TEXT NOT NULL UNIQUE,
+  credential_public_key TEXT NOT NULL,
+  registration_prf_salt TEXT,
+  counter BIGINT NOT NULL DEFAULT 0,
+  credential_device_type TEXT NOT NULL CHECK (credential_device_type IN ('singleDevice', 'multiDevice')),
+  credential_backed_up BOOLEAN NOT NULL DEFAULT FALSE,
+  credential_attachment TEXT CHECK (credential_attachment IN ('platform', 'cross-platform')),
+  credential_transports JSONB NOT NULL DEFAULT '[]'::jsonb,
+  requested_method TEXT CHECK (requested_method IN ('security_key', 'passkey')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_webauthn_credentials_member
+  ON webauthn_credentials (member_id, created_at DESC);
 
 -- ── Documents ───────────────────────────────────────────────────────────────
 
