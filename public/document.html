@@ -528,9 +528,10 @@
           <div style="font-size:2rem; margin-bottom:0.5rem;">🔐</div>
           <div style="font-weight:600; margin-bottom:0.5rem;">Encrypted Document</div>
           <div class="text-dim text-sm mb-1">Mode: <strong>pki</strong></div>
-          <div class="text-dim text-sm mb-1">This file is encrypted to a registered member key. Unlock happens locally in your browser.</div>
-          ${holder ? `<div class="text-dim text-sm mb-1">Required holder: <strong>${holder.member_id === currentMember?.id ? 'You' : `Member #${holder.member_id}`}</strong> · fingerprint <strong>${esc(holder.key_fingerprint || 'unknown')}</strong></div>` : ''}
-          ${keyInfo?.key ? `<div class="text-dim text-sm mb-1">Key: <strong>${esc(keyInfo.key.label || 'Unnamed key')}</strong> · protection <strong>${esc(keyInfo.key.protection_tier || 'unknown')}</strong></div>` : '<div class="text-dim text-sm mb-1">Unable to load key details.</div>'}
+          <div class="text-dim text-sm mb-1">This document is encrypted to a registered member key. It will be unlocked locally in your browser.</div>
+          ${holder ? `<div class="text-dim text-sm mb-1"><strong>Required holder:</strong> ${holder.member_id === currentMember?.id ? 'You' : `Member #${holder.member_id}`}</div>` : ''}
+          ${holder?.key_fingerprint ? `<div class="text-dim text-sm mb-1"><strong>Fingerprint:</strong> ${esc(holder.key_fingerprint)}</div>` : ''}
+          ${keyInfo?.key ? `<div class="text-dim text-sm mb-1"><strong>Key:</strong> ${esc(keyInfo.key.label || 'Unnamed key')} · <strong>Protection:</strong> ${esc(keyInfo.key.protection_tier || 'unknown')}</div>` : '<div class="text-dim text-sm mb-1">Unable to load key details.</div>'}
           ${requiresKeyPassphrase ? `
             <div class="form-group mt-1">
               <label class="form-label">Key Passphrase</label>
@@ -597,7 +598,14 @@
             a.click();
           });
         } catch (err) {
-          status.textContent = err?.message || (isPki ? 'Unlock failed. Check your key and try again.' : 'Unlock failed. Check passphrase and try again.');
+          const message = String(err?.message || '');
+          if (isPki && /timed out|not allowed|operation was aborted|operation either timed out/i.test(message)) {
+            status.textContent = 'Key sign-in was cancelled or timed out. Try again when ready.';
+          } else if (isPki) {
+            status.textContent = err?.message || 'Unlock failed. Check your key and try again.';
+          } else {
+            status.textContent = err?.message || 'Unlock failed. Check passphrase and try again.';
+          }
         } finally {
           unlockBtn.disabled = false;
         }
