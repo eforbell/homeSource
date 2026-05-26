@@ -626,23 +626,35 @@
       return payload;
     }
 
-    async function getAssertionPrfResult(memberId, credentialId) {
+    async function getAssertionPrfResult(memberId, credentialId, progress) {
+      progress?.('Requesting key assertion…');
       const payload = await API.post(`api/members/${memberId}/keys/webauthn/assertion-options`, {
         credential_id: credentialId
       });
+      console.info('[HomeSource] PKI upload: assertion options received', { credentialId });
+      progress?.('Complete your security-key sign-in…');
       const assertion = await navigator.credentials.get({
         publicKey: toPublicKeyRequestOptions(payload.options)
       });
       if (!assertion) throw new Error('WebAuthn assertion was cancelled');
+      console.info('[HomeSource] PKI upload: assertion returned', {
+        credentialId,
+        authenticatorAttachment: assertion.authenticatorAttachment || null
+      });
       const extensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
       const prfResult = extensionResults?.prf?.results?.first;
       if (!prfResult) throw new Error('This key did not expose the PRF extension during sign-in');
+      console.info('[HomeSource] PKI upload: PRF result extracted', {
+        credentialId,
+        constructorName: prfResult?.constructor?.name || typeof prfResult
+      });
       return prfResult;
     }
 
-    async function deriveMemberKekForUpload(key, passphrase) {
+    async function deriveMemberKekForUpload(key, passphrase, progress) {
       if (key.credential_verified && key.verification_method === 'webauthn' && key.credential_id) {
-        const prfResult = await getAssertionPrfResult(currentMember.id, key.credential_id);
+        const prfResult = await getAssertionPrfResult(currentMember.id, key.credential_id, progress);
+        progress?.('Deriving upload key…');
         return PKICrypto.deriveKekFromPrf(prfResult);
       }
       if (key.protection_tier === 'passphrase' || key.verification_method === 'passphrase') {
@@ -651,26 +663,32 @@
         if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
           throw new Error('Unsupported passphrase-wrapped key format');
         }
+        progress?.('Deriving upload key…');
         return (await PKICrypto.deriveKekFromPassphrase(passphrase, PKICrypto.fromBase64(wrapped.salt_b64))).kek;
       }
       throw new Error('This key cannot yet be used for upload encryption');
     }
 
-    async function encryptSelectedFileWithPki(file, key, keyPassphrase) {
+    async function encryptSelectedFileWithPki(file, key, keyPassphrase, progress) {
+      progress?.('Loading wrapped key…');
       const material = await API.get(`api/members/${currentMember.id}/keys/${key.id}/material`);
       const wrapped = parseWrappedMemberKey(material);
-      const kek = await deriveMemberKekForUpload(material, keyPassphrase);
+      const kek = await deriveMemberKekForUpload(material, keyPassphrase, progress);
+      progress?.('Unlocking member key…');
       const privateKey = await PKICrypto.unwrapPrivateKey(
         PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
         kek
       );
+      console.info('[HomeSource] PKI upload: member key unwrapped', { keyId: material.id });
       const ownerPublicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(material.public_key));
+      progress?.('Generating document key…');
       const dek = await crypto.subtle.generateKey(
         { name: 'AES-GCM', length: 256 },
         true,
         ['encrypt', 'decrypt']
       );
       const plaintext = new Uint8Array(await file.arrayBuffer());
+      progress?.('Encrypting file locally…');
       const contentIv = crypto.getRandomValues(new Uint8Array(12));
       const ciphertextBuffer = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: contentIv, tagLength: 128 },
@@ -678,12 +696,15 @@
         plaintext
       );
       const metaIv = crypto.getRandomValues(new Uint8Array(12));
+      progress?.('Sealing file metadata…');
       const encryptedMeta = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: metaIv, tagLength: 128 },
         dek,
         fromUtf8(JSON.stringify({ original_filename: file.name, mime_type: file.type || 'application/octet-stream' }))
       );
+      progress?.('Wrapping document key to your key…');
       const wrappedDek = await PKICrypto.wrapDekForOwner(dek, ownerPublicKey);
+      console.info('[HomeSource] PKI upload: document key wrapped', { keyId: material.id });
       const encryptedFile = new File(
         [ciphertextBuffer],
         `${crypto.randomUUID()}.enc`,
@@ -1775,7 +1796,8 @@
               ? await encryptSelectedFileWithPki(
                 selectedFile,
                 memberKeys.find((key) => String(key.id) === String(document.getElementById('encrypt-pki-key').value)) || preferredPkiKey(memberKeys),
-                pkiPassphrase
+                pkiPassphrase,
+                (message) => { status.textContent = message; }
               )
               : await encryptSelectedFileWithPassphrase(selectedFile, passphrase);
             uploadFile = encrypted.file;
