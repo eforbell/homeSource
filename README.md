@@ -106,6 +106,10 @@ Export format: `homesource-backup-{datetime}.tar.gz` containing:
 
 Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup posture based on configurable expected frequency (default: 30 days).
 
+For the full break-glass operator workflow, see:
+
+- [docs/recovery-runbook.md](docs/recovery-runbook.md)
+
 ### Manual Decryption of Encrypted Document Files from Backup
 
 If a document file was uploaded in encrypted mode, the backup preserves that ciphertext as-is.
