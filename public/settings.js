@@ -247,7 +247,7 @@
 
     const actionButtons = [
       `<button class="btn btn-sm" data-verify-key="${key.id}" data-member-id="${member.id}">Verify</button>`,
-      (state.me.role === 'parent' || state.me.id === member.id)
+      (state.me.id === member.id)
         ? `<button class="btn btn-sm btn-danger" data-revoke-key="${key.id}" data-member-id="${member.id}">Revoke</button>`
         : '',
     ].join('');
