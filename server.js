@@ -40,6 +40,13 @@ function isHttpsRequest(req) {
   return req.secure === true;
 }
 
+function allowSelfFraming(res) {
+  const existing = String(res.getHeader('Content-Security-Policy') || '');
+  if (!existing) return;
+  const updated = existing.replace(/frame-ancestors\s+'none'/, "frame-ancestors 'self'");
+  res.setHeader('Content-Security-Policy', updated);
+}
+
 function buildSovereignFontsCss() {
   const source = String(process.env.SOVEREIGN_FONT_SOURCE || 'google').trim().toLowerCase();
   if (source === 'off') return '/* Sovereign fonts disabled via SOVEREIGN_FONT_SOURCE=off */\n';
@@ -762,6 +769,7 @@ app.get('/api/documents/:id/files/:fileId/download', requireAuth, async (req, re
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
 
     await audit.log('document.downloaded', 'document', docId, req.member.id, { file_id: file.id });
+    allowSelfFraming(res);
     res.setHeader('Content-Type', file.mime_type);
     res.setHeader('Content-Disposition', `inline; filename="${file.original_filename}"`);
     fs.createReadStream(filePath).pipe(res);
@@ -949,6 +957,7 @@ app.get('/api/share/:token/files/:fileId/download', async (req, res) => {
     const filePath = getFilePath(file.stored_filename);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
 
+    allowSelfFraming(res);
     res.setHeader('Content-Type', file.mime_type);
     if (link.access_level === 'download') {
       res.setHeader('Content-Disposition', `attachment; filename="${file.original_filename}"`);

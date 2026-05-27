@@ -239,6 +239,12 @@ describe('cross-member document auth surfaces', () => {
     const res = await authedGet(`api/documents/${parentDoc.id}/files/${parentFile.id}/download`, kidCookie);
     assert.equal(res.status, 403);
   });
+
+  it('document file download route allows same-origin framing for preview', async () => {
+    const res = await authedGet(`api/documents/${parentDoc.id}/files/${parentFile.id}/download`, parentCookie);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'self'/);
+  });
 });
 
 describe('document owners', () => {
