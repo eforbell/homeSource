@@ -158,6 +158,9 @@ describe('backup export with encrypted documents', () => {
       assert.equal(encryptedDoc.is_encrypted, true);
       assert.equal(encryptedDoc.encryption_mode, 'passphrase');
       assert.equal(encryptedDoc.encryption_metadata?.version, 1);
+      const exportedMember = (dbExport.family_members || []).find(m => Number(m.id) === Number(parent.id));
+      assert.ok(exportedMember, 'family member should be present in backup export');
+      assert.equal(Object.hasOwn(exportedMember, 'passphrase_hash'), false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -364,6 +367,25 @@ describe('backup export with encrypted documents', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       fs.rmSync(outRecovery, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects truncated encrypted backup archives with a clear error', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-short-'));
+    const shortPath = path.join(tmpDir, 'short.tar.gz.enc');
+    const outputPath = path.join(tmpDir, 'out.tar.gz');
+    fs.writeFileSync(shortPath, Buffer.alloc(10));
+    try {
+      assert.throws(() => {
+        execFileSync(process.execPath, [
+          'bin/decrypt-backup-archive.js',
+          '--input', shortPath,
+          '--output', outputPath,
+          '--passphrase', 'irrelevant'
+        ], { cwd: process.cwd(), stdio: 'pipe' });
+      }, /too short/);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

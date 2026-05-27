@@ -69,6 +69,15 @@ function sanitizeFilename(name) {
   return String(name || 'decrypted.bin').replace(/[\\/:*?"<>|]/g, '_').trim() || 'decrypted.bin';
 }
 
+function resolveEncryptedPathInsideBackupRoot(backupRoot, storedFilename) {
+  const root = path.resolve(backupRoot);
+  const encryptedPath = path.resolve(root, String(storedFilename || ''));
+  if (!(encryptedPath === root || encryptedPath.startsWith(root + path.sep))) {
+    throw new Error(`File path escapes backup root: ${storedFilename}`);
+  }
+  return encryptedPath;
+}
+
 async function deriveWrapKey(passphrase, salt) {
   const passphraseKey = await subtle.importKey('raw', Buffer.from(passphrase, 'utf8'), 'PBKDF2', false, ['deriveKey']);
   return subtle.deriveKey(
@@ -154,13 +163,15 @@ async function decryptPassphraseMode({ doc, originalFile, backupRoot, args }) {
     throw new Error('Missing encryption metadata: files.upload');
   }
 
-  const encryptedPath = path.resolve(backupRoot, String(originalFile.stored_filename || ''));
+  const encryptedPath = resolveEncryptedPathInsideBackupRoot(backupRoot, originalFile.stored_filename);
   if (!fs.existsSync(encryptedPath)) throw new Error(`Encrypted file not found: ${encryptedPath}`);
 
   const salt = toBytesB64(uploadMeta.wrapped_dek.salt_b64);
   const wrapIv = toBytesB64(uploadMeta.wrapped_dek.wrap_iv_b64);
   const wrappedDek = toBytesB64(uploadMeta.wrapped_dek.wrapped_dek_b64);
   const contentIv = toBytesB64(uploadMeta.iv_b64);
+  const wrapTagLength = Number(uploadMeta.wrapped_dek.tag_length_bits || 128);
+  const contentTagLength = Number(uploadMeta.tag_length_bits || 128);
   const wrapKind = String(uploadMeta.wrapped_dek.kind || 'passphrase_pbkdf2');
   let wrapKey;
   if (wrapKind === 'passphrase_argon2id') {
@@ -170,10 +181,10 @@ async function decryptPassphraseMode({ doc, originalFile, backupRoot, args }) {
   } else {
     throw new Error(`Unsupported wrapped_dek.kind "${wrapKind}" in this CLI`);
   }
-  const rawDek = await subtle.decrypt({ name: 'AES-GCM', iv: wrapIv, tagLength: 128 }, wrapKey, wrappedDek);
+  const rawDek = await subtle.decrypt({ name: 'AES-GCM', iv: wrapIv, tagLength: wrapTagLength }, wrapKey, wrappedDek);
   const contentKey = await subtle.importKey('raw', rawDek, 'AES-GCM', false, ['decrypt']);
   const encryptedBytes = fs.readFileSync(encryptedPath);
-  const plaintext = await subtle.decrypt({ name: 'AES-GCM', iv: contentIv, tagLength: 128 }, contentKey, encryptedBytes);
+  const plaintext = await subtle.decrypt({ name: 'AES-GCM', iv: contentIv, tagLength: contentTagLength }, contentKey, encryptedBytes);
   return { plaintext: Buffer.from(plaintext), contentKey, uploadMeta, encryptedPath };
 }
 
@@ -182,7 +193,7 @@ async function decryptPkiMode({ doc, originalFile, backupRoot, db, args }) {
   if (!uploadMeta?.wrapped_dek || !uploadMeta.iv_b64) {
     throw new Error('Missing encryption metadata: files.upload');
   }
-  const encryptedPath = path.resolve(backupRoot, String(originalFile.stored_filename || ''));
+  const encryptedPath = resolveEncryptedPathInsideBackupRoot(backupRoot, originalFile.stored_filename);
   if (!fs.existsSync(encryptedPath)) throw new Error(`Encrypted file not found: ${encryptedPath}`);
 
   const privateKey = await resolveOwnerPrivateKey({ doc, db, args });

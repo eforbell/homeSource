@@ -35,6 +35,9 @@ function parseArgs(argv) {
 }
 
 function decryptArchive(buffer, passphrase) {
+  if (buffer.length < 62) {
+    throw new Error(`Encrypted backup archive is too short (${buffer.length} bytes)`);
+  }
   const version = buffer.readUInt8(0);
   if (version !== 1) {
     throw new Error(`Unsupported backup archive version: ${version}`);
