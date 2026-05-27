@@ -93,6 +93,28 @@ describe('MagicInsight deterministic scan', () => {
     const stats = await res.json();
     assert.equal(stats.insights, null);
   });
+
+  it('kid dashboard stats only include documents the kid owns', async () => {
+    const kidDoc = await createTestDocument(kid.id, { title: 'Kid Visible Doc', document_type: 'identification' });
+    await createTestDocument(parent.id, { title: 'Parent Only Secret', document_type: 'legal' });
+
+    const kidRes = await authedGet('api/stats', kidCookie);
+    assert.equal(kidRes.status, 200);
+    const kidStats = await kidRes.json();
+
+    assert.equal(kidStats.total_documents >= 1, true);
+    const kidTitles = kidStats.recent.map(d => d.title);
+    assert.ok(kidTitles.includes('Kid Visible Doc'), 'kid should see own document');
+    assert.ok(!kidTitles.includes('Parent Only Secret'), 'kid must not see parent-only document');
+    assert.ok(!kidStats.recent.some(d => !kidTitles.includes(d.title) && d.title === 'Parent Only Secret'));
+
+    const parentRes = await authedGet('api/stats', parentCookie);
+    assert.equal(parentRes.status, 200);
+    const parentStats = await parentRes.json();
+    const parentTitles = parentStats.recent.map(d => d.title);
+    assert.ok(parentTitles.includes('Parent Only Secret'), 'parent should see all documents');
+    assert.ok(parentStats.total_documents > kidStats.total_documents, 'parent should see more documents than kid');
+  });
 });
 
 describe('MagicInsight parent workflow and access control', () => {

@@ -1254,11 +1254,14 @@ app.post('/api/links/scan', requireAuth, requireParent, async (req, res) => {
 
 app.get('/api/stats', requireAuth, async (req, res) => {
   try {
+    const isKid = req.member.role === 'kid';
+    const ownerJoin = isKid ? 'JOIN document_owners do2 ON do2.document_id = d.id AND do2.member_id = $1' : '';
+    const ownerParams = isKid ? [req.member.id] : [];
     const tasks = [
-      pool.query("SELECT COUNT(*)::int AS total FROM documents WHERE status = 'active'"),
-      pool.query("SELECT document_type, COUNT(*)::int AS count FROM documents WHERE status = 'active' GROUP BY document_type ORDER BY count DESC"),
-      pool.query("SELECT d.id, d.title, d.document_type, d.created_at FROM documents d WHERE d.status = 'active' ORDER BY d.created_at DESC LIMIT 5"),
-      pool.query("SELECT d.id, d.title, d.document_type, d.expiry_date FROM documents d WHERE d.status = 'active' AND d.expiry_date IS NOT NULL AND d.expiry_date <= NOW() + INTERVAL '90 days' ORDER BY d.expiry_date ASC LIMIT 10"),
+      pool.query(`SELECT COUNT(*)::int AS total FROM documents d ${ownerJoin} WHERE d.status = 'active'`, ownerParams),
+      pool.query(`SELECT d.document_type, COUNT(*)::int AS count FROM documents d ${ownerJoin} WHERE d.status = 'active' GROUP BY d.document_type ORDER BY count DESC`, ownerParams),
+      pool.query(`SELECT d.id, d.title, d.document_type, d.created_at FROM documents d ${ownerJoin} WHERE d.status = 'active' ORDER BY d.created_at DESC LIMIT 5`, ownerParams),
+      pool.query(`SELECT d.id, d.title, d.document_type, d.expiry_date FROM documents d ${ownerJoin} WHERE d.status = 'active' AND d.expiry_date IS NOT NULL AND d.expiry_date <= NOW() + INTERVAL '90 days' ORDER BY d.expiry_date ASC LIMIT 10`, ownerParams),
       getBackupStatus()
     ];
     if (req.member?.role === 'parent') tasks.push(insights.getInsightSummary());
