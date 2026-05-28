@@ -336,6 +336,42 @@ app.get('/api/auth/me', (req, res) => {
   res.json(req.member);
 });
 
+app.post('/api/auth/passphrase', requireAuth, async (req, res) => {
+  try {
+    const currentPassphrase = String(req.body?.current_passphrase || '');
+    const nextPassphrase = String(req.body?.new_passphrase || '');
+    if (!nextPassphrase || nextPassphrase.length < 8) {
+      return res.status(400).json({ error: 'New passphrase must be at least 8 characters' });
+    }
+
+    const { rows } = await pool.query(
+      'SELECT id, passphrase_hash FROM family_members WHERE id = $1',
+      [req.member.id]
+    );
+    const member = rows[0];
+    if (!member) return res.status(404).json({ error: 'Member not found' });
+
+    if (member.passphrase_hash) {
+      if (!currentPassphrase) return res.status(400).json({ error: 'Current passphrase required' });
+      if (!verifyPassphrase(currentPassphrase, member.passphrase_hash)) {
+        return res.status(401).json({ error: 'Current passphrase is incorrect' });
+      }
+      if (verifyPassphrase(nextPassphrase, member.passphrase_hash)) {
+        return res.status(400).json({ error: 'New passphrase must be different from current passphrase' });
+      }
+    }
+
+    await pool.query(
+      'UPDATE family_members SET passphrase_hash = $1 WHERE id = $2',
+      [hashPassphrase(nextPassphrase), req.member.id]
+    );
+    await audit.log('auth.passphrase_changed', 'family_member', req.member.id, req.member.id, { self_service: true });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Members ─────────────────────────────────────────────────────────────────
 
 app.get('/api/members', async (_req, res) => {

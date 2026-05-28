@@ -116,6 +116,31 @@
     </div>
   </div>
 
+  <!-- Change passphrase modal -->
+  <div class="modal-backdrop hidden" id="passphrase-modal">
+    <div class="modal">
+      <div class="modal-title">Update Login Passphrase</div>
+      <p class="text-dim text-sm mb-1">Update the login passphrase for <strong id="passphrase-member-name"></strong>.</p>
+      <div class="form-group" id="current-passphrase-group">
+        <label class="form-label">Current passphrase</label>
+        <input type="password" id="current-passphrase" class="form-input" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label class="form-label">New passphrase</label>
+        <input type="password" id="new-passphrase" class="form-input" autocomplete="new-password">
+        <div class="form-hint">Use at least 8 characters.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm new passphrase</label>
+        <input type="password" id="confirm-new-passphrase" class="form-input" autocomplete="new-password">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" data-close-modal="passphrase-modal">Cancel</button>
+        <button class="btn btn-primary" id="save-passphrase-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add/edit tag modal -->
   <div class="modal-backdrop hidden" id="tag-modal">
     <div class="modal">

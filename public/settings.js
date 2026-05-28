@@ -8,6 +8,7 @@
     editingTagId: null,
     keysByMember: new Map(),
     registration: null,
+    passphraseMember: null,
   };
 
   const themeSelect = document.getElementById('theme-select');
@@ -37,6 +38,38 @@
       });
       closeModal('member-modal');
       toast('Member added', 'success');
+      await loadMembersAndKeys();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('save-passphrase-btn').addEventListener('click', async () => {
+    const member = state.passphraseMember;
+    if (!member || member.id !== state.me.id) {
+      toast('You can only update your own passphrase', 'error');
+      return;
+    }
+
+    const currentPassphrase = document.getElementById('current-passphrase').value || '';
+    const newPassphrase = document.getElementById('new-passphrase').value || '';
+    const confirmPassphrase = document.getElementById('confirm-new-passphrase').value || '';
+    if (!newPassphrase || newPassphrase.length < 8) {
+      toast('Use a passphrase with at least 8 characters', 'error');
+      return;
+    }
+    if (newPassphrase !== confirmPassphrase) {
+      toast('Passphrases do not match', 'error');
+      return;
+    }
+
+    try {
+      await API.post('api/auth/passphrase', {
+        current_passphrase: currentPassphrase || undefined,
+        new_passphrase: newPassphrase,
+      });
+      closeModal('passphrase-modal');
+      toast('Login passphrase updated', 'success');
       await loadMembersAndKeys();
     } catch (err) {
       toast(err.message, 'error');
@@ -151,6 +184,10 @@
         ? '<span class="badge badge-info">You</span>'
         : `<span class="text-xs text-muted">${member.role}</span>`;
       const keySummary = summarizeKeys(state.keysByMember.get(member.id) || []);
+      const canChangeOwnPassphrase = member.id === state.me.id;
+      const passphraseAction = canChangeOwnPassphrase
+        ? `<button class="btn btn-sm" data-change-passphrase="${member.id}">${member.has_passphrase ? 'Change' : 'Set'} passphrase</button>`
+        : '';
       return `
         <div class="flex-between mb-1" style="padding:0.75rem 0; border-bottom:1px solid var(--border); align-items:flex-start;">
           <div class="flex gap-1" style="align-items:center;">
@@ -164,9 +201,31 @@
               <div class="text-xs text-dim" style="margin-top:0.25rem;">${keySummary}</div>
             </div>
           </div>
+          ${passphraseAction}
         </div>
       `;
     }).join('') || '<div class="text-dim text-sm">No household members yet.</div>';
+
+    document.querySelectorAll('[data-change-passphrase]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const memberId = Number(button.getAttribute('data-change-passphrase'));
+        const member = state.members.find((entry) => entry.id === memberId);
+        if (member) openPassphraseModal(member);
+      });
+    });
+  }
+
+  function openPassphraseModal(member) {
+    state.passphraseMember = member;
+    document.getElementById('passphrase-member-name').textContent = member.name || 'your account';
+    document.getElementById('current-passphrase').value = '';
+    document.getElementById('new-passphrase').value = '';
+    document.getElementById('confirm-new-passphrase').value = '';
+    const currentGroup = document.getElementById('current-passphrase-group');
+    currentGroup.style.display = member.has_passphrase ? '' : 'none';
+    document.getElementById('passphrase-modal').classList.remove('hidden');
+    const focusId = member.has_passphrase ? 'current-passphrase' : 'new-passphrase';
+    document.getElementById(focusId)?.focus();
   }
 
   async function loadKeys() {
@@ -914,6 +973,9 @@
     if (id === 'key-registration-modal') {
       closeRegistrationModal();
       return;
+    }
+    if (id === 'passphrase-modal') {
+      state.passphraseMember = null;
     }
     document.getElementById(id)?.classList.add('hidden');
   }

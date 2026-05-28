@@ -6,6 +6,17 @@ const { startServer, stopServer, resetDatabase, createMember, url } = require('.
 
 let parent, kid;
 
+async function loginCookie(name, passphrase) {
+  const loginRes = await fetch(url('api/auth/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, passphrase })
+  });
+  const cookies = loginRes.headers.get('set-cookie') || '';
+  const match = cookies.match(/hs_session=([^;]+)/);
+  return match ? `hs_session=${match[1]}` : null;
+}
+
 before(async () => {
   await startServer();
   await resetDatabase();
@@ -71,14 +82,7 @@ describe('GET /api/auth/me', () => {
   });
 
   it('returns member info with valid session', async () => {
-    const loginRes = await fetch(url('api/auth/login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'AuthParent', passphrase: 'secret123' })
-    });
-    const cookies = loginRes.headers.get('set-cookie');
-    const match = cookies.match(/hs_session=([^;]+)/);
-    const cookie = `hs_session=${match[1]}`;
+    const cookie = await loginCookie('AuthParent', 'secret123');
 
     const res = await fetch(url('api/auth/me'), {
       headers: { Cookie: cookie }
@@ -92,14 +96,7 @@ describe('GET /api/auth/me', () => {
 
 describe('POST /api/auth/logout', () => {
   it('clears session cookie', async () => {
-    const loginRes = await fetch(url('api/auth/login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'AuthParent', passphrase: 'secret123' })
-    });
-    const cookies = loginRes.headers.get('set-cookie');
-    const match = cookies.match(/hs_session=([^;]+)/);
-    const cookie = `hs_session=${match[1]}`;
+    const cookie = await loginCookie('AuthParent', 'secret123');
 
     const logoutRes = await fetch(url('api/auth/logout'), {
       method: 'POST',
@@ -111,5 +108,52 @@ describe('POST /api/auth/logout', () => {
       headers: { Cookie: cookie }
     });
     assert.equal(meRes.status, 401);
+  });
+});
+
+describe('POST /api/auth/passphrase', () => {
+  it('requires authentication', async () => {
+    const res = await fetch(url('api/auth/passphrase'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_passphrase: 'secret123', new_passphrase: 'new-secret-123' })
+    });
+    assert.equal(res.status, 401);
+  });
+
+  it('updates own passphrase and invalidates old login credentials', async () => {
+    const cookie = await loginCookie('AuthParent', 'secret123');
+    const changeRes = await fetch(url('api/auth/passphrase'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ current_passphrase: 'secret123', new_passphrase: 'new-secret-123' })
+    });
+    assert.equal(changeRes.status, 200);
+    const changed = await changeRes.json();
+    assert.equal(changed.ok, true);
+
+    const oldLogin = await fetch(url('api/auth/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'AuthParent', passphrase: 'secret123' })
+    });
+    assert.equal(oldLogin.status, 401);
+
+    const newLogin = await fetch(url('api/auth/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'AuthParent', passphrase: 'new-secret-123' })
+    });
+    assert.equal(newLogin.status, 200);
+  });
+
+  it('rejects incorrect current passphrase', async () => {
+    const cookie = await loginCookie('AuthParent', 'new-secret-123');
+    const res = await fetch(url('api/auth/passphrase'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ current_passphrase: 'wrong-passphrase', new_passphrase: 'another-secret-123' })
+    });
+    assert.equal(res.status, 401);
   });
 });
