@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'upload.html'), 'utf8');
+const importSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'import.html'), 'utf8');
 
 test('scanner crop mode includes rotate controls and perspective toggle', () => {
   assert.match(source, /id="corner-rotate-left-btn"/);
@@ -25,4 +26,16 @@ test('scanner script supports rotating frozen frames and optional perspective co
   assert.match(source, /document\.getElementById\('corner-rotate-right-btn'\)\.addEventListener\('click'/);
   assert.match(source, /document\.getElementById\('preview-rotate-left-btn'\)\.addEventListener\('click'/);
   assert.match(source, /document\.getElementById\('preview-rotate-right-btn'\)\.addEventListener\('click'/);
+});
+
+test('upload picker accept list includes doc/docx/txt extensions', () => {
+  assert.match(source, /id="file-input"[^>]*accept="[^"]*\.doc[^"]*"/);
+  assert.match(source, /id="file-input"[^>]*accept="[^"]*\.docx[^"]*"/);
+  assert.match(source, /id="file-input"[^>]*accept="[^"]*\.txt[^"]*"/);
+});
+
+test('batch import picker accept list includes doc/docx/txt extensions', () => {
+  assert.match(importSource, /id="batch-files"[^>]*accept="[^"]*\.doc[^"]*"/);
+  assert.match(importSource, /id="batch-files"[^>]*accept="[^"]*\.docx[^"]*"/);
+  assert.match(importSource, /id="batch-files"[^>]*accept="[^"]*\.txt[^"]*"/);
 });
