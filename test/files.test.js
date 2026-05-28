@@ -24,8 +24,13 @@ describe('ALLOWED_MIME', () => {
     assert.ok(ALLOWED_MIME.has('image/heif'));
   });
 
+  it('includes common document file types for vaulting', () => {
+    assert.ok(ALLOWED_MIME.has('text/plain'));
+    assert.ok(ALLOWED_MIME.has('application/msword'));
+    assert.ok(ALLOWED_MIME.has('application/vnd.openxmlformats-officedocument.wordprocessingml.document'));
+  });
+
   it('rejects arbitrary types', () => {
-    assert.ok(!ALLOWED_MIME.has('text/plain'));
     assert.ok(!ALLOWED_MIME.has('application/zip'));
     assert.ok(!ALLOWED_MIME.has('video/mp4'));
   });

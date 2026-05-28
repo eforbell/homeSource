@@ -36,6 +36,20 @@ function tinyPng(name = 'page.png') {
   };
 }
 
+function textFile(name = 'notes.txt') {
+  return {
+    name,
+    blob: new Blob([Buffer.from('household notes')], { type: 'text/plain' })
+  };
+}
+
+function docxFile(name = 'statement.docx') {
+  return {
+    name,
+    blob: new Blob([Buffer.from('PK\x03\x04fake-docx-bytes')], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+  };
+}
+
 async function stageFile(batchId, cookie, file = pdfFile(), relativePath = file.name) {
   const form = new FormData();
   form.append('file', file.blob, file.name);
@@ -116,6 +130,23 @@ describe('import batches API', () => {
     const items = await (await authedGet(`api/import/batches/${batch.id}/items`, parentCookie)).json();
     assert.equal(items[0].status, 'skipped_duplicate');
     assert.ok(items[0].document_id);
+  });
+
+  it('accepts text and docx files for staging', async () => {
+    const batchRes = await authedPost('api/import/batches', parentCookie, { name: 'Text + Docx import', source_kind: 'browser_files' });
+    const batch = await batchRes.json();
+
+    const txtStage = await stageFile(batch.id, parentCookie, textFile(), 'notes.txt');
+    assert.equal(txtStage.status, 201);
+    const txtItem = await txtStage.json();
+    assert.equal(txtItem.mime_type, 'text/plain');
+    assert.equal(txtItem.status, 'queued');
+
+    const docxStage = await stageFile(batch.id, parentCookie, docxFile(), 'statement.docx');
+    assert.equal(docxStage.status, 201);
+    const docxItem = await docxStage.json();
+    assert.equal(docxItem.mime_type, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    assert.equal(docxItem.status, 'queued');
   });
 });
 
