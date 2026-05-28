@@ -261,6 +261,48 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="encrypt-modal">
+    <div class="modal">
+      <div class="modal-title">Encrypt Document</div>
+      <div class="form-group">
+        <div class="text-sm text-dim">This converts the current document in place. Server previews, MagicIndex, and share links will stop working after encryption.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Encryption Mode</label>
+        <select id="encrypt-existing-mode" class="form-select">
+          <option value="passphrase" selected>Passphrase</option>
+          <option value="pki">Your Key (PKI)</option>
+        </select>
+      </div>
+      <div class="form-group" id="encrypt-existing-passphrase-fields">
+        <label class="form-label">Passphrase</label>
+        <input type="password" id="encrypt-existing-passphrase" class="form-input" placeholder="Strong passphrase">
+        <label class="form-label mt-1">Confirm passphrase</label>
+        <input type="password" id="encrypt-existing-passphrase-confirm" class="form-input" placeholder="Re-enter passphrase">
+        <label class="form-label mt-1">Encryption Scheme</label>
+        <select id="encrypt-existing-kdf-scheme" class="form-select">
+          <option value="pbkdf2" selected>PBKDF2 (Compatible default)</option>
+          <option value="argon2id">Argon2id (Higher security, slower)</option>
+        </select>
+        <div class="form-hint" id="encrypt-existing-kdf-hint">PBKDF2 is broadly compatible and faster. Argon2id is slower but more brute-force resistant.</div>
+      </div>
+      <div class="form-group" id="encrypt-existing-pki-fields" style="display:none;">
+        <label class="form-label">Encryption Key</label>
+        <select id="encrypt-existing-pki-key" class="form-select"></select>
+        <div id="encrypt-existing-pki-hint" class="form-hint">Loading your registered keys…</div>
+        <div id="encrypt-existing-pki-passphrase-wrap" style="display:none; margin-top:0.75rem;">
+          <label class="form-label">Key Passphrase</label>
+          <input type="password" id="encrypt-existing-pki-passphrase" class="form-input" placeholder="Enter the passphrase for this encryption key">
+        </div>
+      </div>
+      <div id="encrypt-existing-status" class="text-sm text-dim" style="min-height:1.25rem;"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeEncryptModal()">Cancel</button>
+        <button class="btn btn-primary" id="confirm-encrypt-btn">Encrypt Document</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
@@ -275,7 +317,10 @@
 
     let currentDoc = null;
     let currentMember = null;
+    let memberKeys = [];
     let unlockedFiles = new Map();
+    const PBKDF2_ITERATIONS = 600000;
+    const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
     function isEncryptedDoc(doc) {
       return !!(doc && (doc.is_encrypted || (doc.encryption_mode && doc.encryption_mode !== 'plaintext')));
@@ -292,13 +337,23 @@
       return new TextDecoder().decode(bytes);
     }
 
+    function fromUtf8(text) {
+      return new TextEncoder().encode(String(text || ''));
+    }
+
+    function toBase64(bytes) {
+      let bin = '';
+      for (const byte of bytes) bin += String.fromCharCode(byte);
+      return btoa(bin);
+    }
+
     function safeFileName(name) {
       const cleaned = String(name || 'decrypted-file').replace(/[\\/:*?"<>|]/g, '_').trim();
       return cleaned || 'decrypted-file';
     }
 
-    async function derivePbkdf2Key(passphrase, salt, params = {}) {
-      const iterations = Number(params.iterations || 600000);
+    async function derivePbkdf2Key(passphrase, salt, params = {}, usages = ['decrypt']) {
+      const iterations = Number(params.iterations || PBKDF2_ITERATIONS);
       const hash = String(params.hash || 'SHA-256');
       const passKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
       return crypto.subtle.deriveKey(
@@ -306,18 +361,18 @@
         passKey,
         { name: 'AES-GCM', length: 256 },
         false,
-        ['decrypt']
+        usages
       );
     }
 
-    async function deriveArgon2idKey(passphrase, salt, params = {}) {
+    async function deriveArgon2idKey(passphrase, salt, params = {}, usages = ['decrypt']) {
       if (!window.argon2 || typeof window.argon2.hash !== 'function') {
         throw new Error('Argon2id unavailable in this browser/session');
       }
-      const memory_kib = Number(params.memory_kib || 65536);
-      const iterations = Number(params.iterations || 3);
-      const parallelism = Number(params.parallelism || 1);
-      const hash_len = Number(params.hash_len || 32);
+      const memory_kib = Number(params.memory_kib || ARGON2ID_PARAMS.memory_kib);
+      const iterations = Number(params.iterations || ARGON2ID_PARAMS.iterations);
+      const parallelism = Number(params.parallelism || ARGON2ID_PARAMS.parallelism);
+      const hash_len = Number(params.hash_len || ARGON2ID_PARAMS.hash_len);
       const result = await window.argon2.hash({
         pass: passphrase,
         salt,
@@ -328,7 +383,23 @@
         type: window.argon2.ArgonType.Argon2id
       });
       const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
-      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, usages);
+    }
+
+    function preferredPkiKey(keys) {
+      return [...keys].sort((a, b) => {
+        const score = (key) => (key.credential_verified ? 10 : 0) + (key.recovery_enabled ? 2 : 0);
+        const aTime = new Date(a.last_used_at || a.created_at || 0).getTime();
+        const bTime = new Date(b.last_used_at || b.created_at || 0).getTime();
+        return (score(b) - score(a)) || (bTime - aTime);
+      })[0] || null;
+    }
+
+    function formatPkiKeyOption(key) {
+      const label = key.label || (key.protection_tier === 'hardware' ? 'Security key' : key.protection_tier === 'platform' ? 'Passkey' : 'Passphrase key');
+      const shortFingerprint = (key.key_fingerprint || '').split(':').slice(0, 4).join(':');
+      const posture = key.credential_verified ? 'verified' : 'unverified';
+      return `${label} · ${shortFingerprint} · ${posture}`;
     }
 
     async function decryptEncryptedDocumentWithPassphrase(doc, passphrase) {
@@ -464,6 +535,255 @@
       return { fileId: original.id, blob, objectUrl, name: safeFileName(fileMeta.original_filename), mime: fileMeta.mime_type || blob.type };
     }
 
+    async function fetchOriginalFileForEncryption() {
+      const originals = (currentDoc?.files || []).filter((file) => file.file_type === 'original');
+      if (originals.length !== 1) {
+        throw new Error('Encrypting documents with multiple uploads is not supported yet');
+      }
+      const original = originals[0];
+      const response = await fetch(`api/documents/${currentDoc.id}/files/${original.id}/download`);
+      if (!response.ok) throw new Error('Unable to load the current document file');
+      const blob = await response.blob();
+      return new File([blob], original.original_filename, { type: original.mime_type || blob.type || 'application/octet-stream' });
+    }
+
+    async function encryptExistingFileWithPassphrase(file, passphrase) {
+      const plaintext = new Uint8Array(await file.arrayBuffer());
+      const contentKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      const contentIv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertextBuffer = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: contentIv, tagLength: 128 },
+        contentKey,
+        plaintext
+      );
+
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const wrapIv = crypto.getRandomValues(new Uint8Array(12));
+      const kdfScheme = document.getElementById('encrypt-existing-kdf-scheme').value === 'argon2id' ? 'argon2id' : 'pbkdf2';
+      const wrapKey = kdfScheme === 'argon2id'
+        ? await deriveArgon2idKey(passphrase, salt, ARGON2ID_PARAMS, ['encrypt', 'decrypt'])
+        : await derivePbkdf2Key(passphrase, salt, { iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' }, ['encrypt', 'decrypt']);
+      const rawContentKey = new Uint8Array(await crypto.subtle.exportKey('raw', contentKey));
+      const wrappedDek = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: wrapIv, tagLength: 128 },
+        wrapKey,
+        rawContentKey
+      );
+
+      const metaIv = crypto.getRandomValues(new Uint8Array(12));
+      const encryptedMeta = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: metaIv, tagLength: 128 },
+        contentKey,
+        fromUtf8(JSON.stringify({ original_filename: file.name, mime_type: file.type || 'application/octet-stream' }))
+      );
+
+      return {
+        file: new File([ciphertextBuffer], `${crypto.randomUUID()}.enc`, { type: 'application/octet-stream' }),
+        metadata: {
+          version: 1,
+          mode: 'passphrase',
+          policy: {
+            plaintext_metadata: 'minimal',
+            server_plaintext_processing: false
+          },
+          files: {
+            upload: {
+              cipher: 'aes-256-gcm',
+              iv_b64: toBase64(contentIv),
+              tag_length_bits: 128,
+              wrapped_dek: {
+                kind: kdfScheme === 'argon2id' ? 'passphrase_argon2id' : 'passphrase_pbkdf2',
+                salt_b64: toBase64(salt),
+                ...(kdfScheme === 'argon2id'
+                  ? { argon2id: { ...ARGON2ID_PARAMS } }
+                  : { pbkdf2: { iterations: PBKDF2_ITERATIONS, hash: 'SHA-256', derived_bits: 256 } }),
+                wrap_iv_b64: toBase64(wrapIv),
+                wrapped_dek_b64: toBase64(new Uint8Array(wrappedDek))
+              },
+              encrypted_file_meta: {
+                iv_b64: toBase64(metaIv),
+                payload_b64: toBase64(new Uint8Array(encryptedMeta))
+              }
+            }
+          }
+        }
+      };
+    }
+
+    async function encryptExistingFileWithPki(file, key, keyPassphrase, statusEl) {
+      statusEl.textContent = 'Loading your wrapped key…';
+      const material = await API.get(`api/members/${currentMember.id}/keys/${key.id}/material`);
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+      const kek = await deriveMemberKekForUnlock(material, keyPassphrase, statusEl);
+      statusEl.textContent = 'Unlocking member key…';
+      const privateKey = await PKICrypto.unwrapPrivateKey(
+        PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
+        kek
+      );
+      const ownerPublicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(material.public_key));
+      statusEl.textContent = 'Generating document key…';
+      const dek = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      const plaintext = new Uint8Array(await file.arrayBuffer());
+      statusEl.textContent = 'Encrypting file locally…';
+      const contentIv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertextBuffer = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: contentIv, tagLength: 128 },
+        dek,
+        plaintext
+      );
+      const metaIv = crypto.getRandomValues(new Uint8Array(12));
+      const encryptedMeta = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: metaIv, tagLength: 128 },
+        dek,
+        fromUtf8(JSON.stringify({ original_filename: file.name, mime_type: file.type || 'application/octet-stream' }))
+      );
+      statusEl.textContent = 'Wrapping document key to your key…';
+      const wrappedDek = await PKICrypto.wrapDekForOwner(dek, ownerPublicKey);
+      return {
+        file: new File([ciphertextBuffer], `${crypto.randomUUID()}.enc`, { type: 'application/octet-stream' }),
+        metadata: PKICrypto.buildPkiEnvelope({
+          wrappedDek: wrappedDek.wrappedDek,
+          ephemeralPublicKey: wrappedDek.ephemeralPublicKey,
+          salt: wrappedDek.salt,
+          iv: contentIv,
+          memberId: currentMember.id,
+          encryptionKeyId: material.id,
+          keyFingerprint: material.key_fingerprint,
+          encryptedFileMeta: {
+            iv_b64: PKICrypto.toBase64(metaIv),
+            payload_b64: PKICrypto.toBase64(new Uint8Array(encryptedMeta))
+          }
+        })
+      };
+    }
+
+    async function loadMemberKeysForEncryptExisting() {
+      if (!currentMember) throw new Error('Sign in again to load your encryption keys');
+      memberKeys = await API.get(`api/members/${currentMember.id}/keys`);
+      return memberKeys;
+    }
+
+    async function refreshEncryptExistingUI() {
+      const mode = document.getElementById('encrypt-existing-mode').value;
+      const passphraseFields = document.getElementById('encrypt-existing-passphrase-fields');
+      const pkiFields = document.getElementById('encrypt-existing-pki-fields');
+      const pkiHint = document.getElementById('encrypt-existing-pki-hint');
+      const pkiSelect = document.getElementById('encrypt-existing-pki-key');
+      const pkiPassWrap = document.getElementById('encrypt-existing-pki-passphrase-wrap');
+      passphraseFields.style.display = mode === 'passphrase' ? 'block' : 'none';
+      pkiFields.style.display = mode === 'pki' ? 'block' : 'none';
+      if (mode !== 'pki') return;
+
+      if (!memberKeys.length) {
+        try {
+          await loadMemberKeysForEncryptExisting();
+        } catch (err) {
+          pkiHint.textContent = err.message;
+          pkiSelect.innerHTML = '';
+          pkiPassWrap.style.display = 'none';
+          return;
+        }
+      }
+
+      if (!memberKeys.length) {
+        pkiHint.innerHTML = 'You need to register an encryption key first. Go to <a href="settings.html">Settings → Encryption Keys</a>.';
+        pkiSelect.innerHTML = '';
+        pkiPassWrap.style.display = 'none';
+        return;
+      }
+
+      const previouslySelectedId = pkiSelect.value;
+      pkiSelect.innerHTML = memberKeys.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+      const selected = memberKeys.find((key) => String(key.id) === String(previouslySelectedId)) || preferredPkiKey(memberKeys);
+      if (selected) pkiSelect.value = String(selected.id);
+      if (!selected) {
+        pkiHint.textContent = 'No usable encryption keys are currently available.';
+        pkiPassWrap.style.display = 'none';
+        return;
+      }
+
+      const verified = selected.credential_verified ? 'Verified ceremony.' : 'Unverified ceremony.';
+      const recovery = selected.recovery_enabled ? 'Recovery wrap enabled.' : 'No recovery wrap.';
+      pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery}`;
+      pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
+    }
+
+    async function openEncryptModal() {
+      try {
+        const originals = (currentDoc?.files || []).filter((file) => file.file_type === 'original');
+        if (originals.length !== 1) {
+          toast('Encrypting documents with multiple uploads is not supported yet', 'error');
+          return;
+        }
+        document.getElementById('encrypt-existing-status').textContent = '';
+        document.getElementById('encrypt-existing-passphrase').value = '';
+        document.getElementById('encrypt-existing-passphrase-confirm').value = '';
+        document.getElementById('encrypt-existing-pki-passphrase').value = '';
+        document.getElementById('encrypt-existing-mode').value = 'passphrase';
+        document.getElementById('encrypt-existing-kdf-scheme').value = 'pbkdf2';
+        document.getElementById('encrypt-modal').classList.remove('hidden');
+        await refreshEncryptExistingUI();
+      } catch (err) {
+        toast(err.message || 'Unable to prepare encryption', 'error');
+      }
+    }
+
+    function closeEncryptModal() {
+      document.getElementById('encrypt-modal').classList.add('hidden');
+    }
+
+    async function submitEncryptExisting() {
+      const button = document.getElementById('confirm-encrypt-btn');
+      const statusEl = document.getElementById('encrypt-existing-status');
+      const mode = document.getElementById('encrypt-existing-mode').value === 'pki' ? 'pki' : 'passphrase';
+      const passphrase = document.getElementById('encrypt-existing-passphrase').value;
+      const passphraseConfirm = document.getElementById('encrypt-existing-passphrase-confirm').value;
+      const keyPassphrase = document.getElementById('encrypt-existing-pki-passphrase').value;
+      try {
+        button.disabled = true;
+        statusEl.textContent = 'Loading current file…';
+        const originalFile = await fetchOriginalFileForEncryption();
+
+        let encrypted;
+        if (mode === 'passphrase') {
+          if (!passphrase) throw new Error('Passphrase required');
+          if (passphrase !== passphraseConfirm) throw new Error('Passphrases do not match');
+          statusEl.textContent = 'Encrypting locally…';
+          encrypted = await encryptExistingFileWithPassphrase(originalFile, passphrase);
+        } else {
+          if (!memberKeys.length) await loadMemberKeysForEncryptExisting();
+          const key = memberKeys.find((candidate) => String(candidate.id) === String(document.getElementById('encrypt-existing-pki-key').value)) || preferredPkiKey(memberKeys);
+          if (!key) throw new Error('Register an encryption key in Settings before using PKI mode');
+          encrypted = await encryptExistingFileWithPki(originalFile, key, keyPassphrase, statusEl);
+        }
+
+        statusEl.textContent = 'Uploading encrypted replacement…';
+        await API.upload(`api/documents/${docId}/encrypt`, encrypted.file, {
+          encryption_mode: mode,
+          encryption_metadata: encrypted.metadata
+        });
+        closeEncryptModal();
+        toast('Document encrypted', 'success');
+        unlockedFiles.forEach((entry) => {
+          try { URL.revokeObjectURL(entry.objectUrl); } catch {}
+        });
+        unlockedFiles = new Map();
+        await loadDocument();
+      } catch (err) {
+        statusEl.textContent = err.message || 'Encryption failed';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function renderEncryptedLockedState(doc) {
       const preview = document.getElementById('file-preview');
       const isPki = doc.encryption_mode === 'pki';
@@ -593,14 +913,14 @@
 
         // Actions
         const actions = document.getElementById('doc-actions');
+        const encryptedDoc = isEncryptedDoc(doc);
         actions.innerHTML = `
           <button class="btn btn-sm" onclick="openEditModal()">Edit</button>
+          ${!encryptedDoc ? '<button class="btn btn-sm" onclick="openEncryptModal()">Encrypt</button>' : ''}
           <button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button>
           <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
           <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>
         `;
-
-        const encryptedDoc = isEncryptedDoc(doc);
 
         // File preview
         const files = doc.files || [];
@@ -1242,6 +1562,16 @@
     function maybeStartMagicIndexPolling(doc) {
       if (doc.metadata?.magicindex?.state === 'pending') startMagicIndexPolling();
     }
+
+    document.getElementById('encrypt-existing-mode').addEventListener('change', refreshEncryptExistingUI);
+    document.getElementById('encrypt-existing-pki-key').addEventListener('change', refreshEncryptExistingUI);
+    document.getElementById('encrypt-existing-kdf-scheme').addEventListener('change', () => {
+      const hint = document.getElementById('encrypt-existing-kdf-hint');
+      hint.textContent = document.getElementById('encrypt-existing-kdf-scheme').value === 'argon2id'
+        ? 'Argon2id selected: slower but more brute-force resistant.'
+        : 'PBKDF2 selected: broad compatibility and faster unlock/encrypt.';
+    });
+    document.getElementById('confirm-encrypt-btn').addEventListener('click', submitEncryptExisting);
 
     loadDocument().then(() => {
       if (currentDoc) maybeStartMagicIndexPolling(currentDoc);

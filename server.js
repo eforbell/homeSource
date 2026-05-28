@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { pool } = require('./lib/db');
 const { hashPassphrase, verifyPassphrase, createSession, validateSession, destroySession, cleanExpiredSessions, authEnabled, parseCookie, requireAuth, requireParent } = require('./lib/auth');
-const { listDocuments, getDocument, createDocument, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount, canMemberAccessDocument } = require('./lib/documents');
+const { listDocuments, getDocument, createDocument, encryptDocumentInPlace, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount, canMemberAccessDocument } = require('./lib/documents');
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
@@ -21,7 +21,7 @@ const magicLinks = require('./lib/magic-links');
 const { runExpiryScan } = require('./lib/scanners/expiry');
 const { runDocumentQualityScan } = require('./lib/scanners/document-quality');
 const { scanDeterministicLinks } = require('./lib/scanners/magic-links-deterministic');
-const { isEncryptedDocument } = require('./lib/encryption-mode');
+const { isEncryptedDocument, normalizeEncryptionInput } = require('./lib/encryption-mode');
 const audit = require('./lib/audit');
 const pki = require('./lib/pki');
 const webauthn = require('./lib/webauthn');
@@ -705,6 +705,63 @@ app.post('/api/documents/scan-multi', requireAuth, async (req, res) => {
     const doc = await processMultiPageScanUpload(pages.map((p) => p.data), metadata, req.member.id);
     res.status(201).json(doc);
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/documents/:id/encrypt', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (isEncryptedDocument(doc)) {
+      return res.status(409).json({ error: 'Document is already encrypted' });
+    }
+    const originalFiles = (doc.files || []).filter((file) => file.file_type === 'original');
+    if (originalFiles.length !== 1) {
+      return res.status(409).json({ error: 'Encrypting documents with multiple uploads is not supported yet' });
+    }
+
+    const parts = await parseMultipart(req);
+    const file = parts.file;
+    if (!file || !file.data?.length) return res.status(400).json({ error: 'Encrypted replacement file is required' });
+
+    const metadata = parts.metadata ? JSON.parse(Array.isArray(parts.metadata) ? parts.metadata[0] : parts.metadata) : {};
+    const encryption = normalizeEncryptionInput(metadata || {});
+    if (!encryption.is_encrypted || encryption.encryption_mode === 'plaintext') {
+      return res.status(400).json({ error: 'Encrypted metadata is required' });
+    }
+
+    let encryptionKeyId = null;
+    if (encryption.encryption_mode === 'pki') {
+      encryptionKeyId = await pki.validatePkiUpload(encryption.encryption_metadata, req.member.id);
+    }
+
+    const stored = await storeFile(file.data, file.filename, file.type);
+    const updated = await encryptDocumentInPlace(doc.id, {
+      encryptedFile: stored,
+      encryptionMode: encryption.encryption_mode,
+      encryptionMetadata: encryption.encryption_metadata,
+      encryptionKeyId,
+      actorId: req.member.id
+    });
+
+    if (encryptionKeyId) {
+      await pki.updateKeyLastUsed(encryptionKeyId);
+    }
+
+    await audit.log(
+      `document.encrypted.${encryption.encryption_mode}`,
+      'document',
+      updated.id,
+      req.member.id,
+      { original_file_id: originalFiles[0].id, encryption_key_id: encryptionKeyId }
+    );
+    res.json(updated);
+  } catch (err) {
+    const status = /already encrypted/i.test(err.message) ? 409 : 400;
+    res.status(status).json({ error: err.message });
+  }
 });
 
 app.put('/api/documents/:id', requireAuth, async (req, res) => {
