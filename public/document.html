@@ -987,9 +987,13 @@
           console.error(err);
         }
       }
+      if (!availableMembers.length && holders.some((h) => Number(h.member_id) !== currentMember?.id)) {
+        try { availableMembers = await API.get('api/members'); } catch {}
+      }
       const holderDisplayName = (holder) => holder
         ? ((doc.owners || []).find((owner) => Number(owner.id) === Number(holder.member_id))?.name
-          || (holder.member_id === currentMember?.id ? 'You' : `Member #${holder.member_id}`))
+          || availableMembers.find((m) => Number(m.id) === Number(holder.member_id))?.name
+          || (holder.member_id === currentMember?.id ? currentMember.name : `Member #${holder.member_id}`))
         : null;
       const selectedRequiresKeyPassphrase = !!(selectedHolder && (selectedHolder.protection_tier === 'passphrase' || selectedHolder.verification_method === 'passphrase'));
       preview.innerHTML = isPki ? `
