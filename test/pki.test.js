@@ -11,20 +11,21 @@ function encodePublicKey(value) {
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
+before(async () => {
+  await startServer();
+  pool = getPool();
+});
+
+after(async () => {
+  await stopServer();
+});
+
+beforeEach(async () => {
+  await resetDatabase();
+  parent = await createMember('Alice', 'parent', 'pass123');
+});
+
 describe('PKI key management', () => {
-  before(async () => {
-    await startServer();
-    pool = getPool();
-  });
-
-  after(async () => {
-    await stopServer();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase();
-    parent = await createMember('Alice', 'parent', 'pass123');
-  });
 
   describe('registerMemberKey', () => {
     it('registers a key with correct fields', async () => {
@@ -248,15 +249,6 @@ describe('PKI key management', () => {
 });
 
 describe('validatePkiUpload', () => {
-  before(async () => {
-    await startServer();
-    pool = getPool();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase();
-    parent = await createMember('Alice', 'parent', 'pass123');
-  });
 
   it('accepts multi-holder uploads for the uploading member and returns the primary key id', async () => {
     const pki = require('../lib/pki');

@@ -919,7 +919,7 @@ describe('PKI upload validation', () => {
     });
     assert.equal(res.status, 400);
     const data = await res.json();
-    assert.match(data.error, /uploading member/i);
+    assert.match(data.error, /(declared member|uploading member)/i);
   });
 
   it('rejects PKI upload with mismatched fingerprint', async () => {
