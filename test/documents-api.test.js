@@ -2,9 +2,10 @@
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { webcrypto } = require('node:crypto');
 const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedPost, authedPut, authedDel, authedFetch, createTestDocument, getPool } = require('./helpers');
-const { saveFileRecord, storeFile } = require('../lib/files');
+const { saveFileRecord, storeFile, getFilePath } = require('../lib/files');
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 const PKICrypto = require('../public/pki-crypto');
 
@@ -171,6 +172,253 @@ describe('encrypted document upload flags', () => {
     assert.equal(res.status, 409);
     const data = await res.json();
     assert.match(data.error, /unavailable for encrypted documents/i);
+  });
+});
+
+describe('encrypt existing document in place', () => {
+  const pki = require('../lib/pki');
+  const parentKeyPassphrase = 'convert-parent-key-passphrase';
+  let parentKey;
+
+  async function createPassphraseProtectedKey(memberId, label, passphrase) {
+    const keypair = await PKICrypto.generateMemberKeypair();
+    const { kek, salt } = await PKICrypto.deriveKekFromPassphrase(passphrase);
+    const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
+    return pki.registerMemberKey({
+      memberId,
+      publicKey: PKICrypto.toBase64(keypair.publicKeyRaw),
+      encryptedPrivateKey: JSON.stringify({
+        kind: 'passphrase_pbkdf2_v1',
+        kdf: 'pbkdf2-sha256',
+        iterations: 600000,
+        salt_b64: PKICrypto.toBase64(salt),
+        wrapped_private_key_b64: PKICrypto.toBase64(wrappedPrivateKey)
+      }),
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label,
+      verificationMethod: 'passphrase',
+    });
+  }
+
+  function buildPassphraseEncryptionMetadata() {
+    return {
+      version: 1,
+      mode: 'passphrase',
+      files: {
+        upload: {
+          cipher: 'aes-256-gcm',
+          iv_b64: 'abc',
+          tag_length_bits: 128,
+          wrapped_dek: {
+            kind: 'passphrase_pbkdf2',
+            salt_b64: 'def',
+            wrap_iv_b64: 'ghi',
+            wrapped_dek_b64: 'jkl',
+            pbkdf2: { iterations: 600000, hash: 'SHA-256', derived_bits: 256 }
+          },
+          encrypted_file_meta: {
+            iv_b64: 'mno',
+            payload_b64: 'pqr'
+          }
+        }
+      }
+    };
+  }
+
+  async function createPlaintextDocFixture() {
+    const doc = await createTestDocument(parent.id, {
+      title: 'Encrypt Existing Fixture',
+      document_type: 'other',
+      metadata: { note: 'before encryption' }
+    });
+    const originalStored = await storeFile(Buffer.from('%PDF-1.4\n% plaintext fixture\n%%EOF'), 'fixture.pdf', 'application/pdf');
+    const originalRecord = await saveFileRecord(doc.id, originalStored);
+    const thumbStored = await storeFile(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'thumb.jpg', 'image/jpeg');
+    thumbStored.file_type = 'thumbnail';
+    const thumbnailRecord = await saveFileRecord(doc.id, thumbStored);
+    const shareRes = await authedPost(`api/documents/${doc.id}/share`, parentCookie, { access_level: 'view' });
+    assert.equal(shareRes.status, 201);
+    return { doc, originalRecord, thumbnailRecord };
+  }
+
+  beforeEach(async () => {
+    parentKey = await createPassphraseProtectedKey(parent.id, 'Convert Parent PKI Key', parentKeyPassphrase);
+  });
+
+  it('converts a plaintext document to passphrase encryption and removes old artifacts', async () => {
+    const { doc, originalRecord, thumbnailRecord } = await createPlaintextDocFixture();
+    const oldOriginalPath = getFilePath(originalRecord.stored_filename);
+    const oldThumbPath = getFilePath(thumbnailRecord.stored_filename);
+    assert.equal(fs.existsSync(oldOriginalPath), true);
+    assert.equal(fs.existsSync(oldThumbPath), true);
+
+    const encryptedBytes = Buffer.from('encrypted-passphrase-ciphertext');
+    const form = new FormData();
+    form.append('file', new Blob([encryptedBytes], { type: 'application/octet-stream' }), 'fixture.enc');
+    form.append('metadata', JSON.stringify({
+      encryption_mode: 'passphrase',
+      encryption_metadata: buildPassphraseEncryptionMetadata()
+    }));
+
+    const res = await authedFetch(`api/documents/${doc.id}/encrypt`, parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 200);
+    const updated = await res.json();
+    assert.equal(updated.id, doc.id);
+    assert.equal(updated.is_encrypted, true);
+    assert.equal(updated.encryption_mode, 'passphrase');
+
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    assert.equal(detailRes.status, 200);
+    const detail = await detailRes.json();
+    assert.equal(detail.id, doc.id);
+    assert.equal(detail.files.length, 1);
+    assert.equal(detail.files[0].file_type, 'original');
+    assert.equal(detail.files[0].mime_type, 'application/octet-stream');
+    assert.equal(detail.metadata.note, 'before encryption');
+    assert.equal(detail.encryption_mode, 'passphrase');
+    assert.equal(detail.encryption_key_id, null);
+
+    const downloadRes = await authedGet(`api/documents/${doc.id}/files/${detail.files[0].id}/download`, parentCookie);
+    assert.equal(downloadRes.status, 200);
+    const storedBytes = Buffer.from(await downloadRes.arrayBuffer());
+    assert.deepEqual(storedBytes, encryptedBytes);
+
+    assert.equal(fs.existsSync(oldOriginalPath), false);
+    assert.equal(fs.existsSync(oldThumbPath), false);
+    const { rows: shareRows } = await pool.query('SELECT id FROM share_links WHERE document_id = $1', [doc.id]);
+    assert.equal(shareRows.length, 0);
+    const { rows: auditRows } = await pool.query(
+      `SELECT action, details FROM audit_log WHERE entity_type = 'document' AND entity_id = $1 AND action = 'document.encrypted.passphrase' ORDER BY id DESC LIMIT 1`,
+      [doc.id]
+    );
+    assert.equal(auditRows.length, 1);
+    assert.equal(auditRows[0].details.deleted_share_count, 1);
+    assert.equal(auditRows[0].details.cleanup_failure_count, 0);
+
+    const reanalyzeRes = await authedPost(`api/documents/${doc.id}/magicindex/reanalyze`, parentCookie, { user_hint: 'retry' });
+    assert.equal(reanalyzeRes.status, 409);
+    const shareCreateRes = await authedPost(`api/documents/${doc.id}/share`, parentCookie, { access_level: 'view' });
+    assert.equal(shareCreateRes.status, 409);
+  });
+
+  it('converts a plaintext document to single-holder PKI encryption', async () => {
+    const { doc, originalRecord } = await createPlaintextDocFixture();
+    const oldOriginalPath = getFilePath(originalRecord.stored_filename);
+    const encryptedBytes = Buffer.from('encrypted-pki-ciphertext');
+    const form = new FormData();
+    form.append('file', new Blob([encryptedBytes], { type: 'application/octet-stream' }), 'fixture-pki.enc');
+    form.append('metadata', JSON.stringify({
+      encryption_mode: 'pki',
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            wrapped_dek: {
+              kind: 'pki_x25519',
+              ephemeral_public_key_b64: 'abc',
+              hkdf_salt_b64: 'def',
+              wrapped_dek_b64: 'ghi'
+            },
+            holders: [{
+              member_id: parent.id,
+              encryption_key_id: parentKey.id,
+              key_fingerprint: parentKey.key_fingerprint,
+              role: 'owner'
+            }]
+          }
+        }
+      }
+    }));
+
+    const res = await authedFetch(`api/documents/${doc.id}/encrypt`, parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 200);
+    const updated = await res.json();
+    assert.equal(updated.encryption_mode, 'pki');
+    assert.equal(updated.encryption_key_id, parentKey.id);
+
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.encryption_mode, 'pki');
+    assert.equal(detail.encryption_key_id, parentKey.id);
+    assert.equal(detail.files.length, 1);
+    assert.equal(fs.existsSync(oldOriginalPath), false);
+
+    const keyInfoRes = await authedGet(`api/documents/${doc.id}/key-info`, parentCookie);
+    assert.equal(keyInfoRes.status, 200);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.encryption_key_id, parentKey.id);
+    assert.equal(keyInfo.key.id, parentKey.id);
+  });
+
+  it('rejects encrypt-in-place for documents with multiple original uploads', async () => {
+    const doc = await createTestDocument(parent.id, { title: 'Two uploads fixture' });
+    const first = await storeFile(Buffer.from('%PDF-1.4\n% first\n%%EOF'), 'first.pdf', 'application/pdf');
+    const second = await storeFile(Buffer.from('%PDF-1.4\n% second\n%%EOF'), 'second.pdf', 'application/pdf');
+    const firstRecord = await saveFileRecord(doc.id, first);
+    const secondRecord = await saveFileRecord(doc.id, second);
+    const form = new FormData();
+    form.append('file', new Blob([Buffer.from('cipher')], { type: 'application/octet-stream' }), 'two.enc');
+    form.append('metadata', JSON.stringify({
+      encryption_mode: 'passphrase',
+      encryption_metadata: buildPassphraseEncryptionMetadata()
+    }));
+
+    const res = await authedFetch(`api/documents/${doc.id}/encrypt`, parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.match(data.error, /multiple uploads/i);
+    assert.equal(fs.existsSync(getFilePath(firstRecord.stored_filename)), true);
+    assert.equal(fs.existsSync(getFilePath(secondRecord.stored_filename)), true);
+  });
+
+  it('rejects encrypt-in-place for kid users and already encrypted docs', async () => {
+    const doc = await createTestDocument(parent.id, { title: 'Kid blocked fixture' });
+    const stored = await storeFile(Buffer.from('%PDF-1.4\n% fixture\n%%EOF'), 'kid.pdf', 'application/pdf');
+    await saveFileRecord(doc.id, stored);
+    const buildEncryptForm = () => {
+      const form = new FormData();
+      form.append('file', new Blob([Buffer.from('cipher')], { type: 'application/octet-stream' }), 'kid.enc');
+      form.append('metadata', JSON.stringify({
+        encryption_mode: 'passphrase',
+        encryption_metadata: buildPassphraseEncryptionMetadata()
+      }));
+      return form;
+    };
+
+    const kidRes = await authedFetch(`api/documents/${doc.id}/encrypt`, kidCookie, {
+      method: 'POST',
+      body: buildEncryptForm()
+    });
+    assert.equal(kidRes.status, 403);
+
+    const encrypted = await createTestDocument(parent.id, {
+      title: 'Already encrypted fixture',
+      is_encrypted: true,
+      encryption_mode: 'passphrase',
+      encryption_metadata: buildPassphraseEncryptionMetadata()
+    });
+    const encryptedStored = await storeFile(Buffer.from('ciphertext'), 'already.enc', 'application/octet-stream');
+    await saveFileRecord(encrypted.id, encryptedStored);
+
+    const alreadyRes = await authedFetch(`api/documents/${encrypted.id}/encrypt`, parentCookie, {
+      method: 'POST',
+      body: buildEncryptForm()
+    });
+    assert.equal(alreadyRes.status, 409);
   });
 });
 
