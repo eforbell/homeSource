@@ -1,21 +1,26 @@
 {
-  "currentFeature": null,
-  "status": "idle",
-  "prdPath": null,
+  "currentFeature": "Feature #11 Phase 2A: Multi-Holder PKI (1-of-M, Same-Member-First)",
+  "status": "in-flight",
+  "branch": "feature/11-phase2a-multi-holder-pki",
+  "prdPath": "planning/features/feature-11-phase2a-multi-holder-pki.md",
   "completedFeatures": [
     "Feature #1: Foundation (Schema + Auth + Document CRUD + File Upload + Search + Backup + Sharing)",
-    "Feature #2: MVP Hardening (iOS/WKWebView fixes, scanner overhaul, mobile polish, tag editor)"
+    "Feature #2: MVP Hardening (iOS/WKWebView fixes, scanner overhaul, mobile polish, tag editor)",
+    "Feature #5: Encrypted Document Modes (passphrase + timelock + client-side locked document behavior)",
+    "Feature #11 Phase 1: Member Keys + Single-Owner PKI Encryption",
+    "Feature Request #101: Encrypt an Existing Unencrypted Document Record",
+    "Feature #3: PDF Thumbnails",
+    "Feature #4: MagicIndex foundation + substantial LLM extraction work",
+    "Feature #5A: Multi-page Document Scanning",
+    "Feature #6: Batch Uploads"
   ],
   "skippedFeatures": [],
   "futureFeatures": [
-    "Feature #3: PDF Thumbnails — generate thumbnails from PDF uploads via libvips+poppler (bugBase #56)",
-    "Feature #4: MagicIndex — LLM auto-metadata extraction on upload, opt-in OpenAI processing (bugBase #54)",
-    "Feature #5: Multi-page Document Scanning — accumulate pages, reorder, stitch into single PDF (bugBase #59)",
-    "Feature #6: Batch Uploads — multi-file selection with parallel processing (bugBase #57)",
-    "Feature #7: Search + Tags Integration — tags as first-class search facet, tag filter on search page (bugBase #63)",
-    "Feature #8: Expiry Tracking + Alerts — dashboard alerts for expiring passports, insurance, warranties",
-    "Feature #9: OCR (tesseract.js) — text extraction fed into search_vector for full-text search of scanned docs",
-    "Feature #10: MCP Server — agent automation sidecar for document operations",
-    "Feature #11: Envelope Encryption (DEK/KEK) — using pre-built schema, key management UI, multi-sig covenants"
+    "Feature #7: Search + Tags Integration \u2014 tags as first-class search facet, tag filter on search page (bugBase #63)",
+    "Feature #8: Expiry Tracking + Alerts \u2014 dashboard alerts for expiring passports, insurance, warranties",
+    "Feature #9: OCR (tesseract.js) \u2014 text extraction fed into search_vector for full-text search of scanned docs",
+    "Feature #10: MCP Server \u2014 agent automation sidecar for document operations",
+    "Feature #11 Phase 2B/3: Threshold / quorum PKI, Shamir-wrapped shares, coordinated unlock ceremonies",
+    "Feature #11 Deadman Switch / Estate Automation"
   ]
 }

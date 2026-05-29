@@ -11,20 +11,21 @@ function encodePublicKey(value) {
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
+before(async () => {
+  await startServer();
+  pool = getPool();
+});
+
+after(async () => {
+  await stopServer();
+});
+
+beforeEach(async () => {
+  await resetDatabase();
+  parent = await createMember('Alice', 'parent', 'pass123');
+});
+
 describe('PKI key management', () => {
-  before(async () => {
-    await startServer();
-    pool = getPool();
-  });
-
-  after(async () => {
-    await stopServer();
-  });
-
-  beforeEach(async () => {
-    await resetDatabase();
-    parent = await createMember('Alice', 'parent', 'pass123');
-  });
 
   describe('registerMemberKey', () => {
     it('registers a key with correct fields', async () => {
@@ -179,8 +180,8 @@ describe('PKI key management', () => {
       const pki = require('../lib/pki');
       const key = await pki.registerMemberKey({
         memberId: parent.id,
-        publicKey: encodePublicKey('pub1'),
-        encryptedPrivateKey: 'enc1',
+        publicKey: encodePublicKey('pub-last-used'),
+        encryptedPrivateKey: 'enc-last-used',
         algorithm: 'x25519',
         credentialId: null,
         prfEnabled: false,
@@ -189,11 +190,223 @@ describe('PKI key management', () => {
       });
 
       assert.equal(key.last_used_at, null);
-
       await pki.updateKeyLastUsed(key.id);
-
       const fetched = await pki.getMemberKey(key.id, parent.id);
       assert.ok(fetched.last_used_at);
     });
+  });
+
+  describe('getDocumentKeyInfo', () => {
+    it('returns holder-aware key info while preserving compatibility fields', async () => {
+      const pki = require('../lib/pki');
+      const { createDocument } = require('../lib/documents');
+      const key1 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('pub1'),
+        encryptedPrivateKey: 'enc1',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Primary'
+      });
+      const key2 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('pub2'),
+        encryptedPrivateKey: 'enc2',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Backup'
+      });
+      const doc = await createDocument({
+        title: 'PKI Holder Info',
+        document_type: 'other',
+        source_type: 'upload',
+        created_by: parent.id,
+        is_encrypted: true,
+        encryption_mode: 'pki',
+        encryption_key_id: key1.id,
+        encryption_metadata: {
+          version: 1,
+          mode: 'pki',
+          files: {
+            upload: {
+              cipher: 'aes-256-gcm',
+              iv_b64: 'abc',
+              holders: [
+                {
+                  member_id: parent.id,
+                  encryption_key_id: key1.id,
+                  key_fingerprint: key1.key_fingerprint,
+                  role: 'owner',
+                  wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+                },
+                {
+                  member_id: parent.id,
+                  encryption_key_id: key2.id,
+                  key_fingerprint: key2.key_fingerprint,
+                  role: 'backup',
+                  wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+                }
+              ]
+            }
+          }
+        }
+      }, [parent.id]);
+
+      const info = await pki.getDocumentKeyInfo(doc.id);
+      assert.equal(info.encryption_key_id, key1.id);
+      assert.equal(info.key.id, key1.id);
+      assert.equal(info.primary_key.id, key1.id);
+      assert.equal(info.holders.length, 2);
+      assert.equal(info.holders[0].label, 'Primary');
+      assert.equal(info.holders[1].label, 'Backup');
+      assert.equal(info.holders[1].role, 'backup');
+    });
+  });
+});
+
+describe('validatePkiUpload', () => {
+
+  it('accepts multi-holder uploads for the uploading member and returns the primary key id', async () => {
+    const pki = require('../lib/pki');
+    const key1 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Primary'
+    });
+    const key2 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('pub2'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Backup'
+    });
+
+    const keyId = await pki.validatePkiUpload({
+      files: {
+        upload: {
+          holders: [
+            {
+              member_id: parent.id,
+              encryption_key_id: key1.id,
+              key_fingerprint: key1.key_fingerprint,
+              role: 'owner',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+            },
+            {
+              member_id: parent.id,
+              encryption_key_id: key2.id,
+              key_fingerprint: key2.key_fingerprint,
+              role: 'backup',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+            }
+          ]
+        }
+      }
+    }, parent.id);
+
+    assert.equal(keyId, key1.id);
+  });
+
+  it('rejects duplicate holder key ids', async () => {
+    const pki = require('../lib/pki');
+    const key = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Primary'
+    });
+
+    await assert.rejects(
+      () => pki.validatePkiUpload({
+        files: {
+          upload: {
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: key.id,
+                key_fingerprint: key.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: key.id,
+                key_fingerprint: key.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+              }
+            ]
+          }
+        }
+      }, parent.id),
+      /duplicate/i
+    );
+  });
+
+  it('rejects cross-member holders for non-parent uploaders', async () => {
+    const pki = require('../lib/pki');
+    const kid = await createMember('Bob', 'kid');
+    const kidKey = await pki.registerMemberKey({
+      memberId: kid.id,
+      publicKey: encodePublicKey('kid-pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Kid Primary'
+    });
+    const parentKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('parent-pub1'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Parent Alt'
+    });
+
+    await assert.rejects(
+      () => pki.validatePkiUpload({
+        files: {
+          upload: {
+            holders: [
+              {
+                member_id: kid.id,
+                encryption_key_id: kidKey.id,
+                key_fingerprint: kidKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: parentKey.id,
+                key_fingerprint: parentKey.key_fingerprint,
+                role: 'beneficiary',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+              }
+            ]
+          }
+        }
+      }, kid.id),
+      /parent/i
+    );
   });
 });

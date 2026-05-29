@@ -73,6 +73,59 @@ describe('normalizeEncryptionInput', () => {
       /PKI envelope/
     );
   });
+
+
+  it('normalizes pki mode with holder-local wrapped DEKs', () => {
+    const meta = {
+      version: 1,
+      mode: 'pki',
+      policy: { access_model: 'any_one_holder', threshold: 1 },
+      files: {
+        upload: {
+          cipher: 'aes-256-gcm',
+          holders: [
+            {
+              member_id: 1,
+              encryption_key_id: 1,
+              key_fingerprint: 'abcd',
+              role: 'owner',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+            },
+            {
+              member_id: 1,
+              encryption_key_id: 2,
+              key_fingerprint: 'efgh',
+              role: 'backup',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+            }
+          ]
+        }
+      }
+    };
+    const out = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: meta });
+    assert.equal(out.encryption_mode, 'pki');
+    assert.equal(out.encryption_metadata.files.upload.holders.length, 2);
+  });
+
+  it('rejects multi-holder pki mode without holder-local wrapped_dek', () => {
+    const meta = {
+      version: 1,
+      mode: 'pki',
+      files: {
+        upload: {
+          wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' },
+          holders: [
+            { member_id: 1, encryption_key_id: 1, key_fingerprint: 'abcd', role: 'owner' },
+            { member_id: 1, encryption_key_id: 2, key_fingerprint: 'efgh', role: 'backup' }
+          ]
+        }
+      }
+    };
+    assert.throws(
+      () => normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: meta }),
+      /holder-local wrapped_dek/
+    );
+  });
 });
 
 describe('isEncryptedDocument', () => {

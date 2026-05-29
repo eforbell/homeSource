@@ -248,9 +248,20 @@
         </div>
 
         <div id="encrypt-pki-fields" style="display:none; margin-top:0.75rem;">
-          <label class="form-label">Encryption Key</label>
+          <label class="form-label">Primary Encryption Key</label>
           <select id="encrypt-pki-key" class="form-select"></select>
           <div id="encrypt-pki-hint" class="form-hint">Loading your registered keys…</div>
+          <div id="encrypt-pki-extra-keys-wrap" style="display:none; margin-top:0.75rem;">
+            <label class="form-label">Add Backup Key(s)</label>
+            <div id="encrypt-pki-extra-keys" class="form-hint"></div>
+            <div class="form-hint">Any one selected key can unlock this document. Keep holder sets small and deliberate.</div>
+          </div>
+          <div id="encrypt-pki-beneficiary-wrap" style="display:none; margin-top:0.75rem;">
+            <label class="form-label">Trusted Alternate Holder</label>
+            <select id="encrypt-pki-beneficiary-member" class="form-select"><option value="">No alternate member</option></select>
+            <select id="encrypt-pki-beneficiary-key" class="form-select" style="margin-top:0.5rem; display:none;"></select>
+            <div id="encrypt-pki-beneficiary-hint" class="form-hint">Parents can optionally add one alternate household holder.</div>
+          </div>
           <div id="encrypt-pki-passphrase-wrap" style="display:none; margin-top:0.75rem;">
             <label class="form-label">Unlock Key Passphrase</label>
             <input type="password" id="encrypt-pki-passphrase" class="form-input" placeholder="Enter the passphrase you used when registering this key">
@@ -279,6 +290,8 @@
     let scannedPages = [];
     let currentMember = null;
     let memberKeys = [];
+    let availableMembers = [];
+    let memberKeyCache = new Map();
     const PBKDF2_ITERATIONS = 600000;
     const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
@@ -316,11 +329,13 @@
       if (enabled) {
         magicIndexCheckbox.checked = false;
       }
-      refreshEncryptionModeUI();
+      refreshEncryptionModeUI().catch(() => {});
     });
 
-    document.getElementById('encrypt-mode').addEventListener('change', refreshEncryptionModeUI);
-    document.getElementById('encrypt-pki-key').addEventListener('change', refreshEncryptionModeUI);
+    document.getElementById('encrypt-mode').addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); });
+    document.getElementById('encrypt-pki-key').addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); });
+    document.getElementById('encrypt-pki-beneficiary-member')?.addEventListener('change', async () => { await refreshUploadBeneficiaryUI(); await refreshEncryptionModeUI().catch(() => {}); });
+    document.getElementById('encrypt-pki-beneficiary-key')?.addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); });
 
     (function configurePassphraseStrength() {
       const COMMON_PASSPHRASES = new Set([
@@ -614,17 +629,17 @@
       throw new Error('This key cannot yet be used for upload encryption');
     }
 
-    async function encryptSelectedFileWithPki(file, key, keyPassphrase, progress) {
+    async function encryptSelectedFileWithPki(file, primaryKey, extraKeys, beneficiarySelection, keyPassphrase, progress) {
       progress?.('Loading wrapped key…');
-      const material = await API.get(`api/members/${currentMember.id}/keys/${key.id}/material`);
+      const material = await API.get(`api/members/${currentMember.id}/keys/${primaryKey.id}/material`);
       const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
       const kek = await deriveMemberKekForUpload(material, keyPassphrase, progress);
-      progress?.('Unlocking member key…');
-      const privateKey = await PKICrypto.unwrapPrivateKey(
+      progress?.('Unlocking primary member key…');
+      // Verify KEK/passphrase is valid before proceeding.
+      await PKICrypto.unwrapPrivateKey(
         PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
         kek
       );
-      const ownerPublicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(material.public_key));
       progress?.('Generating document key…');
       const dek = await crypto.subtle.generateKey(
         { name: 'AES-GCM', length: 256 },
@@ -646,8 +661,29 @@
         dek,
         fromUtf8(JSON.stringify({ original_filename: file.name, mime_type: file.type || 'application/octet-stream' }))
       );
-      progress?.('Wrapping document key to your key…');
-      const wrappedDek = await PKICrypto.wrapDekForOwner(dek, ownerPublicKey);
+      const selectedKeys = [
+        { memberId: currentMember.id, key: primaryKey, role: 'owner' },
+        ...(extraKeys || []).map((key) => ({ memberId: currentMember.id, key, role: 'backup' }))
+      ];
+      const beneficiary = beneficiarySelection || getSelectedUploadBeneficiaryKey();
+      if (beneficiary) selectedKeys.push({ memberId: beneficiary.memberId, key: beneficiary.key, role: 'beneficiary' });
+      const holders = [];
+      for (const [index, selection] of selectedKeys.entries()) {
+        progress?.(selection.role === 'beneficiary' ? 'Wrapping document key to alternate holder…' : index === 0 ? 'Wrapping document key to primary key…' : `Wrapping document key to backup key ${index}…`);
+        const key = selection.key;
+        if (!key.public_key) throw new Error(`Holder key ${key.id} is missing its public key`);
+        const publicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(key.public_key));
+        const wrappedDek = await PKICrypto.wrapDekForOwner(dek, publicKey);
+        holders.push({
+          memberId: selection.memberId,
+          encryptionKeyId: key.id,
+          keyFingerprint: key.key_fingerprint,
+          role: selection.role,
+          wrappedDek: wrappedDek.wrappedDek,
+          ephemeralPublicKey: wrappedDek.ephemeralPublicKey,
+          salt: wrappedDek.salt
+        });
+      }
       const encryptedFile = new File(
         [ciphertextBuffer],
         `${crypto.randomUUID()}.enc`,
@@ -656,13 +692,8 @@
       return {
         file: encryptedFile,
         metadata: PKICrypto.buildPkiEnvelope({
-          wrappedDek: wrappedDek.wrappedDek,
-          ephemeralPublicKey: wrappedDek.ephemeralPublicKey,
-          salt: wrappedDek.salt,
           iv: contentIv,
-          memberId: currentMember.id,
-          encryptionKeyId: material.id,
-          keyFingerprint: material.key_fingerprint,
+          holders,
           encryptedFileMeta: {
             iv_b64: PKICrypto.toBase64(metaIv),
             payload_b64: PKICrypto.toBase64(new Uint8Array(encryptedMeta))
@@ -687,13 +718,77 @@
       return `${label} · ${shortFingerprint} · ${posture}`;
     }
 
-    function refreshEncryptionModeUI() {
+
+    function getSelectedUploadExtraKeys(primaryKeyId) {
+      return [...document.querySelectorAll('#encrypt-pki-extra-keys input[type="checkbox"]:checked')]
+        .map((input) => memberKeys.find((key) => String(key.id) === String(input.value)))
+        .filter((key) => key && String(key.id) !== String(primaryKeyId));
+    }
+
+    async function loadMemberKeysForMember(memberId) {
+      const keys = (await API.get(`api/members/${memberId}/keys`))
+        .filter((key) => key.key_type === 'member' && !key.revoked_at);
+      memberKeyCache.set(String(memberId), keys);
+      return keys;
+    }
+
+    function getSelectedUploadBeneficiaryKey() {
+      const select = document.getElementById('encrypt-pki-beneficiary-key');
+      const memberSelect = document.getElementById('encrypt-pki-beneficiary-member');
+      const memberId = memberSelect?.value || '';
+      const keyId = select?.value || '';
+      if (!memberId || !keyId) return null;
+      const keys = memberKeyCache.get(String(memberId)) || [];
+      const key = keys.find((candidate) => String(candidate.id) === String(keyId));
+      return key ? { memberId: Number(memberId), key } : null;
+    }
+
+    async function refreshUploadBeneficiaryUI() {
+      const wrap = document.getElementById('encrypt-pki-beneficiary-wrap');
+      const memberSelect = document.getElementById('encrypt-pki-beneficiary-member');
+      const keySelect = document.getElementById('encrypt-pki-beneficiary-key');
+      const hint = document.getElementById('encrypt-pki-beneficiary-hint');
+      if (!wrap || currentMember?.role !== 'parent') {
+        if (wrap) wrap.style.display = 'none';
+        return;
+      }
+      wrap.style.display = 'block';
+      const selectedMemberId = memberSelect.value || '';
+      if (!selectedMemberId) {
+        keySelect.innerHTML = '';
+        keySelect.style.display = 'none';
+        hint.textContent = 'Parents can optionally add one alternate household holder.';
+        return;
+      }
+      const keys = await loadMemberKeysForMember(selectedMemberId);
+      if (!keys.length) {
+        keySelect.innerHTML = '';
+        keySelect.style.display = 'none';
+        hint.textContent = 'Selected member has no registered encryption keys.';
+        return;
+      }
+      const previousKeyId = keySelect.value || '';
+      keySelect.innerHTML = keys.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+      if (keys.some((key) => String(key.id) === String(previousKeyId))) {
+        keySelect.value = previousKeyId;
+      } else {
+        keySelect.value = String(keys[0].id);
+      }
+      keySelect.style.display = 'block';
+      hint.textContent = 'This member will be added as a beneficiary alternate holder.';
+    }
+
+    async function refreshEncryptionModeUI() {
       const enabled = document.getElementById('encrypt-enabled').checked;
       const mode = document.getElementById('encrypt-mode').value;
       const passphraseFields = document.getElementById('encrypt-passphrase-fields');
       const pkiFields = document.getElementById('encrypt-pki-fields');
       const pkiHint = document.getElementById('encrypt-pki-hint');
       const pkiSelect = document.getElementById('encrypt-pki-key');
+      const pkiExtraWrap = document.getElementById('encrypt-pki-extra-keys-wrap');
+      const pkiExtraKeys = document.getElementById('encrypt-pki-extra-keys');
+      const pkiBeneficiaryWrap = document.getElementById('encrypt-pki-beneficiary-wrap');
+      const pkiBeneficiaryMember = document.getElementById('encrypt-pki-beneficiary-member');
       const pkiPassWrap = document.getElementById('encrypt-pki-passphrase-wrap');
       passphraseFields.style.display = enabled && mode === 'passphrase' ? 'block' : 'none';
       pkiFields.style.display = enabled && mode === 'pki' ? 'block' : 'none';
@@ -702,6 +797,9 @@
       if (!currentMember) {
         pkiHint.textContent = 'Sign in again to load your encryption keys.';
         pkiSelect.innerHTML = '';
+        pkiExtraKeys.innerHTML = '';
+        pkiExtraWrap.style.display = 'none';
+        pkiBeneficiaryWrap.style.display = 'none';
         pkiPassWrap.style.display = 'none';
         return;
       }
@@ -709,6 +807,9 @@
       if (!memberKeys.length) {
         pkiHint.innerHTML = 'You need to register an encryption key first. Go to <a href="settings.html">Settings → Encryption Keys</a>.';
         pkiSelect.innerHTML = '';
+        pkiExtraKeys.innerHTML = '';
+        pkiExtraWrap.style.display = 'none';
+        pkiBeneficiaryWrap.style.display = 'none';
         pkiPassWrap.style.display = 'none';
         return;
       }
@@ -719,13 +820,36 @@
       if (selected) pkiSelect.value = String(selected.id);
       if (!selected) {
         pkiHint.textContent = 'No usable encryption keys are currently available.';
+        pkiExtraKeys.innerHTML = '';
+        pkiExtraWrap.style.display = 'none';
+        pkiBeneficiaryWrap.style.display = 'none';
         pkiPassWrap.style.display = 'none';
         return;
       }
+      const checkedIds = new Set([...document.querySelectorAll('#encrypt-pki-extra-keys input[type="checkbox"]:checked')].map((input) => String(input.value)));
+      const extraKeys = memberKeys.filter((key) => String(key.id) !== String(selected.id));
+      const beneficiaryMembers = currentMember?.role === 'parent'
+        ? availableMembers.filter((member) => Number(member.id) !== Number(currentMember.id))
+        : [];
+      if (pkiBeneficiaryMember) {
+        const previousBeneficiaryMember = pkiBeneficiaryMember.value || '';
+        pkiBeneficiaryMember.innerHTML = `<option value="">No alternate member</option>${beneficiaryMembers.map((member) => `<option value="${member.id}">${esc(`${member.avatar_emoji || ''} ${member.name}`.trim())}</option>`).join('')}`;
+        if (beneficiaryMembers.some((member) => String(member.id) === String(previousBeneficiaryMember))) {
+          pkiBeneficiaryMember.value = previousBeneficiaryMember;
+        }
+      }
+      pkiExtraKeys.innerHTML = extraKeys.length
+        ? extraKeys.map((key) => `<label class="flex gap-1" style="align-items:flex-start; cursor:pointer; margin-top:0.35rem;"><input type="checkbox" value="${esc(String(key.id))}" ${checkedIds.has(String(key.id)) ? 'checked' : ''}> <span>${esc(formatPkiKeyOption(key))}</span></label>`).join('')
+        : '<div class="text-dim text-sm">Register a second key to add backup-key redundancy.</div>';
+      pkiExtraWrap.style.display = 'block';
       const recovery = selected.recovery_enabled ? 'Recovery code on file.' : 'No recovery code yet.';
       const verified = selected.credential_verified ? 'Verified ceremony.' : 'Unverified ceremony.';
-      pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery}`;
       pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
+      document.querySelectorAll('#encrypt-pki-extra-keys input[type="checkbox"]').forEach((input) => input.addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); }));
+      await refreshUploadBeneficiaryUI().catch(() => {});
+      const beneficiary = getSelectedUploadBeneficiaryKey();
+      const selectedCount = 1 + getSelectedUploadExtraKeys(selected.id).length + (beneficiary ? 1 : 0);
+      pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery} Access model: 1-of-M with ${selectedCount} selected holder${selectedCount === 1 ? '' : 's'}.`;
     }
 
     // ── Scanner ───────────────────────────────────────────────
@@ -1599,6 +1723,7 @@
       try {
         currentMember = await API.get('api/auth/me');
         const members = await API.get('api/members');
+        availableMembers = members;
         const container = document.getElementById('owner-checkboxes');
         for (const m of members) {
           const label = document.createElement('label');
@@ -1611,10 +1736,11 @@
         try {
           memberKeys = (await API.get(`api/members/${currentMember.id}/keys`))
             .filter((key) => key.key_type === 'member' && !key.revoked_at);
+          memberKeyCache.set(String(currentMember.id), memberKeys);
         } catch {
           memberKeys = [];
         }
-        refreshEncryptionModeUI();
+        await refreshEncryptionModeUI().catch(() => {});
       } catch {}
     }
 
@@ -1734,11 +1860,14 @@
           }
           let uploadFile = selectedFile;
           if (encryptEnabled) {
+            if (encryptionMode === 'pki') await refreshUploadBeneficiaryUI().catch(() => {});
             status.textContent = 'Encrypting locally...';
             const encrypted = encryptionMode === 'pki'
               ? await encryptSelectedFileWithPki(
                 selectedFile,
                 memberKeys.find((key) => String(key.id) === String(document.getElementById('encrypt-pki-key').value)) || preferredPkiKey(memberKeys),
+                getSelectedUploadExtraKeys(document.getElementById('encrypt-pki-key').value),
+                getSelectedUploadBeneficiaryKey(),
                 pkiPassphrase,
                 (message) => { status.textContent = message; }
               )
