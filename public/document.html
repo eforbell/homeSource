@@ -574,6 +574,7 @@
       const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
       const kek = await deriveMemberKekForUnlock(material, keyPassphrase, statusEl);
       statusEl.textContent = `Unlocking ${formatUnlockHolderLabel(holder)}...`;
+      // Verify KEK/passphrase is valid and obtain the member key for holder-specific unwrap.
       const privateKey = await PKICrypto.unwrapPrivateKey(
         PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
         kek
@@ -695,6 +696,7 @@
       const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
       const kek = await deriveMemberKekForUnlock(material, keyPassphrase, statusEl);
       statusEl.textContent = 'Unlocking primary member key…';
+      // Verify KEK/passphrase is valid before proceeding.
       await PKICrypto.unwrapPrivateKey(
         PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
         kek

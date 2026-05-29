@@ -635,6 +635,7 @@
       const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
       const kek = await deriveMemberKekForUpload(material, keyPassphrase, progress);
       progress?.('Unlocking primary member key…');
+      // Verify KEK/passphrase is valid before proceeding.
       await PKICrypto.unwrapPrivateKey(
         PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
         kek
@@ -662,8 +663,8 @@
       );
       const selectedKeys = [
         { memberId: currentMember.id, key: primaryKey, role: 'owner' },
-        ...(extraKeys || []).map((key) => ({ memberId: currentMember.id, key, role: 'backup' })),
-              ];
+        ...(extraKeys || []).map((key) => ({ memberId: currentMember.id, key, role: 'backup' }))
+      ];
       const beneficiary = beneficiarySelection || getSelectedUploadBeneficiaryKey();
       if (beneficiary) selectedKeys.push({ memberId: beneficiary.memberId, key: beneficiary.key, role: 'beneficiary' });
       const holders = [];

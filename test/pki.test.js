@@ -175,6 +175,26 @@ describe('PKI key management', () => {
     });
   });
 
+  describe('updateKeyLastUsed', () => {
+    it('updates the timestamp', async () => {
+      const pki = require('../lib/pki');
+      const key = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('pub-last-used'),
+        encryptedPrivateKey: 'enc-last-used',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Use Me'
+      });
+
+      assert.equal(key.last_used_at, null);
+      await pki.updateKeyLastUsed(key.id);
+      const fetched = await pki.getMemberKey(key.id, parent.id);
+      assert.ok(fetched.last_used_at);
+    });
+  });
 
   describe('getDocumentKeyInfo', () => {
     it('returns holder-aware key info while preserving compatibility fields', async () => {
