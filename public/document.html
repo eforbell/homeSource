@@ -755,6 +755,7 @@
         let encrypted;
         if (mode === 'passphrase') {
           if (!passphrase) throw new Error('Passphrase required');
+          if (passphrase.length < 12) throw new Error('Passphrase must be at least 12 characters');
           if (passphrase !== passphraseConfirm) throw new Error('Passphrases do not match');
           statusEl.textContent = 'Encrypting locally…';
           encrypted = await encryptExistingFileWithPassphrase(originalFile, passphrase);

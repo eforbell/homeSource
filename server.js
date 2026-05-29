@@ -742,8 +742,7 @@ app.post('/api/documents/:id/encrypt', requireAuth, requireParent, async (req, r
       encryptedFile: stored,
       encryptionMode: encryption.encryption_mode,
       encryptionMetadata: encryption.encryption_metadata,
-      encryptionKeyId,
-      actorId: req.member.id
+      encryptionKeyId
     });
 
     if (encryptionKeyId) {
@@ -755,8 +754,18 @@ app.post('/api/documents/:id/encrypt', requireAuth, requireParent, async (req, r
       'document',
       updated.id,
       req.member.id,
-      { original_file_id: originalFiles[0].id, encryption_key_id: encryptionKeyId }
+      {
+        original_file_id: originalFiles[0].id,
+        encryption_key_id: encryptionKeyId,
+        deleted_share_count: Number(updated._deleted_share_count || 0),
+        cleanup_failure_count: Array.isArray(updated._cleanup_failures) ? updated._cleanup_failures.length : 0,
+        orphaned_plaintext_files: Array.isArray(updated._cleanup_failures)
+          ? updated._cleanup_failures.map((entry) => entry.stored_filename)
+          : []
+      }
     );
+    delete updated._deleted_share_count;
+    delete updated._cleanup_failures;
     res.json(updated);
   } catch (err) {
     const status = /already encrypted/i.test(err.message) ? 409 : 400;

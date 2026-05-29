@@ -293,6 +293,13 @@ describe('encrypt existing document in place', () => {
     assert.equal(fs.existsSync(oldThumbPath), false);
     const { rows: shareRows } = await pool.query('SELECT id FROM share_links WHERE document_id = $1', [doc.id]);
     assert.equal(shareRows.length, 0);
+    const { rows: auditRows } = await pool.query(
+      `SELECT action, details FROM audit_log WHERE entity_type = 'document' AND entity_id = $1 AND action = 'document.encrypted.passphrase' ORDER BY id DESC LIMIT 1`,
+      [doc.id]
+    );
+    assert.equal(auditRows.length, 1);
+    assert.equal(auditRows[0].details.deleted_share_count, 1);
+    assert.equal(auditRows[0].details.cleanup_failure_count, 0);
 
     const reanalyzeRes = await authedPost(`api/documents/${doc.id}/magicindex/reanalyze`, parentCookie, { user_hint: 'retry' });
     assert.equal(reanalyzeRes.status, 409);
