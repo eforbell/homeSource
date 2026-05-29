@@ -670,7 +670,8 @@
       for (const [index, selection] of selectedKeys.entries()) {
         progress?.(selection.role === 'beneficiary' ? 'Wrapping document key to alternate holder…' : index === 0 ? 'Wrapping document key to primary key…' : `Wrapping document key to backup key ${index}…`);
         const key = selection.key;
-        const publicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(key.public_key || material.public_key));
+        if (!key.public_key) throw new Error(`Holder key ${key.id} is missing its public key`);
+        const publicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(key.public_key));
         const wrappedDek = await PKICrypto.wrapDekForOwner(dek, publicKey);
         holders.push({
           memberId: selection.memberId,
@@ -721,6 +722,13 @@
       return [...document.querySelectorAll('#encrypt-pki-extra-keys input[type="checkbox"]:checked')]
         .map((input) => memberKeys.find((key) => String(key.id) === String(input.value)))
         .filter((key) => key && String(key.id) !== String(primaryKeyId));
+    }
+
+    async function loadMemberKeysForMember(memberId) {
+      const keys = (await API.get(`api/members/${memberId}/keys`))
+        .filter((key) => key.key_type === 'member' && !key.revoked_at);
+      memberKeyCache.set(String(memberId), keys);
+      return keys;
     }
 
     function getSelectedUploadBeneficiaryKey() {
