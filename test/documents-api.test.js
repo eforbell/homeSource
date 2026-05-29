@@ -361,6 +361,73 @@ describe('encrypt existing document in place', () => {
     assert.equal(keyInfo.key.id, parentKey.id);
   });
 
+  it('converts a plaintext document to multi-holder PKI encryption', async () => {
+    const { doc } = await createPlaintextDocFixture();
+    const backupKey = await createPassphraseProtectedKey(parent.id, 'Parent Backup PKI Key', parentKeyPassphrase);
+    const encryptedBytes = Buffer.from('encrypted-pki-ciphertext-multi');
+    const form = new FormData();
+    form.append('file', new Blob([encryptedBytes], { type: 'application/octet-stream' }), 'fixture-pki-multi.enc');
+    form.append('metadata', JSON.stringify({
+      encryption_mode: 'pki',
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'cipher-iv',
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: parentKey.id,
+                key_fingerprint: parentKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'jkl',
+                  hkdf_salt_b64: 'mno',
+                  wrapped_dek_b64: 'pqr'
+                }
+              }
+            ]
+          }
+        }
+      }
+    }));
+
+    const res = await authedFetch(`api/documents/${doc.id}/encrypt`, parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 200);
+    const updated = await res.json();
+    assert.equal(updated.encryption_mode, 'pki');
+    assert.equal(updated.encryption_key_id, parentKey.id);
+
+    const keyInfoRes = await authedGet(`api/documents/${doc.id}/key-info`, parentCookie);
+    assert.equal(keyInfoRes.status, 200);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.encryption_key_id, parentKey.id);
+    assert.equal(keyInfo.primary_key.id, parentKey.id);
+    assert.equal(keyInfo.holders.length, 2);
+    assert.equal(keyInfo.holders[0].role, 'owner');
+    assert.equal(keyInfo.holders[1].role, 'backup');
+    assert.equal(keyInfo.holders[1].encryption_key_id, backupKey.id);
+  });
+
   it('rejects encrypt-in-place for documents with multiple original uploads', async () => {
     const doc = await createTestDocument(parent.id, { title: 'Two uploads fixture' });
     const first = await storeFile(Buffer.from('%PDF-1.4\n% first\n%%EOF'), 'first.pdf', 'application/pdf');
@@ -639,6 +706,51 @@ describe('PKI upload validation', () => {
     };
   }
 
+  function buildMultiHolderPkiMetadata(backupKey) {
+    return {
+      title: 'PKI Upload Multi Holder',
+      document_type: 'other',
+      encryption_mode: 'pki',
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'cipher-iv',
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: parentKey.id,
+                key_fingerprint: parentKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'jkl',
+                  hkdf_salt_b64: 'mno',
+                  wrapped_dek_b64: 'pqr'
+                }
+              }
+            ]
+          }
+        }
+      }
+    };
+  }
+
   async function createPassphraseProtectedKey(memberId, label, passphrase) {
     const keypair = await PKICrypto.generateMemberKeypair();
     const { kek, salt } = await PKICrypto.deriveKekFromPassphrase(passphrase);
@@ -685,6 +797,32 @@ describe('PKI upload validation', () => {
     assert.equal(detailRes.status, 200);
     const detail = await detailRes.json();
     assert.equal(detail.encryption_key_id, parentKey.id);
+  });
+
+  it('accepts multi-holder PKI upload and returns holder-aware key info', async () => {
+    const backupKey = await createPassphraseProtectedKey(parent.id, 'Parent Backup PKI Key', 'parent-backup-passphrase');
+    const form = new FormData();
+    const pdf = new Blob([Buffer.from('%PDF-1.4\n% pki multi holder test\n%%EOF')], { type: 'application/pdf' });
+    form.append('file', pdf, 'pki-multi-valid.pdf');
+    form.append('metadata', JSON.stringify(buildMultiHolderPkiMetadata(backupKey)));
+
+    const res = await authedFetch('api/documents', parentCookie, {
+      method: 'POST',
+      body: form
+    });
+    assert.equal(res.status, 201);
+    const created = await res.json();
+    assert.equal(created.encryption_key_id, parentKey.id);
+
+    const keyInfoRes = await authedGet(`api/documents/${created.id}/key-info`, parentCookie);
+    assert.equal(keyInfoRes.status, 200);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.encryption_key_id, parentKey.id);
+    assert.equal(keyInfo.primary_key.id, parentKey.id);
+    assert.equal(keyInfo.holders.length, 2);
+    assert.equal(keyInfo.holders[0].label, 'Parent PKI Key');
+    assert.equal(keyInfo.holders[1].label, 'Parent Backup PKI Key');
+    assert.equal(keyInfo.holders[1].role, 'backup');
   });
 
   it('stores ciphertext and encrypted metadata for a real PKI upload flow', async () => {

@@ -293,31 +293,50 @@
 
   // ── Build PKI envelope metadata ──
 
-  function buildPkiEnvelope({ wrappedDek, ephemeralPublicKey, salt, iv, tagLengthBits, memberId, encryptionKeyId, keyFingerprint, encryptedFileMeta }) {
+  function buildPkiEnvelope({ wrappedDek, ephemeralPublicKey, salt, iv, tagLengthBits, memberId, encryptionKeyId, keyFingerprint, encryptedFileMeta, holders }) {
+    var normalizedHolders = Array.isArray(holders) && holders.length
+      ? holders.map(function (holder) {
+          return {
+            member_id: holder.memberId,
+            encryption_key_id: holder.encryptionKeyId,
+            key_fingerprint: holder.keyFingerprint,
+            role: holder.role || 'owner',
+            wrapped_dek: {
+              kind: 'pki_x25519',
+              ephemeral_public_key_b64: toBase64(holder.ephemeralPublicKey),
+              hkdf_salt_b64: toBase64(holder.salt),
+              wrapped_dek_b64: toBase64(holder.wrappedDek)
+            }
+          };
+        })
+      : [{
+          member_id: memberId,
+          encryption_key_id: encryptionKeyId,
+          key_fingerprint: keyFingerprint,
+          role: 'owner'
+        }];
+
     var envelope = {
       version: 1,
       mode: 'pki',
-      policy: { plaintext_metadata: 'minimal', server_plaintext_processing: false },
+      policy: { plaintext_metadata: 'minimal', server_plaintext_processing: false, access_model: 'any_one_holder', threshold: 1 },
       files: {
         upload: {
           cipher: 'aes-256-gcm',
           iv_b64: toBase64(iv),
           tag_length_bits: tagLengthBits || 128,
-          wrapped_dek: {
-            kind: 'pki_x25519',
-            ephemeral_public_key_b64: toBase64(ephemeralPublicKey),
-            hkdf_salt_b64: toBase64(salt),
-            wrapped_dek_b64: toBase64(wrappedDek)
-          },
-          holders: [{
-            member_id: memberId,
-            encryption_key_id: encryptionKeyId,
-            key_fingerprint: keyFingerprint,
-            role: 'owner'
-          }]
+          holders: normalizedHolders
         }
       }
     };
+    if (!holders || !holders.length) {
+      envelope.files.upload.wrapped_dek = {
+        kind: 'pki_x25519',
+        ephemeral_public_key_b64: toBase64(ephemeralPublicKey),
+        hkdf_salt_b64: toBase64(salt),
+        wrapped_dek_b64: toBase64(wrappedDek)
+      };
+    }
     if (encryptedFileMeta) {
       envelope.files.upload.encrypted_file_meta = encryptedFileMeta;
     }

@@ -186,7 +186,7 @@ describe('PKICrypto', () => {
   });
 
   describe('buildPkiEnvelope', () => {
-    it('builds valid envelope structure', () => {
+    it('builds valid legacy-compatible single-holder envelope structure', () => {
       const envelope = PKICrypto.buildPkiEnvelope({
         wrappedDek: new Uint8Array([1, 2, 3]),
         ephemeralPublicKey: new Uint8Array(32),
@@ -203,6 +203,43 @@ describe('PKICrypto', () => {
       assert.equal(envelope.files.upload.holders.length, 1);
       assert.equal(envelope.files.upload.holders[0].role, 'owner');
       assert.equal(envelope.files.upload.holders[0].member_id, 1);
+      assert.equal(envelope.files.upload.holders[0].wrapped_dek, undefined);
+    });
+
+    it('builds valid multi-holder envelope structure', () => {
+      const envelope = PKICrypto.buildPkiEnvelope({
+        iv: new Uint8Array(12),
+        holders: [
+          {
+            memberId: 1,
+            encryptionKeyId: 42,
+            keyFingerprint: 'a1b2:c3d4',
+            role: 'owner',
+            wrappedDek: new Uint8Array([1, 2, 3]),
+            ephemeralPublicKey: new Uint8Array(32),
+            salt: new Uint8Array(32)
+          },
+          {
+            memberId: 1,
+            encryptionKeyId: 57,
+            keyFingerprint: 'd4c3:b2a1',
+            role: 'backup',
+            wrappedDek: new Uint8Array([4, 5, 6]),
+            ephemeralPublicKey: new Uint8Array(32),
+            salt: new Uint8Array(32)
+          }
+        ]
+      });
+      assert.equal(envelope.version, 1);
+      assert.equal(envelope.mode, 'pki');
+      assert.equal(envelope.policy.access_model, 'any_one_holder');
+      assert.equal(envelope.policy.threshold, 1);
+      assert.equal(envelope.files.upload.wrapped_dek, undefined);
+      assert.equal(envelope.files.upload.holders.length, 2);
+      assert.equal(envelope.files.upload.holders[0].role, 'owner');
+      assert.equal(envelope.files.upload.holders[0].wrapped_dek.kind, 'pki_x25519');
+      assert.equal(envelope.files.upload.holders[1].role, 'backup');
+      assert.equal(envelope.files.upload.holders[1].wrapped_dek.kind, 'pki_x25519');
     });
   });
 
