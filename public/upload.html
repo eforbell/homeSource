@@ -329,13 +329,13 @@
       if (enabled) {
         magicIndexCheckbox.checked = false;
       }
-      refreshEncryptionModeUI();
+      refreshEncryptionModeUI().catch(() => {});
     });
 
-    document.getElementById('encrypt-mode').addEventListener('change', refreshEncryptionModeUI);
-    document.getElementById('encrypt-pki-key').addEventListener('change', refreshEncryptionModeUI);
-    document.getElementById('encrypt-pki-beneficiary-member')?.addEventListener('change', async () => { await refreshUploadBeneficiaryUI(); refreshEncryptionModeUI(); });
-    document.getElementById('encrypt-pki-beneficiary-key')?.addEventListener('change', refreshEncryptionModeUI);
+    document.getElementById('encrypt-mode').addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); });
+    document.getElementById('encrypt-pki-key').addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); });
+    document.getElementById('encrypt-pki-beneficiary-member')?.addEventListener('change', async () => { await refreshUploadBeneficiaryUI(); await refreshEncryptionModeUI().catch(() => {}); });
+    document.getElementById('encrypt-pki-beneficiary-key')?.addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); });
 
     (function configurePassphraseStrength() {
       const COMMON_PASSPHRASES = new Set([
@@ -758,12 +758,18 @@
         hint.textContent = 'Selected member has no registered encryption keys.';
         return;
       }
+      const previousKeyId = keySelect.value || '';
       keySelect.innerHTML = keys.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+      if (keys.some((key) => String(key.id) === String(previousKeyId))) {
+        keySelect.value = previousKeyId;
+      } else {
+        keySelect.value = String(keys[0].id);
+      }
       keySelect.style.display = 'block';
       hint.textContent = 'This member will be added as a beneficiary alternate holder.';
     }
 
-    function refreshEncryptionModeUI() {
+    async function refreshEncryptionModeUI() {
       const enabled = document.getElementById('encrypt-enabled').checked;
       const mode = document.getElementById('encrypt-mode').value;
       const passphraseFields = document.getElementById('encrypt-passphrase-fields');
@@ -829,12 +835,12 @@
       pkiExtraWrap.style.display = 'block';
       const recovery = selected.recovery_enabled ? 'Recovery code on file.' : 'No recovery code yet.';
       const verified = selected.credential_verified ? 'Verified ceremony.' : 'Unverified ceremony.';
+      pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
+      document.querySelectorAll('#encrypt-pki-extra-keys input[type="checkbox"]').forEach((input) => input.addEventListener('change', () => { refreshEncryptionModeUI().catch(() => {}); }));
+      await refreshUploadBeneficiaryUI().catch(() => {});
       const beneficiary = getSelectedUploadBeneficiaryKey();
       const selectedCount = 1 + getSelectedUploadExtraKeys(selected.id).length + (beneficiary ? 1 : 0);
       pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery} Access model: 1-of-M with ${selectedCount} selected holder${selectedCount === 1 ? '' : 's'}.`;
-      pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
-      document.querySelectorAll('#encrypt-pki-extra-keys input[type="checkbox"]').forEach((input) => input.addEventListener('change', refreshEncryptionModeUI));
-      refreshUploadBeneficiaryUI().catch(() => {});
     }
 
     // ── Scanner ───────────────────────────────────────────────
@@ -1725,7 +1731,7 @@
         } catch {
           memberKeys = [];
         }
-        refreshEncryptionModeUI();
+        await refreshEncryptionModeUI().catch(() => {});
       } catch {}
     }
 
@@ -1845,6 +1851,7 @@
           }
           let uploadFile = selectedFile;
           if (encryptEnabled) {
+            if (encryptionMode === 'pki') await refreshUploadBeneficiaryUI().catch(() => {});
             status.textContent = 'Encrypting locally...';
             const encrypted = encryptionMode === 'pki'
               ? await encryptSelectedFileWithPki(

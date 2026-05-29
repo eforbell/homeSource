@@ -802,7 +802,13 @@
         hint.textContent = 'Selected member has no registered encryption keys.';
         return;
       }
+      const previousKeyId = keySelect.value || '';
       keySelect.innerHTML = keys.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+      if (keys.some((key) => String(key.id) === String(previousKeyId))) {
+        keySelect.value = previousKeyId;
+      } else {
+        keySelect.value = String(keys[0].id);
+      }
       keySelect.style.display = 'block';
       hint.textContent = 'This member will be added as a beneficiary alternate holder.';
     }
@@ -875,12 +881,12 @@
       pkiBeneficiaryWrap.style.display = currentMember?.role === 'parent' ? 'block' : 'none';
       const verified = selected.credential_verified ? 'Verified ceremony.' : 'Unverified ceremony.';
       const recovery = selected.recovery_enabled ? 'Recovery wrap enabled.' : 'No recovery wrap.';
+      pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
+      document.querySelectorAll('#encrypt-existing-pki-extra-keys input[type="checkbox"]').forEach((input) => input.addEventListener('change', () => { refreshEncryptExistingUI().catch(() => {}); }));
+      await refreshEncryptExistingBeneficiaryUI().catch(() => {});
       const beneficiary = getSelectedEncryptExistingBeneficiaryKey();
       const selectedCount = 1 + getSelectedEncryptExistingExtraKeys(selected.id).length + (beneficiary ? 1 : 0);
       pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery} Access model: 1-of-M with ${selectedCount} selected holder${selectedCount === 1 ? '' : 's'}.`;
-      pkiPassWrap.style.display = (selected.protection_tier === 'passphrase' || selected.verification_method === 'passphrase') ? 'block' : 'none';
-      document.querySelectorAll('#encrypt-existing-pki-extra-keys input[type="checkbox"]').forEach((input) => input.addEventListener('change', refreshEncryptExistingUI));
-      refreshEncryptExistingBeneficiaryUI().catch(() => {});
     }
 
     async function openEncryptModal() {
@@ -897,7 +903,7 @@
         document.getElementById('encrypt-existing-mode').value = 'passphrase';
         document.getElementById('encrypt-existing-kdf-scheme').value = 'pbkdf2';
         document.getElementById('encrypt-modal').classList.remove('hidden');
-        await refreshEncryptExistingUI();
+        await refreshEncryptExistingUI().catch(() => {});
       } catch (err) {
         toast(err.message || 'Unable to prepare encryption', 'error');
       }
@@ -920,6 +926,7 @@
         const originalFile = await fetchOriginalFileForEncryption();
 
         let encrypted;
+        if (mode === 'pki') await refreshEncryptExistingBeneficiaryUI().catch(() => {});
         if (mode === 'passphrase') {
           if (!passphrase) throw new Error('Passphrase required');
           if (passphrase.length < 12) throw new Error('Passphrase must be at least 12 characters');
@@ -1753,10 +1760,10 @@
       if (doc.metadata?.magicindex?.state === 'pending') startMagicIndexPolling();
     }
 
-    document.getElementById('encrypt-existing-mode').addEventListener('change', refreshEncryptExistingUI);
-    document.getElementById('encrypt-existing-pki-key').addEventListener('change', refreshEncryptExistingUI);
-    document.getElementById('encrypt-existing-pki-beneficiary-member')?.addEventListener('change', async () => { await refreshEncryptExistingBeneficiaryUI(); refreshEncryptExistingUI(); });
-    document.getElementById('encrypt-existing-pki-beneficiary-key')?.addEventListener('change', refreshEncryptExistingUI);
+    document.getElementById('encrypt-existing-mode').addEventListener('change', () => { refreshEncryptExistingUI().catch(() => {}); });
+    document.getElementById('encrypt-existing-pki-key').addEventListener('change', () => { refreshEncryptExistingUI().catch(() => {}); });
+    document.getElementById('encrypt-existing-pki-beneficiary-member')?.addEventListener('change', async () => { await refreshEncryptExistingBeneficiaryUI(); await refreshEncryptExistingUI().catch(() => {}); });
+    document.getElementById('encrypt-existing-pki-beneficiary-key')?.addEventListener('change', () => { refreshEncryptExistingUI().catch(() => {}); });
     document.getElementById('encrypt-existing-kdf-scheme').addEventListener('change', () => {
       const hint = document.getElementById('encrypt-existing-kdf-hint');
       hint.textContent = document.getElementById('encrypt-existing-kdf-scheme').value === 'argon2id'
