@@ -904,6 +904,9 @@
           toast('Encrypting documents with multiple uploads is not supported yet', 'error');
           return;
         }
+        if (!availableMembers.length) {
+          availableMembers = await API.get('api/members');
+        }
         document.getElementById('encrypt-existing-status').textContent = '';
         document.getElementById('encrypt-existing-passphrase').value = '';
         document.getElementById('encrypt-existing-passphrase-confirm').value = '';
