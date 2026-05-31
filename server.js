@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { pool } = require('./lib/db');
 const { hashPassphrase, verifyPassphrase, createSession, validateSession, destroySession, cleanExpiredSessions, authEnabled, parseCookie, requireAuth, requireParent } = require('./lib/auth');
-const { listDocuments, getDocument, createDocument, encryptDocumentInPlace, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount, canMemberAccessDocument } = require('./lib/documents');
+const { listDocuments, getDocument, createDocument, encryptDocumentInPlace, updatePkiDocumentAccess, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount, canMemberAccessDocument } = require('./lib/documents');
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
@@ -824,6 +824,72 @@ app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) =>
     await audit.log('document.archived', 'document', doc.id, req.member.id);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') {
+      return res.status(409).json({ error: 'Document is not PKI-encrypted' });
+    }
+
+    const body = req.body || {};
+    const encryptionMetadata = body.encryption_metadata && typeof body.encryption_metadata === 'object'
+      ? body.encryption_metadata
+      : null;
+    if (!encryptionMetadata) {
+      return res.status(400).json({ error: 'encryption_metadata is required' });
+    }
+
+    const normalized = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: encryptionMetadata });
+    const primaryKeyId = await pki.validatePkiUpload(normalized.encryption_metadata, req.member.id);
+    if (body.primary_encryption_key_id && Number(body.primary_encryption_key_id) !== Number(primaryKeyId)) {
+      return res.status(400).json({ error: 'primary_encryption_key_id does not match the validated primary holder key' });
+    }
+
+    const existingHolders = doc.encryption_metadata?.files?.upload?.holders || [];
+    const updatedHolders = normalized.encryption_metadata?.files?.upload?.holders || [];
+    const existingKeyIds = new Set(existingHolders.map((holder) => Number(holder.encryption_key_id)));
+    const updatedKeyIds = new Set(updatedHolders.map((holder) => Number(holder.encryption_key_id)));
+
+    for (const keyId of existingKeyIds) {
+      if (!updatedKeyIds.has(keyId)) {
+        return res.status(400).json({ error: 'Removing existing PKI holders is not supported by this route' });
+      }
+    }
+
+    const addedHolders = updatedHolders.filter((holder) => !existingKeyIds.has(Number(holder.encryption_key_id)));
+    if (addedHolders.length !== 1) {
+      return res.status(400).json({ error: 'This route currently supports adding exactly one backup holder at a time' });
+    }
+    const addedHolder = addedHolders[0];
+    if (Number(addedHolder.member_id) !== Number(req.member.id) || addedHolder.role !== 'backup') {
+      return res.status(400).json({ error: 'This route currently supports adding one same-member backup holder only' });
+    }
+
+    const updated = await updatePkiDocumentAccess(doc.id, {
+      encryptionMetadata: normalized.encryption_metadata,
+      encryptionKeyId: primaryKeyId
+    });
+    if (!updated) return res.status(404).json({ error: 'Document not found' });
+
+    await audit.log('document.pki_holder_added', 'document', doc.id, req.member.id, {
+      added_holder_member_id: Number(addedHolder.member_id),
+      added_holder_key_id: Number(addedHolder.encryption_key_id),
+      role: addedHolder.role,
+      holder_count_before: existingHolders.length,
+      holder_count_after: updatedHolders.length,
+      encryption_key_id: primaryKeyId
+    });
+    res.json({ ok: true, document: updated });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ── Document files ──────────────────────────────────────────────────────────

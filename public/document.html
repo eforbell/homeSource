@@ -162,6 +162,32 @@
   </div>
 
   <!-- Owner modal -->
+
+  <div class="modal-backdrop hidden" id="add-backup-key-modal">
+    <div class="modal">
+      <div class="modal-title">Add Backup Key</div>
+      <div class="text-dim text-sm mb-1">Access model: <strong>1-of-M</strong>. This does not re-encrypt the file. It proves access with an existing key, unwraps the current document key locally, and adds one same-member backup key.</div>
+      <div class="form-group">
+        <label class="form-label">Current Authorized Key</label>
+        <select id="extend-pki-current-holder" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Add This Backup Key</label>
+        <select id="extend-pki-new-key" class="form-select"></select>
+        <div id="extend-pki-new-key-hint" class="form-hint">Choose one of your registered keys not already enrolled on this document.</div>
+      </div>
+      <div class="form-group" id="extend-pki-passphrase-wrap" style="display:none;">
+        <label class="form-label">Current Key Passphrase</label>
+        <input type="password" id="extend-pki-passphrase" class="form-input" placeholder="Enter the passphrase for the currently authorized key">
+      </div>
+      <div id="extend-pki-status" class="text-sm text-dim" style="min-height:1.25rem;"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeAddBackupKeyModal()">Cancel</button>
+        <button class="btn btn-primary" id="confirm-add-backup-key-btn">Add Backup Key</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="owner-modal">
     <div class="modal">
       <div class="modal-title">Add Owner</div>
@@ -553,6 +579,77 @@
       return `${holder.label || 'Unnamed key'}${role}${protection}`;
     }
 
+    function buildNormalizedPkiEnvelope(doc, keyInfo) {
+      const env = getPkiFileEntry(doc);
+      const holders = getPkiHoldersFromDoc(doc, keyInfo).map((holder) => ({
+        member_id: holder.member_id,
+        encryption_key_id: holder.encryption_key_id,
+        key_fingerprint: holder.key_fingerprint,
+        role: holder.role,
+        wrapped_dek: holder.wrapped_dek
+      }));
+      return {
+        version: Number(doc.encryption_metadata?.version || 1),
+        mode: 'pki',
+        policy: {
+          plaintext_metadata: doc.encryption_metadata?.policy?.plaintext_metadata || 'minimal',
+          server_plaintext_processing: false,
+          access_model: doc.encryption_metadata?.policy?.access_model || 'any_one_holder',
+          threshold: Number(doc.encryption_metadata?.policy?.threshold || 1)
+        },
+        files: {
+          upload: {
+            cipher: env?.cipher || 'aes-256-gcm',
+            iv_b64: env?.iv_b64,
+            tag_length_bits: Number(env?.tag_length_bits || 128),
+            holders,
+            ...(env?.encrypted_file_meta ? { encrypted_file_meta: env.encrypted_file_meta } : {})
+          }
+        }
+      };
+    }
+
+    async function buildExtendedEnvelopeWithBackupKey(doc, keyInfo, currentHolder, newBackupKey, currentHolderPassphrase, statusEl) {
+      const env = getPkiFileEntry(doc);
+      const holderWrappedDek = getHolderWrappedDek(env, currentHolder);
+      if (!holderWrappedDek) throw new Error('Current holder metadata is incomplete');
+      statusEl.textContent = `Loading ${formatUnlockHolderLabel(currentHolder)}...`;
+      const material = await API.get(`api/members/${currentMember.id}/keys/${currentHolder.encryption_key_id}/material`);
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+      const kek = await deriveMemberKekForUnlock(material, currentHolderPassphrase, statusEl);
+      statusEl.textContent = `Unlocking ${formatUnlockHolderLabel(currentHolder)}...`;
+      // Verify KEK/passphrase is valid and obtain the member key for DEK unwrap.
+      const privateKey = await PKICrypto.unwrapPrivateKey(
+        PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
+        kek
+      );
+      statusEl.textContent = 'Recovering existing document key...';
+      const dek = await PKICrypto.unwrapDekAsOwner(
+        PKICrypto.fromBase64(holderWrappedDek.wrapped_dek_b64),
+        PKICrypto.fromBase64(holderWrappedDek.ephemeral_public_key_b64),
+        PKICrypto.fromBase64(holderWrappedDek.hkdf_salt_b64),
+        privateKey
+      );
+      if (!newBackupKey.public_key) throw new Error(`Backup key ${newBackupKey.id} is missing its public key`);
+      statusEl.textContent = 'Wrapping document key to backup key...';
+      const publicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(newBackupKey.public_key));
+      const wrappedDek = await PKICrypto.wrapDekForOwner(dek, publicKey);
+      const updated = buildNormalizedPkiEnvelope(doc, keyInfo);
+      updated.files.upload.holders.push({
+        member_id: currentMember.id,
+        encryption_key_id: newBackupKey.id,
+        key_fingerprint: newBackupKey.key_fingerprint,
+        role: 'backup',
+        wrapped_dek: {
+          kind: 'pki_x25519',
+          ephemeral_public_key_b64: PKICrypto.toBase64(wrappedDek.ephemeralPublicKey),
+          hkdf_salt_b64: PKICrypto.toBase64(wrappedDek.salt),
+          wrapped_dek_b64: PKICrypto.toBase64(wrappedDek.wrappedDek)
+        }
+      });
+      return updated;
+    }
+
     async function decryptEncryptedDocumentWithPki(doc, keyInfo, keyPassphrase, statusEl) {
       const env = getPkiFileEntry(doc);
       if (!env?.iv_b64) {
@@ -899,6 +996,77 @@
       pkiHint.textContent = `${formatPkiKeyOption(selected)}. ${verified} ${recovery} Access model: 1-of-M with ${selectedCount} selected holder${selectedCount === 1 ? '' : 's'}.`;
     }
 
+    async function refreshAddBackupKeyModal() {
+      const statusEl = document.getElementById('extend-pki-status');
+      const holderSelect = document.getElementById('extend-pki-current-holder');
+      const newKeySelect = document.getElementById('extend-pki-new-key');
+      const passWrap = document.getElementById('extend-pki-passphrase-wrap');
+      if (!currentDoc || currentDoc.encryption_mode !== 'pki') throw new Error('Document is not PKI-encrypted');
+      if (!memberKeys.length) await loadMemberKeysForEncryptExisting();
+      const keyInfo = await API.get(`api/documents/${docId}/key-info`);
+      const eligibleHolders = getEligiblePkiHolders(currentDoc, keyInfo);
+      if (!eligibleHolders.length) throw new Error('None of your current keys can unlock this document');
+      holderSelect.innerHTML = eligibleHolders.map((holder) => `<option value="${esc(String(holder.encryption_key_id))}">${esc(formatUnlockHolderLabel(holder))}</option>`).join('');
+      const currentHolderIds = new Set(getPkiHoldersFromDoc(currentDoc, keyInfo).map((holder) => String(holder.encryption_key_id)));
+      const backupCandidates = memberKeys.filter((key) => !currentHolderIds.has(String(key.id)));
+      if (!backupCandidates.length) throw new Error('No additional same-member backup keys are available for this document');
+      newKeySelect.innerHTML = backupCandidates.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+      const refreshProofPrompt = () => {
+        const holder = eligibleHolders.find((candidate) => String(candidate.encryption_key_id) === String(holderSelect.value)) || eligibleHolders[0];
+        const needsPassphrase = !!(holder && (holder.protection_tier === 'passphrase' || holder.verification_method === 'passphrase'));
+        passWrap.style.display = needsPassphrase ? 'block' : 'none';
+        if (!needsPassphrase) document.getElementById('extend-pki-passphrase').value = '';
+      };
+      holderSelect.onchange = refreshProofPrompt;
+      refreshProofPrompt();
+      statusEl.textContent = '';
+    }
+
+    async function openAddBackupKeyModal() {
+      try {
+        document.getElementById('extend-pki-passphrase').value = '';
+        await refreshAddBackupKeyModal();
+        document.getElementById('add-backup-key-modal').classList.remove('hidden');
+      } catch (err) {
+        toast(err.message || 'Unable to prepare backup-key extension', 'error');
+      }
+    }
+
+    function closeAddBackupKeyModal() {
+      document.getElementById('add-backup-key-modal').classList.add('hidden');
+    }
+
+    async function submitAddBackupKey() {
+      const button = document.getElementById('confirm-add-backup-key-btn');
+      const statusEl = document.getElementById('extend-pki-status');
+      const holderKeyId = document.getElementById('extend-pki-current-holder').value;
+      const backupKeyId = document.getElementById('extend-pki-new-key').value;
+      const currentHolderPassphrase = document.getElementById('extend-pki-passphrase').value;
+      try {
+        button.disabled = true;
+        statusEl.textContent = 'Loading current key info...';
+        if (!memberKeys.length) await loadMemberKeysForEncryptExisting();
+        const keyInfo = await API.get(`api/documents/${docId}/key-info`);
+        const currentHolder = getEligiblePkiHolders(currentDoc, keyInfo).find((holder) => String(holder.encryption_key_id) === String(holderKeyId));
+        if (!currentHolder) throw new Error('Select a currently authorized key you can unlock');
+        const newBackupKey = memberKeys.find((key) => String(key.id) === String(backupKeyId));
+        if (!newBackupKey) throw new Error('Select a backup key to add');
+        const encryptionMetadata = await buildExtendedEnvelopeWithBackupKey(currentDoc, keyInfo, currentHolder, newBackupKey, currentHolderPassphrase, statusEl);
+        statusEl.textContent = 'Saving updated PKI access...';
+        await API.post(`api/documents/${docId}/pki-holders/add`, {
+          primary_encryption_key_id: keyInfo.primary_key?.id || keyInfo.encryption_key_id,
+          encryption_metadata: encryptionMetadata
+        });
+        closeAddBackupKeyModal();
+        toast('Backup key added', 'success');
+        await loadDocument();
+      } catch (err) {
+        statusEl.textContent = err.message || 'Unable to add backup key';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function openEncryptModal() {
       try {
         const originals = (currentDoc?.files || []).filter((file) => file.file_type === 'original');
@@ -1130,6 +1298,7 @@
         actions.innerHTML = `
           <button class="btn btn-sm" onclick="openEditModal()">Edit</button>
           ${!encryptedDoc ? '<button class="btn btn-sm" onclick="openEncryptModal()">Encrypt</button>' : ''}
+          ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddBackupKeyModal()">Add Backup Key</button>' : ''}
           <button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button>
           <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
           <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>
@@ -1692,6 +1861,8 @@
       preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
     window.showPreview = showPreview;
+    window.openAddBackupKeyModal = openAddBackupKeyModal;
+    window.closeAddBackupKeyModal = closeAddBackupKeyModal;
 
     // File upload
     document.getElementById('add-file-btn').addEventListener('click', () => {
@@ -1788,6 +1959,7 @@
         : 'PBKDF2 selected: broad compatibility and faster unlock/encrypt.';
     });
     document.getElementById('confirm-encrypt-btn').addEventListener('click', submitEncryptExisting);
+    document.getElementById('confirm-add-backup-key-btn').addEventListener('click', submitAddBackupKey);
 
     loadDocument().then(() => {
       if (currentDoc) maybeStartMagicIndexPolling(currentDoc);
