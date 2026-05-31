@@ -507,7 +507,8 @@
       }
       if (material.protection_tier === 'passphrase' || material.verification_method === 'passphrase') {
         if (!passphrase) throw new Error('Passphrase required to unlock this key');
-        const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+        if (material?.revoked_at) throw new Error('This key has been revoked. Contact the vault administrator.');
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
         if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
           throw new Error('Unsupported passphrase-wrapped key format');
         }
@@ -593,7 +594,7 @@
         mode: 'pki',
         policy: {
           plaintext_metadata: doc.encryption_metadata?.policy?.plaintext_metadata || 'minimal',
-          server_plaintext_processing: false,
+          server_plaintext_processing: doc.encryption_metadata?.policy?.server_plaintext_processing === true,
           access_model: doc.encryption_metadata?.policy?.access_model || 'any_one_holder',
           threshold: Number(doc.encryption_metadata?.policy?.threshold || 1)
         },

@@ -852,43 +852,87 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
       return res.status(400).json({ error: 'primary_encryption_key_id does not match the validated primary holder key' });
     }
 
-    const existingHolders = doc.encryption_metadata?.files?.upload?.holders || [];
     const updatedHolders = normalized.encryption_metadata?.files?.upload?.holders || [];
-    const existingKeyIds = new Set(existingHolders.map((holder) => Number(holder.encryption_key_id)));
-    const updatedKeyIds = new Set(updatedHolders.map((holder) => Number(holder.encryption_key_id)));
-
-    for (const keyId of existingKeyIds) {
-      if (!updatedKeyIds.has(keyId)) {
-        return res.status(400).json({ error: 'Removing existing PKI holders is not supported by this route' });
-      }
-    }
-
-    const addedHolders = updatedHolders.filter((holder) => !existingKeyIds.has(Number(holder.encryption_key_id)));
-    if (addedHolders.length !== 1) {
-      return res.status(400).json({ error: 'This route currently supports adding exactly one backup holder at a time' });
-    }
-    const addedHolder = addedHolders[0];
-    if (Number(addedHolder.member_id) !== Number(req.member.id) || addedHolder.role !== 'backup') {
-      return res.status(400).json({ error: 'This route currently supports adding one same-member backup holder only' });
-    }
-
     const updated = await updatePkiDocumentAccess(doc.id, {
       encryptionMetadata: normalized.encryption_metadata,
-      encryptionKeyId: primaryKeyId
+      encryptionKeyId: primaryKeyId,
+      validate: async (lockedDoc) => {
+        const existingEntry = lockedDoc.encryption_metadata?.files?.upload || {};
+        const existingHolders = Array.isArray(existingEntry.holders) ? existingEntry.holders : [];
+        const normalizedExistingHolders = existingHolders.map((holder, index) => ({
+          ...holder,
+          role: holder.role || (index === 0 ? 'owner' : 'backup'),
+          wrapped_dek: holder.wrapped_dek || (index === 0 && existingEntry.wrapped_dek ? existingEntry.wrapped_dek : null)
+        }));
+        const existingByKeyId = new Map(normalizedExistingHolders.map((holder) => [Number(holder.encryption_key_id), holder]));
+        const updatedKeyIds = new Set(updatedHolders.map((holder) => Number(holder.encryption_key_id)));
+
+        for (const existingHolder of normalizedExistingHolders) {
+          const keyId = Number(existingHolder.encryption_key_id);
+          if (!updatedKeyIds.has(keyId)) {
+            throw new Error('Removing existing PKI holders is not supported by this route');
+          }
+          const updatedHolder = updatedHolders.find((holder) => Number(holder.encryption_key_id) === keyId);
+          if (!updatedHolder) {
+            throw new Error('Existing PKI holder metadata is missing from the updated envelope');
+          }
+          const existingWrappedDek = existingHolder.wrapped_dek || null;
+          const updatedWrappedDek = updatedHolder.wrapped_dek || null;
+          const wrappedDekChanged =
+            String(updatedWrappedDek?.kind || '') !== String(existingWrappedDek?.kind || '')
+            || String(updatedWrappedDek?.ephemeral_public_key_b64 || '') !== String(existingWrappedDek?.ephemeral_public_key_b64 || '')
+            || String(updatedWrappedDek?.hkdf_salt_b64 || '') !== String(existingWrappedDek?.hkdf_salt_b64 || '')
+            || String(updatedWrappedDek?.wrapped_dek_b64 || '') !== String(existingWrappedDek?.wrapped_dek_b64 || '');
+          const holderIntegrityChanged =
+            Number(updatedHolder.member_id) !== Number(existingHolder.member_id)
+            || String(updatedHolder.role || '') !== String(existingHolder.role || '')
+            || String(updatedHolder.key_fingerprint || '') !== String(existingHolder.key_fingerprint || '')
+            || wrappedDekChanged;
+          if (holderIntegrityChanged) {
+            throw new Error(`Existing PKI holder ${keyId} cannot be modified by the add-backup-key route`);
+          }
+        }
+
+        const addedHolders = updatedHolders.filter((holder) => !existingByKeyId.has(Number(holder.encryption_key_id)));
+        if (addedHolders.length !== 1) {
+          throw new Error('This route currently supports adding exactly one backup holder at a time');
+        }
+        const addedHolder = addedHolders[0];
+        if (Number(addedHolder.member_id) !== Number(req.member.id) || addedHolder.role !== 'backup') {
+          throw new Error('This route currently supports adding one same-member backup holder only');
+        }
+      }
     });
     if (!updated) return res.status(404).json({ error: 'Document not found' });
 
+    const holderCountBefore = doc.encryption_metadata?.files?.upload?.holders?.length || 0;
     await audit.log('document.pki_holder_added', 'document', doc.id, req.member.id, {
-      added_holder_member_id: Number(addedHolder.member_id),
-      added_holder_key_id: Number(addedHolder.encryption_key_id),
-      role: addedHolder.role,
-      holder_count_before: existingHolders.length,
+      added_holder_member_id: Number(updatedHolders[updatedHolders.length - 1].member_id),
+      added_holder_key_id: Number(updatedHolders[updatedHolders.length - 1].encryption_key_id),
+      role: updatedHolders[updatedHolders.length - 1].role,
+      holder_count_before: holderCountBefore,
       holder_count_after: updatedHolders.length,
       encryption_key_id: primaryKeyId
     });
     res.json({ ok: true, document: updated });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    const safeMessage = String(err?.message || 'Unable to update PKI holders');
+    const knownSafe = [
+      'Document not found',
+      'Access denied',
+      'Document is not PKI-encrypted',
+      'encryption_metadata is required',
+      'primary_encryption_key_id does not match the validated primary holder key',
+      'Removing existing PKI holders is not supported by this route',
+      'Existing PKI holder metadata is missing from the updated envelope',
+      'This route currently supports adding exactly one backup holder at a time',
+      'This route currently supports adding one same-member backup holder only'
+    ];
+    if (knownSafe.includes(safeMessage) || /PKI|holder|encryption key|fingerprint|primary/i.test(safeMessage)) {
+      return res.status(400).json({ error: safeMessage });
+    }
+    console.error('Unexpected PKI holder extension error:', err);
+    res.status(500).json({ error: 'Unable to update PKI holders' });
   }
 });
 
