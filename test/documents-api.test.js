@@ -663,6 +663,160 @@ describe('extend existing PKI document access', () => {
     });
     assert.equal(res.status, 400);
   });
+
+  it('allows parent to add a beneficiary holder from a different household member', async () => {
+    const { doc } = await createLegacySingleHolderPkiDoc();
+    const kidKey = await createPassphraseProtectedKey(kid.id, 'Kid Key', 'kid-passphrase');
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      primary_encryption_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: kid.id,
+                encryption_key_id: kidKey.id,
+                key_fingerprint: kidKey.key_fingerprint,
+                role: 'beneficiary',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'stu',
+                  hkdf_salt_b64: 'vwx',
+                  wrapped_dek_b64: 'yza'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.encryption_metadata.files.upload.holders.length, 2);
+    assert.equal(detail.encryption_metadata.files.upload.holders[1].role, 'beneficiary');
+    assert.equal(detail.encryption_metadata.files.upload.holders[1].member_id, kid.id);
+
+    const keyInfoRes = await authedGet(`api/documents/${doc.id}/key-info`, parentCookie);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.holders.length, 2);
+    assert.equal(keyInfo.holders[1].member_name, kid.name);
+  });
+
+  it('rejects beneficiary holder that belongs to the acting member', async () => {
+    const { doc } = await createLegacySingleHolderPkiDoc();
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      primary_encryption_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'beneficiary',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'jkl',
+                  hkdf_salt_b64: 'mno',
+                  wrapped_dek_b64: 'pqr'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+  });
+
+  it('rejects holder with invalid role through add route', async () => {
+    const { doc } = await createLegacySingleHolderPkiDoc();
+    const kidKey = await createPassphraseProtectedKey(kid.id, 'Kid Key 2', 'kid-pass-2');
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      primary_encryption_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: kid.id,
+                encryption_key_id: kidKey.id,
+                key_fingerprint: kidKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'stu',
+                  hkdf_salt_b64: 'vwx',
+                  wrapped_dek_b64: 'yza'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+  });
 });
 
 describe('kid access control', () => {
