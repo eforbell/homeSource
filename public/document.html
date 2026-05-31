@@ -500,6 +500,9 @@
     }
 
     async function deriveMemberKekForUnlock(material, passphrase, statusEl) {
+      if (material?.revoked_at) {
+        throw new Error('This key has been revoked. Contact the vault administrator.');
+      }
       if (material.credential_verified && material.verification_method === 'webauthn' && material.credential_id) {
         const prfResult = await getAssertionPrfResult(currentMember.id, material.credential_id, statusEl);
         statusEl.textContent = 'Deriving unlock key...';
@@ -507,8 +510,7 @@
       }
       if (material.protection_tier === 'passphrase' || material.verification_method === 'passphrase') {
         if (!passphrase) throw new Error('Passphrase required to unlock this key');
-        if (material?.revoked_at) throw new Error('This key has been revoked. Contact the vault administrator.');
-      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+        const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
         if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
           throw new Error('Unsupported passphrase-wrapped key format');
         }
