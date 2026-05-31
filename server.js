@@ -895,11 +895,17 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
 
         const addedHolders = updatedHolders.filter((holder) => !existingByKeyId.has(Number(holder.encryption_key_id)));
         if (addedHolders.length !== 1) {
-          throw new Error('This route currently supports adding exactly one backup holder at a time');
+          throw new Error('This route supports adding exactly one holder at a time');
         }
         const addedHolder = addedHolders[0];
-        if (Number(addedHolder.member_id) !== Number(req.member.id) || addedHolder.role !== 'backup') {
-          throw new Error('This route currently supports adding one same-member backup holder only');
+        if (!['backup', 'beneficiary'].includes(addedHolder.role)) {
+          throw new Error('Added holder must have role backup or beneficiary');
+        }
+        if (addedHolder.role === 'backup' && Number(addedHolder.member_id) !== Number(req.member.id)) {
+          throw new Error('Backup holders must belong to the acting member');
+        }
+        if (addedHolder.role === 'beneficiary' && Number(addedHolder.member_id) === Number(req.member.id)) {
+          throw new Error('Beneficiary holders must belong to a different household member');
         }
       }
     });
@@ -925,10 +931,31 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
       'primary_encryption_key_id does not match the validated primary holder key',
       'Removing existing PKI holders is not supported by this route',
       'Existing PKI holder metadata is missing from the updated envelope',
-      'This route currently supports adding exactly one backup holder at a time',
-      'This route currently supports adding one same-member backup holder only'
+      'This route supports adding exactly one holder at a time',
+      'Added holder must have role backup or beneficiary',
+      'Backup holders must belong to the acting member',
+      'Beneficiary holders must belong to a different household member',
+      'PKI uploads require at least one holder per file',
+      'PKI holder must specify encryption_key_id',
+      'PKI upload contains duplicate holder encryption_key_id values',
+      'PKI holder must specify member_id',
+      'PKI holder must specify key_fingerprint',
+      'Multi-holder PKI uploads require holder-local wrapped_dek metadata for every holder',
+      'PKI backup holders must belong to the uploading member',
+      'PKI beneficiary holders must belong to a different member',
+      'The primary PKI holder must belong to the uploading member',
+      'PKI uploads must use the same primary encryption key for every file entry',
+      'PKI uploads require a primary holder',
+      'Only parent members may assign cross-member PKI holders',
+      'PKI envelope requires a non-empty holders array for each file'
     ];
-    if (knownSafe.includes(safeMessage) || /PKI|holder|encryption key|fingerprint|primary/i.test(safeMessage)) {
+    const knownSafePrefixes = [
+      'PKI holder role ',
+      'Encryption key ',
+      'Key fingerprint mismatch for encryption key ',
+      'Existing PKI holder '
+    ];
+    if (knownSafe.includes(safeMessage) || knownSafePrefixes.some((prefix) => safeMessage.startsWith(prefix))) {
       return res.status(400).json({ error: safeMessage });
     }
     console.error('Unexpected PKI holder extension error:', err);
