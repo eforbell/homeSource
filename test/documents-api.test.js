@@ -489,6 +489,182 @@ describe('encrypt existing document in place', () => {
   });
 });
 
+
+describe('extend existing PKI document access', () => {
+  const pki = require('../lib/pki');
+  let primaryKey;
+  let backupKey;
+
+  async function createPassphraseProtectedKey(memberId, label, passphrase) {
+    const keypair = await PKICrypto.generateMemberKeypair();
+    const { kek, salt } = await PKICrypto.deriveKekFromPassphrase(passphrase);
+    const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
+    return pki.registerMemberKey({
+      memberId,
+      publicKey: PKICrypto.toBase64(keypair.publicKeyRaw),
+      encryptedPrivateKey: JSON.stringify({
+        kind: 'passphrase_pbkdf2_v1',
+        kdf: 'pbkdf2-sha256',
+        iterations: 600000,
+        salt_b64: PKICrypto.toBase64(salt),
+        wrapped_private_key_b64: PKICrypto.toBase64(wrappedPrivateKey)
+      }),
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label,
+      verificationMethod: 'passphrase',
+    });
+  }
+
+  beforeEach(async () => {
+    primaryKey = await createPassphraseProtectedKey(parent.id, 'Existing Primary Key', 'existing-primary-passphrase');
+    backupKey = await createPassphraseProtectedKey(parent.id, 'New Backup Key', 'new-backup-passphrase');
+  });
+
+  async function createLegacySingleHolderPkiDoc() {
+    const doc = await createTestDocument(parent.id, {
+      title: 'Existing PKI Doc',
+      document_type: 'other',
+      is_encrypted: true,
+      encryption_mode: 'pki',
+      encryption_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            wrapped_dek: {
+              kind: 'pki_x25519',
+              ephemeral_public_key_b64: 'abc',
+              hkdf_salt_b64: 'def',
+              wrapped_dek_b64: 'ghi'
+            },
+            holders: [{
+              member_id: parent.id,
+              encryption_key_id: primaryKey.id,
+              key_fingerprint: primaryKey.key_fingerprint,
+              role: 'owner'
+            }],
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            }
+          }
+        }
+      }
+    }, [parent.id]);
+    const stored = await storeFile(Buffer.from('existing-pki-ciphertext'), 'existing.enc', 'application/octet-stream');
+    const record = await saveFileRecord(doc.id, stored);
+    return { doc, record };
+  }
+
+  it('adds a same-member backup key to an existing PKI document without changing ciphertext bytes', async () => {
+    const { doc, record } = await createLegacySingleHolderPkiDoc();
+    const beforeBytes = fs.readFileSync(getFilePath(record.stored_filename));
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      primary_encryption_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'jkl',
+                  hkdf_salt_b64: 'mno',
+                  wrapped_dek_b64: 'pqr'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.document.encryption_key_id, primaryKey.id);
+
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.encryption_mode, 'pki');
+    assert.equal(detail.encryption_key_id, primaryKey.id);
+    assert.equal(detail.encryption_metadata.files.upload.holders.length, 2);
+    assert.equal(detail.encryption_metadata.files.upload.holders[0].wrapped_dek.kind, 'pki_x25519');
+    assert.equal(detail.encryption_metadata.files.upload.holders[1].role, 'backup');
+
+    const keyInfoRes = await authedGet(`api/documents/${doc.id}/key-info`, parentCookie);
+    const keyInfo = await keyInfoRes.json();
+    assert.equal(keyInfo.holders.length, 2);
+    assert.equal(keyInfo.holders[1].label, 'New Backup Key');
+
+    const afterBytes = fs.readFileSync(getFilePath(record.stored_filename));
+    assert.deepEqual(afterBytes, beforeBytes);
+  });
+
+  it('rejects holder-extension route for non-PKI docs', async () => {
+    const doc = await createTestDocument(parent.id, {
+      title: 'Plaintext Doc',
+      document_type: 'other'
+    });
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      primary_encryption_key_id: 123,
+      encryption_metadata: { version: 1, mode: 'pki', files: { upload: { holders: [] } } }
+    });
+    assert.equal(res.status, 409);
+  });
+
+  it('rejects attempts to remove existing holders through add route', async () => {
+    const { doc } = await createLegacySingleHolderPkiDoc();
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      primary_encryption_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            holders: []
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
 describe('kid access control', () => {
   let parentDoc, kidDoc;
 

@@ -157,7 +157,7 @@
     );
   }
 
-  async function unwrapDekAsOwner(wrappedDekBytes, ephemeralPublicKeyRaw, salt, ownerPrivateKey) {
+  async function unwrapDekAsOwner(wrappedDekBytes, ephemeralPublicKeyRaw, salt, ownerPrivateKey, extractable) {
     const ephemeralPublicKey = await crypto.subtle.importKey(
       'raw', ephemeralPublicKeyRaw, { name: 'X25519' }, false, []
     );
@@ -179,7 +179,7 @@
 
     return crypto.subtle.unwrapKey(
       'raw', wrappedDekBytes, wrappingKey, 'AES-KW',
-      { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+      { name: 'AES-GCM', length: 256 }, extractable === true, ['encrypt', 'decrypt']
     );
   }
 
