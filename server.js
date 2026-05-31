@@ -934,9 +934,28 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
       'This route supports adding exactly one holder at a time',
       'Added holder must have role backup or beneficiary',
       'Backup holders must belong to the acting member',
-      'Beneficiary holders must belong to a different household member'
+      'Beneficiary holders must belong to a different household member',
+      'PKI uploads require at least one holder per file',
+      'PKI holder must specify encryption_key_id',
+      'PKI upload contains duplicate holder encryption_key_id values',
+      'PKI holder must specify member_id',
+      'PKI holder must specify key_fingerprint',
+      'Multi-holder PKI uploads require holder-local wrapped_dek metadata for every holder',
+      'PKI backup holders must belong to the uploading member',
+      'PKI beneficiary holders must belong to a different member',
+      'The primary PKI holder must belong to the uploading member',
+      'PKI uploads must use the same primary encryption key for every file entry',
+      'PKI uploads require a primary holder',
+      'Only parent members may assign cross-member PKI holders',
+      'PKI envelope requires a non-empty holders array for each file'
     ];
-    if (knownSafe.includes(safeMessage) || /PKI|holder|encryption key|fingerprint|primary/i.test(safeMessage)) {
+    const knownSafePrefixes = [
+      'PKI holder role ',
+      'Encryption key ',
+      'Key fingerprint mismatch for encryption key ',
+      'Existing PKI holder '
+    ];
+    if (knownSafe.includes(safeMessage) || knownSafePrefixes.some((prefix) => safeMessage.startsWith(prefix))) {
       return res.status(400).json({ error: safeMessage });
     }
     console.error('Unexpected PKI holder extension error:', err);
