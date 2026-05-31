@@ -628,7 +628,8 @@
         PKICrypto.fromBase64(holderWrappedDek.wrapped_dek_b64),
         PKICrypto.fromBase64(holderWrappedDek.ephemeral_public_key_b64),
         PKICrypto.fromBase64(holderWrappedDek.hkdf_salt_b64),
-        privateKey
+        privateKey,
+        true
       );
       if (!newBackupKey.public_key) throw new Error(`Backup key ${newBackupKey.id} is missing its public key`);
       statusEl.textContent = 'Wrapping document key to backup key...';
