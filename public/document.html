@@ -373,10 +373,12 @@
 
   <script src="api.js"></script>
   <script src="pki-crypto.js"></script>
+  <script src="crypto-helpers.js"></script>
   <script src="nav.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js" integrity="sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi" crossorigin="anonymous"></script>
   <script>
     'use strict';
+
+    const { PBKDF2_ITERATIONS, ARGON2ID_PARAMS, toBase64, fromBase64: b64ToBytes, fromUtf8, bytesToUtf8, derivePbkdf2Key, deriveArgon2idKey, loadArgon2, argon2Available } = window.CryptoHelpers;
 
     const docId = new URLSearchParams(location.search).get('id');
     if (!docId) location.href = 'documents.html';
@@ -387,71 +389,14 @@
     let availableMembers = [];
     let memberKeyCache = new Map();
     let unlockedFiles = new Map();
-    const PBKDF2_ITERATIONS = 600000;
-    const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
     function isEncryptedDoc(doc) {
       return !!(doc && (doc.is_encrypted || (doc.encryption_mode && doc.encryption_mode !== 'plaintext')));
     }
 
-    function b64ToBytes(b64) {
-      const bin = atob(b64);
-      const out = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-      return out;
-    }
-
-    function bytesToUtf8(bytes) {
-      return new TextDecoder().decode(bytes);
-    }
-
-    function fromUtf8(text) {
-      return new TextEncoder().encode(String(text || ''));
-    }
-
-    function toBase64(bytes) {
-      let bin = '';
-      for (const byte of bytes) bin += String.fromCharCode(byte);
-      return btoa(bin);
-    }
-
     function safeFileName(name) {
       const cleaned = String(name || 'decrypted-file').replace(/[\\/:*?"<>|]/g, '_').trim();
       return cleaned || 'decrypted-file';
-    }
-
-    async function derivePbkdf2Key(passphrase, salt, params = {}, usages = ['decrypt']) {
-      const iterations = Number(params.iterations || PBKDF2_ITERATIONS);
-      const hash = String(params.hash || 'SHA-256');
-      const passKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-      return crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations, hash },
-        passKey,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        usages
-      );
-    }
-
-    async function deriveArgon2idKey(passphrase, salt, params = {}, usages = ['decrypt']) {
-      if (!window.argon2 || typeof window.argon2.hash !== 'function') {
-        throw new Error('Argon2id unavailable in this browser/session');
-      }
-      const memory_kib = Number(params.memory_kib || ARGON2ID_PARAMS.memory_kib);
-      const iterations = Number(params.iterations || ARGON2ID_PARAMS.iterations);
-      const parallelism = Number(params.parallelism || ARGON2ID_PARAMS.parallelism);
-      const hash_len = Number(params.hash_len || ARGON2ID_PARAMS.hash_len);
-      const result = await window.argon2.hash({
-        pass: passphrase,
-        salt,
-        time: iterations,
-        mem: memory_kib,
-        parallelism,
-        hashLen: hash_len,
-        type: window.argon2.ArgonType.Argon2id
-      });
-      const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
-      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, usages);
     }
 
     function preferredPkiKey(keys) {

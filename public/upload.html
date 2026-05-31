@@ -279,10 +279,12 @@
 
   <script src="api.js"></script>
   <script src="pki-crypto.js"></script>
+  <script src="crypto-helpers.js"></script>
   <script src="nav.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js" integrity="sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi" crossorigin="anonymous"></script>
   <script>
     'use strict';
+
+    const { PBKDF2_ITERATIONS, ARGON2ID_PARAMS, toBase64, fromUtf8, derivePbkdf2Key, deriveArgon2idKey, loadArgon2, argon2Available } = window.CryptoHelpers;
 
     let selectedFile = null;
     let activeTab = 'scan';
@@ -292,8 +294,6 @@
     let memberKeys = [];
     let availableMembers = [];
     let memberKeyCache = new Map();
-    const PBKDF2_ITERATIONS = 600000;
-    const ARGON2ID_PARAMS = { memory_kib: 65536, iterations: 3, parallelism: 1, hash_len: 32 };
 
     async function loadMagicIndexConfig() {
       try {
@@ -385,13 +385,6 @@
     (function configureKdfOptions() {
       const select = document.getElementById('encrypt-kdf-scheme');
       const hint = document.getElementById('encrypt-kdf-hint');
-      const argon2Available = !!(window.argon2 && typeof window.argon2.hash === 'function');
-      if (!argon2Available) {
-        const argon2Option = select.querySelector('option[value="argon2id"]');
-        if (argon2Option) argon2Option.disabled = true;
-        select.value = 'pbkdf2';
-        hint.textContent = 'Argon2id is unavailable in this browser/session; PBKDF2 will be used.';
-      }
       select.addEventListener('change', () => {
         if (select.value === 'argon2id') {
           hint.textContent = 'Argon2id selected: stronger brute-force resistance, higher CPU/memory cost.';
@@ -473,54 +466,6 @@
       }
     }
 
-    function toBase64(bytes) {
-      const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-      let binary = '';
-      const chunk = 0x8000;
-      for (let i = 0; i < arr.length; i += chunk) {
-        binary += String.fromCharCode(...arr.subarray(i, i + chunk));
-      }
-      return btoa(binary);
-    }
-
-    function fromUtf8(text) {
-      return new TextEncoder().encode(text);
-    }
-
-    async function derivePbkdf2Key(passphrase, saltBytes) {
-      const passKey = await crypto.subtle.importKey(
-        'raw',
-        fromUtf8(passphrase),
-        'PBKDF2',
-        false,
-        ['deriveKey']
-      );
-      return crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
-        passKey,
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt', 'decrypt']
-      );
-    }
-
-    async function deriveArgon2idKey(passphrase, saltBytes) {
-      if (!window.argon2 || typeof window.argon2.hash !== 'function') {
-        throw new Error('Argon2id is unavailable in this browser');
-      }
-      const result = await window.argon2.hash({
-        pass: passphrase,
-        salt: saltBytes,
-        time: ARGON2ID_PARAMS.iterations,
-        mem: ARGON2ID_PARAMS.memory_kib,
-        parallelism: ARGON2ID_PARAMS.parallelism,
-        hashLen: ARGON2ID_PARAMS.hash_len,
-        type: window.argon2.ArgonType.Argon2id
-      });
-      const raw = result.hash instanceof Uint8Array ? result.hash : new Uint8Array(result.hash);
-      return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
-    }
-
     async function encryptSelectedFileWithPassphrase(file, passphrase) {
       const plaintext = new Uint8Array(await file.arrayBuffer());
 
@@ -540,8 +485,8 @@
       const wrapIv = crypto.getRandomValues(new Uint8Array(12));
       const kdfScheme = document.getElementById('encrypt-kdf-scheme').value === 'argon2id' ? 'argon2id' : 'pbkdf2';
       const wrapKey = kdfScheme === 'argon2id'
-        ? await deriveArgon2idKey(passphrase, salt)
-        : await derivePbkdf2Key(passphrase, salt);
+        ? await deriveArgon2idKey(passphrase, salt, ARGON2ID_PARAMS, ['encrypt', 'decrypt'])
+        : await derivePbkdf2Key(passphrase, salt, { iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' }, ['encrypt', 'decrypt']);
       const rawContentKey = new Uint8Array(await crypto.subtle.exportKey('raw', contentKey));
       const wrappedDek = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: wrapIv, tagLength: 128 },
