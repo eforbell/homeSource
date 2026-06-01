@@ -1521,6 +1521,7 @@
         if (encryptedDoc) {
           await renderEncryptedLockedState(doc);
         }
+        maybeStartMagicIndexPolling(doc);
 
       } catch (err) {
         document.getElementById('doc-title').textContent = 'Document not found';
