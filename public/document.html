@@ -150,11 +150,18 @@
     <div class="modal" style="max-width:640px; max-height:85vh; display:flex; flex-direction:column;">
       <div class="modal-title">MagicIndex Analysis</div>
       <div id="magicindex-modal-body" style="overflow-y:auto; flex:1; padding:0.5rem 0;"></div>
-      <div class="modal-actions">
+      <div class="modal-actions" id="magicindex-modal-actions">
         <button class="btn" onclick="document.getElementById('magicindex-modal').classList.add('hidden')">Close</button>
         <button class="btn" onclick="document.getElementById('magicindex-modal').classList.add('hidden'); openReanalyzeModal()">Re-analyze</button>
-        <button class="btn btn-danger" onclick="document.getElementById('magicindex-modal').classList.add('hidden'); deleteMagicIndex()">Delete analysis</button>
+        <button class="btn btn-danger" onclick="showMagicIndexDeleteConfirm()">Delete analysis</button>
         <button class="btn btn-primary" id="magicindex-modal-apply-btn" style="display:none;">Apply suggestions</button>
+      </div>
+      <div class="modal-actions hidden" id="magicindex-modal-confirm" style="flex-direction:column; align-items:stretch; gap:0.5rem;">
+        <p style="margin:0; text-align:center; font-size:0.9rem;">Delete all MagicIndex analysis data? This cannot be undone.</p>
+        <div style="display:flex; justify-content:center; gap:0.5rem;">
+          <button class="btn" onclick="hideMagicIndexDeleteConfirm()">Cancel</button>
+          <button class="btn btn-danger" onclick="deleteMagicIndex()">Confirm delete</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1571,10 +1578,19 @@
       return 'Relates to';
     }
 
+    function showMagicIndexDeleteConfirm() {
+      document.getElementById('magicindex-modal-actions').classList.add('hidden');
+      document.getElementById('magicindex-modal-confirm').classList.remove('hidden');
+    }
+    function hideMagicIndexDeleteConfirm() {
+      document.getElementById('magicindex-modal-confirm').classList.add('hidden');
+      document.getElementById('magicindex-modal-actions').classList.remove('hidden');
+    }
     async function deleteMagicIndex() {
-      if (!confirm('Delete all MagicIndex analysis data for this document? This cannot be undone.')) return;
       try {
         await API.delete(`api/documents/${docId}/magicindex`);
+        document.getElementById('magicindex-modal').classList.add('hidden');
+        hideMagicIndexDeleteConfirm();
         toast('MagicIndex data deleted', 'success');
         await loadDocument();
       } catch (err) {
@@ -1637,7 +1653,7 @@
           html += `<span class="text-dim">owners</span><span>${suggestions.suggested_owners.map(o => esc(typeof o === 'string' ? o : o.name || '')).join(', ')}</span>`;
         }
         if (suggestions.key_facts?.length) {
-          html += `<span class="text-dim">key facts</span><ul style="margin:0; padding-left:1.25rem;">${suggestions.key_facts.map(f => `<li>${esc(String(f))}</li>`).join('')}</ul>`;
+          html += `<span class="text-dim">key facts</span><ul style="margin:0; padding-left:1.25rem;">${suggestions.key_facts.map(f => `<li>${esc(typeof f === 'string' ? f : f.text || f.fact || JSON.stringify(f))}</li>`).join('')}</ul>`;
         }
         html += `</div></div>`;
       }
@@ -1657,6 +1673,7 @@
       } else {
         applyBtn.style.display = 'none';
       }
+      hideMagicIndexDeleteConfirm();
       document.getElementById('magicindex-modal').classList.remove('hidden');
     }
 
