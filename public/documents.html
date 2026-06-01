@@ -381,8 +381,8 @@
         } catch (err) { toast(`Failed to delete "${doc.title}": ${err.message}`, 'error'); }
       }
       if (deleted) toast(`${deleted} document${deleted > 1 ? 's' : ''} deleted`, 'success');
-      updateBulkBar();
-      loadDocuments();
+      document.getElementById('bulk-bar').style.display = 'none';
+      await loadDocuments();
     });
 
     loadFilters();
