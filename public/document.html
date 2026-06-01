@@ -1588,7 +1588,7 @@
     }
     async function deleteMagicIndex() {
       try {
-        await API.delete(`api/documents/${docId}/magicindex`);
+        await API.del(`api/documents/${docId}/magicindex`);
         document.getElementById('magicindex-modal').classList.add('hidden');
         hideMagicIndexDeleteConfirm();
         toast('MagicIndex data deleted', 'success');
