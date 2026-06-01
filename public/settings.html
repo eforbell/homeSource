@@ -19,8 +19,14 @@
       <h1>Settings</h1>
     </div>
 
-    <!-- Theme -->
+    <!-- Account -->
     <div class="card">
+      <div class="card-header"><span class="card-title">Account</span></div>
+      <button id="logout-btn" class="btn btn-danger">Sign Out</button>
+    </div>
+
+    <!-- Theme -->
+    <div class="card mt-2">
       <div class="card-header"><span class="card-title">Appearance</span></div>
       <div class="form-group">
         <label class="form-label">Theme</label>
@@ -52,18 +58,6 @@
       <div id="keys-list"></div>
     </div>
 
-    <!-- Tags management -->
-    <div class="card mt-2">
-      <div class="card-header">
-        <span class="card-title">Tags</span>
-        <div class="flex gap-1">
-          <button id="merge-tags-btn" class="btn btn-sm">Merge</button>
-          <button id="add-tag-btn" class="btn btn-sm">+ Add Tag</button>
-        </div>
-      </div>
-      <div id="tags-list"></div>
-    </div>
-
     <!-- Audit log -->
     <div class="card mt-2">
       <div class="card-header"><span class="card-title">Recent Activity</span></div>
@@ -75,11 +69,6 @@
       </div>
     </div>
 
-    <!-- Account -->
-    <div class="card mt-2">
-      <div class="card-header"><span class="card-title">Account</span></div>
-      <button id="logout-btn" class="btn btn-danger">Sign Out</button>
-    </div>
   </div>
 
   <!-- Add member modal -->
@@ -137,45 +126,6 @@
       <div class="modal-actions">
         <button class="btn" data-close-modal="passphrase-modal">Cancel</button>
         <button class="btn btn-primary" id="save-passphrase-btn">Save</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Add/edit tag modal -->
-  <div class="modal-backdrop hidden" id="tag-modal">
-    <div class="modal">
-      <div class="modal-title" id="tag-modal-title">Add Tag</div>
-      <div class="form-group">
-        <label class="form-label">Name</label>
-        <input type="text" id="tag-name" class="form-input">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Color</label>
-        <input type="color" id="tag-color" value="#d97706" class="form-input" style="height:40px; padding:4px;">
-      </div>
-      <div class="modal-actions">
-        <button class="btn" data-close-modal="tag-modal">Cancel</button>
-        <button class="btn btn-primary" id="save-tag-btn">Save</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Merge tags modal -->
-  <div class="modal-backdrop hidden" id="merge-modal">
-    <div class="modal">
-      <div class="modal-title">Merge Tags</div>
-      <p class="text-dim text-sm mb-1">All documents tagged with the source tag will be reassigned to the target. The source tag will be deleted.</p>
-      <div class="form-group">
-        <label class="form-label">Source (will be removed)</label>
-        <select id="merge-source" class="form-select"></select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Target (will keep)</label>
-        <select id="merge-target" class="form-select"></select>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" data-close-modal="merge-modal">Cancel</button>
-        <button class="btn btn-primary" id="merge-btn">Merge</button>
       </div>
     </div>
   </div>

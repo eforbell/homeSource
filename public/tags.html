@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Tags</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="sovereign-fonts.css">
+  <link rel="stylesheet" href="sovereign-chassis.css">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="source-skin.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="tags">
+  <div class="page-content">
+    <div class="page-header">
+      <h1>Tags</h1>
+      <div class="flex gap-1">
+        <button id="merge-tags-btn" class="btn btn-sm">Merge</button>
+        <button id="add-tag-btn" class="btn btn-sm btn-primary">+ Add Tag</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="tags-list"></div>
+    </div>
+  </div>
+
+  <!-- Add/edit tag modal -->
+  <div class="modal-backdrop hidden" id="tag-modal">
+    <div class="modal">
+      <div class="modal-title" id="tag-modal-title">Add Tag</div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="tag-name" class="form-input">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Color</label>
+        <input type="color" id="tag-color" value="#d97706" class="form-input" style="height:40px; padding:4px;">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('tag-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="save-tag-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Merge tags modal -->
+  <div class="modal-backdrop hidden" id="merge-modal">
+    <div class="modal">
+      <div class="modal-title">Merge Tags</div>
+      <p class="text-dim text-sm mb-1">All documents tagged with the source tag will be reassigned to the target. The source tag will be deleted.</p>
+      <div class="form-group">
+        <label class="form-label">Source (will be removed)</label>
+        <select id="merge-source" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Target (will keep)</label>
+        <select id="merge-target" class="form-select"></select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('merge-modal').classList.add('hidden')">Cancel</button>
+        <button class="btn btn-primary" id="merge-btn">Merge</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm modal -->
+  <div class="modal-backdrop hidden" id="confirm-modal">
+    <div class="modal">
+      <div class="modal-title" id="confirm-title">Confirm</div>
+      <p id="confirm-message" class="text-dim" style="margin-bottom:1rem;"></p>
+      <div class="modal-actions">
+        <button class="btn" id="confirm-cancel-btn">Cancel</button>
+        <button class="btn btn-danger" id="confirm-ok-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script src="api.js"></script>
+  <script src="nav.js"></script>
+  <script>
+    'use strict';
+
+    const state = { allTags: [], editingTagId: null, me: null };
+
+    function esc(value) {
+      const div = document.createElement('div');
+      div.textContent = value ?? '';
+      return div.innerHTML;
+    }
+
+    function toast(message, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = message;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
+
+    function showConfirm(title, message) {
+      return new Promise(resolve => {
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-message').textContent = message;
+        const modal = document.getElementById('confirm-modal');
+        const okBtn = document.getElementById('confirm-ok-btn');
+        const cancelBtn = document.getElementById('confirm-cancel-btn');
+        modal.classList.remove('hidden');
+        function cleanup(result) {
+          modal.classList.add('hidden');
+          okBtn.removeEventListener('click', onOk);
+          cancelBtn.removeEventListener('click', onCancel);
+          resolve(result);
+        }
+        function onOk() { cleanup(true); }
+        function onCancel() { cleanup(false); }
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+      });
+    }
+
+    async function loadTags() {
+      state.allTags = await API.get('api/tags');
+      const tagsList = document.getElementById('tags-list');
+      tagsList.innerHTML = state.allTags.length
+        ? state.allTags.map(tag => `
+            <div class="flex-between mb-1" style="padding:0.4rem 0;">
+              <span class="tag" style="background:${tag.color}22;color:${tag.color};cursor:pointer;" data-edit-tag="${tag.id}">${esc(tag.name)}</span>
+              <div class="flex gap-1">
+                <span class="text-xs text-muted">${tag.document_count} docs</span>
+                <button class="btn btn-sm" data-edit-tag="${tag.id}" title="Edit">&#9998;</button>
+                <button class="btn btn-sm btn-danger" data-delete-tag="${tag.id}" title="Delete">&times;</button>
+              </div>
+            </div>
+          `).join('')
+        : '<span class="text-dim text-sm">No tags yet</span>';
+
+      document.querySelectorAll('[data-edit-tag]').forEach(btn => {
+        btn.addEventListener('click', () => editTag(Number(btn.getAttribute('data-edit-tag'))));
+      });
+      document.querySelectorAll('[data-delete-tag]').forEach(btn => {
+        btn.addEventListener('click', () => deleteTag(Number(btn.getAttribute('data-delete-tag'))));
+      });
+    }
+
+    function editTag(id) {
+      const tag = state.allTags.find(t => t.id === id);
+      if (!tag) return;
+      state.editingTagId = id;
+      document.getElementById('tag-modal-title').textContent = 'Edit Tag';
+      document.getElementById('tag-name').value = tag.name;
+      document.getElementById('tag-color').value = tag.color;
+      document.getElementById('tag-modal').classList.remove('hidden');
+    }
+
+    async function deleteTag(id) {
+      const tag = state.allTags.find(t => t.id === id);
+      if (!await showConfirm('Delete Tag', `Delete "${tag ? tag.name : id}"? This will unlink it from ${tag ? tag.document_count : '?'} documents.`)) return;
+      await API.del(`api/tags/${id}`);
+      toast('Tag deleted', 'success');
+      await loadTags();
+    }
+
+    document.getElementById('add-tag-btn').addEventListener('click', () => {
+      state.editingTagId = null;
+      document.getElementById('tag-modal-title').textContent = 'Add Tag';
+      document.getElementById('tag-name').value = '';
+      document.getElementById('tag-color').value = '#d97706';
+      document.getElementById('tag-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('save-tag-btn').addEventListener('click', async () => {
+      const name = document.getElementById('tag-name').value.trim();
+      const color = document.getElementById('tag-color').value;
+      if (!name) return toast('Name required', 'error');
+      try {
+        if (state.editingTagId) {
+          await API.put(`api/tags/${state.editingTagId}`, { name, color });
+          toast('Tag updated', 'success');
+        } else {
+          await API.post('api/tags', { name, color });
+          toast('Tag created', 'success');
+        }
+        document.getElementById('tag-modal').classList.add('hidden');
+        await loadTags();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    document.getElementById('merge-tags-btn').addEventListener('click', () => {
+      const sourceSelect = document.getElementById('merge-source');
+      const targetSelect = document.getElementById('merge-target');
+      const options = state.allTags.map(t => `<option value="${t.id}">${esc(t.name)} (${t.document_count} docs)</option>`).join('');
+      sourceSelect.innerHTML = options;
+      targetSelect.innerHTML = options;
+      if (state.allTags.length > 1) targetSelect.selectedIndex = 1;
+      document.getElementById('merge-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('merge-btn').addEventListener('click', async () => {
+      const sourceId = Number(document.getElementById('merge-source').value);
+      const targetId = Number(document.getElementById('merge-target').value);
+      if (sourceId === targetId) return toast('Source and target must be different', 'error');
+      const source = state.allTags.find(t => t.id === sourceId);
+      const target = state.allTags.find(t => t.id === targetId);
+      if (!await showConfirm('Merge Tags', `Merge "${source?.name}" into "${target?.name}"? All documents will be reassigned and "${source?.name}" will be deleted.`)) return;
+      try {
+        await API.post(`api/tags/${targetId}/merge`, { source_id: sourceId });
+        document.getElementById('merge-modal').classList.add('hidden');
+        toast(`Merged into "${target?.name}"`, 'success');
+        await loadTags();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    (async function init() {
+      try {
+        state.me = await API.get('api/auth/me');
+      } catch {
+        location.href = './login';
+        return;
+      }
+      if (state.me.role !== 'parent') {
+        document.getElementById('tags-list').innerHTML = '<span class="text-dim text-sm">Tag management is available to parent accounts.</span>';
+        document.getElementById('merge-tags-btn').style.display = 'none';
+        document.getElementById('add-tag-btn').style.display = 'none';
+        return;
+      }
+      await loadTags();
+    })();
+  </script>
+</body>
+</html>

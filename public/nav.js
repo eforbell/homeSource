@@ -21,6 +21,7 @@
     spark: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8L10 2z"/></svg>',
     search: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M14 14l4 4"/></svg>',
     shield: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L3 6v4c0 4.4 3 8.5 7 10 4-1.5 7-5.6 7-10V6l-7-4z"/></svg>',
+    tag: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4a2 2 0 012-2h4.6a2 2 0 011.4.6l7.4 7.4a2 2 0 010 2.8l-4.6 4.6a2 2 0 01-2.8 0L2.6 10A2 2 0 012 8.6V4z"/><circle cx="6.5" cy="6.5" r="1"/></svg>',
     gear: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="3"/><path d="M10 1.5v2M10 16.5v2M3.5 3.5l1.4 1.4M15.1 15.1l1.4 1.4M1.5 10h2M16.5 10h2M3.5 16.5l1.4-1.4M15.1 4.9l1.4-1.4"/></svg>'
   };
 
@@ -32,6 +33,7 @@
     { id: 'search',     label: 'Search',     icon: 'search', href: 'search.html' },
     { id: 'import',     label: 'Import',     icon: 'upload', href: 'import.html' },
     { id: 'backup',     label: 'Backup',     icon: 'shield', href: 'backup.html' },
+    { id: 'tags',       label: 'Tags',       icon: 'tag',    href: 'tags.html' },
     { id: 'settings',   label: 'Settings',   icon: 'gear',   href: 'settings.html' }
   ];
 
@@ -92,7 +94,7 @@
           <span style="font-size:2rem">📁</span>
           <div>
             <div class="more-sheet-brand-title">Home Source</div>
-            <div class="more-sheet-brand-copy">Insights, import, backup, settings</div>
+            <div class="more-sheet-brand-copy">Insights, import, backup, tags, settings</div>
           </div>
         </div>
         ${moreItems.map(item => {

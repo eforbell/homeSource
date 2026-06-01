@@ -4,8 +4,6 @@
   const state = {
     me: null,
     members: [],
-    allTags: [],
-    editingTagId: null,
     keysByMember: new Map(),
     registration: null,
     passphraseMember: null,
@@ -14,7 +12,6 @@
   const themeSelect = document.getElementById('theme-select');
   const membersList = document.getElementById('members-list');
   const keysList = document.getElementById('keys-list');
-  const tagsList = document.getElementById('tags-list');
   const auditTbody = document.getElementById('audit-tbody');
 
   themeSelect.value = window.SourceTheme?.getPreference() || 'system';
@@ -76,71 +73,10 @@
     }
   });
 
-  document.getElementById('add-tag-btn').addEventListener('click', () => {
-    state.editingTagId = null;
-    document.getElementById('tag-modal-title').textContent = 'Add Tag';
-    document.getElementById('tag-name').value = '';
-    document.getElementById('tag-color').value = '#d97706';
-    document.getElementById('tag-modal').classList.remove('hidden');
-  });
-
-  document.getElementById('save-tag-btn').addEventListener('click', async () => {
-    const name = document.getElementById('tag-name').value.trim();
-    const color = document.getElementById('tag-color').value;
-    if (!name) return toast('Name required', 'error');
-    try {
-      if (state.editingTagId) {
-        await API.put(`api/tags/${state.editingTagId}`, { name, color });
-        toast('Tag updated', 'success');
-      } else {
-        await API.post('api/tags', { name, color });
-        toast('Tag created', 'success');
-      }
-      closeModal('tag-modal');
-      await loadTags();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-
-  document.getElementById('merge-tags-btn').addEventListener('click', () => {
-    const sourceSelect = document.getElementById('merge-source');
-    const targetSelect = document.getElementById('merge-target');
-    const options = state.allTags
-      .map((t) => `<option value="${t.id}">${esc(t.name)} (${t.document_count} docs)</option>`)
-      .join('');
-    sourceSelect.innerHTML = options;
-    targetSelect.innerHTML = options;
-    if (state.allTags.length > 1) targetSelect.selectedIndex = 1;
-    document.getElementById('merge-modal').classList.remove('hidden');
-  });
-
-  document.getElementById('merge-btn').addEventListener('click', async () => {
-    const sourceId = Number(document.getElementById('merge-source').value);
-    const targetId = Number(document.getElementById('merge-target').value);
-    if (sourceId === targetId) return toast('Source and target must be different', 'error');
-    const source = state.allTags.find((tag) => tag.id === sourceId);
-    const target = state.allTags.find((tag) => tag.id === targetId);
-    if (!await showConfirm('Merge Tags', `Merge "${source?.name}" into "${target?.name}"? All documents will be reassigned and "${source?.name}" will be deleted.`)) {
-      return;
-    }
-    try {
-      await API.post(`api/tags/${targetId}/merge`, { source_id: sourceId });
-      closeModal('merge-modal');
-      toast(`Merged into "${target?.name}"`, 'success');
-      await loadTags();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-
   document.getElementById('logout-btn').addEventListener('click', async () => {
     await API.post('api/auth/logout', {});
     location.href = './login';
   });
-
-  window.editTag = editTag;
-  window.deleteTag = deleteTag;
 
   async function init() {
     try {
@@ -152,17 +88,13 @@
 
     document.body.dataset.navRole = state.me.role || 'parent';
     document.getElementById('add-member-btn').style.display = state.me.role === 'parent' ? '' : 'none';
-    document.getElementById('merge-tags-btn').style.display = state.me.role === 'parent' ? '' : 'none';
-    document.getElementById('add-tag-btn').style.display = state.me.role === 'parent' ? '' : 'none';
 
     if (state.me.role !== 'parent') {
-      hideSection('tags-list', 'Tag management is available to parent accounts.');
       hideAuditSection();
     }
 
     await loadMembersAndKeys();
     if (state.me.role === 'parent') {
-      await loadTags();
       await loadAudit();
     }
   }
@@ -902,49 +834,6 @@
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   }
 
-  async function loadTags() {
-    state.allTags = await API.get('api/tags');
-    tagsList.innerHTML = state.allTags.length
-      ? state.allTags.map((tag) => `
-          <div class="flex-between mb-1" style="padding:0.4rem 0;">
-            <span class="tag" style="background:${tag.color}22;color:${tag.color};cursor:pointer;" data-edit-tag="${tag.id}">${esc(tag.name)}</span>
-            <div class="flex gap-1">
-              <span class="text-xs text-muted">${tag.document_count} docs</span>
-              <button class="btn btn-sm" data-edit-tag="${tag.id}" title="Edit">&#9998;</button>
-              <button class="btn btn-sm btn-danger" data-delete-tag="${tag.id}" title="Delete">&times;</button>
-            </div>
-          </div>
-        `).join('')
-      : '<span class="text-dim text-sm">No tags yet</span>';
-
-    document.querySelectorAll('[data-edit-tag]').forEach((button) => {
-      button.addEventListener('click', () => editTag(Number(button.getAttribute('data-edit-tag'))));
-    });
-    document.querySelectorAll('[data-delete-tag]').forEach((button) => {
-      button.addEventListener('click', () => deleteTag(Number(button.getAttribute('data-delete-tag'))));
-    });
-  }
-
-  function editTag(id) {
-    const tag = state.allTags.find((entry) => entry.id === id);
-    if (!tag) return;
-    state.editingTagId = id;
-    document.getElementById('tag-modal-title').textContent = 'Edit Tag';
-    document.getElementById('tag-name').value = tag.name;
-    document.getElementById('tag-color').value = tag.color;
-    document.getElementById('tag-modal').classList.remove('hidden');
-  }
-
-  async function deleteTag(id) {
-    const tag = state.allTags.find((entry) => entry.id === id);
-    if (!await showConfirm('Delete Tag', `Delete "${tag ? tag.name : id}"? This will unlink it from ${tag ? tag.document_count : '?'} documents.`)) {
-      return;
-    }
-    await API.del(`api/tags/${id}`);
-    toast('Tag deleted', 'success');
-    await loadTags();
-  }
-
   async function loadAudit() {
     const logs = await API.get('api/audit?limit=30');
     auditTbody.innerHTML = logs.map((log) => `
@@ -955,11 +844,6 @@
         <td class="text-sm text-dim">${log.entity_type ? `${esc(log.entity_type)} #${log.entity_id}` : ''}</td>
       </tr>
     `).join('') || '<tr><td colspan="4" class="text-dim text-center">No activity yet</td></tr>';
-  }
-
-  function hideSection(listId, message) {
-    const list = document.getElementById(listId);
-    if (list) list.innerHTML = `<span class="text-dim text-sm">${esc(message)}</span>`;
   }
 
   function hideAuditSection() {
