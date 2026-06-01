@@ -257,22 +257,43 @@ h3 { font-size: 1.1rem; }
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .doc-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px var(--shadow); }
-.doc-card-delete {
+.doc-card-check {
   position: absolute; top: 0.4rem; right: 0.4rem;
-  width: 24px; height: 24px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(0,0,0,0.5);
-  color: #fff;
-  font-size: 1rem;
-  line-height: 1;
+  width: 22px; height: 22px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
-  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.15s;
+  z-index: 2;
 }
-.doc-card:hover .doc-card-delete { opacity: 1; }
-.doc-card-delete:hover { background: var(--danger); }
+.doc-card-check input { display: none; }
+.doc-card-check .check-box {
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  border: 2px solid rgba(255,255,255,0.5);
+  background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.doc-card-check input:checked + .check-box {
+  background: var(--accent); border-color: var(--accent);
+}
+.doc-card-check input:checked + .check-box::after {
+  content: '✓'; color: #fff; font-size: 0.8rem; font-weight: 700;
+}
+.doc-card:hover .doc-card-check { opacity: 1; }
+.doc-card .doc-card-check:has(input:checked) { opacity: 1; }
+.doc-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+@media (max-width: 768px) {
+  .doc-card-check { opacity: 0.6; }
+  .bulk-action-bar { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
+}
+.bulk-action-bar {
+  position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 0.5rem 1rem;
+  display: flex; align-items: center; gap: 0.75rem;
+  box-shadow: 0 4px 20px var(--shadow); z-index: 101;
+}
 
 .doc-card-thumb {
   width: 100%;
