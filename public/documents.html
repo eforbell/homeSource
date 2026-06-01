@@ -80,6 +80,12 @@
     </div>
   </div>
 
+  <div id="bulk-bar" class="bulk-action-bar" style="display:none;">
+    <span id="bulk-count" class="text-sm" style="font-weight:600;"></span>
+    <button class="btn btn-sm" id="bulk-clear-btn">Clear</button>
+    <button class="btn btn-sm btn-danger" id="bulk-delete-btn">Delete selected</button>
+  </div>
+
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>
@@ -165,7 +171,7 @@
                 <span>${new Date(d.created_at).toLocaleDateString()}</span>
               </div>
             </div>
-            <button class="doc-card-delete" data-doc-id="${d.id}" data-doc-title="${esc(d.title)}" title="Delete">&times;</button>
+            <input type="checkbox" class="doc-card-check" data-doc-id="${d.id}" data-doc-title="${esc(d.title)}">
           </div>`;
         }).join('');
 
@@ -184,17 +190,11 @@
           });
         });
 
-        grid.querySelectorAll('.doc-card-delete').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
+        grid.querySelectorAll('.doc-card-check').forEach(cb => {
+          cb.addEventListener('click', (e) => {
             e.stopPropagation();
-            const id = btn.dataset.docId;
-            const title = btn.dataset.docTitle;
-            if (!await showConfirm('Delete Document', `Permanently delete "${title}" and all its files? This cannot be undone.`)) return;
-            try {
-              await API.del(`api/documents/${id}?permanent=true`);
-              toast('Document deleted', 'success');
-              loadDocuments();
-            } catch (err) { toast(err.message, 'error'); }
+            cb.closest('.doc-card').classList.toggle('selected', cb.checked);
+            updateBulkBar();
           });
         });
 
@@ -337,6 +337,51 @@
     document.getElementById('next-btn').addEventListener('click', () => { currentOffset += PAGE_SIZE; loadDocuments(); });
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function getSelectedDocs() {
+      return [...document.querySelectorAll('.doc-card-check:checked')].map(cb => ({
+        id: cb.dataset.docId,
+        title: cb.dataset.docTitle
+      }));
+    }
+
+    function updateBulkBar() {
+      const selected = getSelectedDocs();
+      const bar = document.getElementById('bulk-bar');
+      if (selected.length) {
+        document.getElementById('bulk-count').textContent = `${selected.length} selected`;
+        bar.style.display = 'flex';
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    document.getElementById('bulk-clear-btn').addEventListener('click', () => {
+      document.querySelectorAll('.doc-card-check:checked').forEach(cb => {
+        cb.checked = false;
+        cb.closest('.doc-card').classList.remove('selected');
+      });
+      updateBulkBar();
+    });
+
+    document.getElementById('bulk-delete-btn').addEventListener('click', async () => {
+      const selected = getSelectedDocs();
+      if (!selected.length) return;
+      const label = selected.length === 1
+        ? `Permanently delete "${selected[0].title}" and all its files?`
+        : `Permanently delete ${selected.length} documents and all their files?`;
+      if (!await showConfirm('Delete Documents', `${label} This cannot be undone.`)) return;
+      let deleted = 0;
+      for (const doc of selected) {
+        try {
+          await API.del(`api/documents/${doc.id}?permanent=true`);
+          deleted++;
+        } catch (err) { toast(`Failed to delete "${doc.title}": ${err.message}`, 'error'); }
+      }
+      if (deleted) toast(`${deleted} document${deleted > 1 ? 's' : ''} deleted`, 'success');
+      updateBulkBar();
+      loadDocuments();
+    });
 
     loadFilters();
     loadDocuments();
