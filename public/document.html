@@ -1641,19 +1641,26 @@
         const displayFields = ['title', 'document_type', 'summary', 'issued_date', 'expiry_date', 'amount'];
         for (const field of displayFields) {
           if (suggestions[field] !== undefined && suggestions[field] !== null && suggestions[field] !== '') {
+            const val = suggestions[field];
             const conf = fieldConf[field];
             const confBadge = Number.isFinite(conf) ? ` <span class="text-xs text-dim">(${Math.round(conf * 100)}%)</span>` : '';
-            html += `<span class="text-dim">${esc(field.replace(/_/g, ' '))}</span><span>${esc(String(suggestions[field]))}${confBadge}</span>`;
+            let display;
+            if (field === 'amount' && typeof val === 'object') {
+              display = `${esc(String(val.value))} ${esc(val.currency || '')}`.trim();
+            } else {
+              display = esc(String(val));
+            }
+            html += `<span class="text-dim">${esc(field.replace(/_/g, ' '))}</span><span>${display}${confBadge}</span>`;
           }
         }
         if (suggestions.suggested_tags?.length) {
           html += `<span class="text-dim">tags</span><span>${suggestions.suggested_tags.map(t => esc(typeof t === 'string' ? t : t.name || '')).join(', ')}</span>`;
         }
         if (suggestions.suggested_owners?.length) {
-          html += `<span class="text-dim">owners</span><span>${suggestions.suggested_owners.map(o => esc(typeof o === 'string' ? o : o.name || '')).join(', ')}</span>`;
+          html += `<span class="text-dim">owners</span><span>${suggestions.suggested_owners.map(o => esc(typeof o === 'string' ? o : o.member_name || '')).join(', ')}</span>`;
         }
         if (suggestions.key_facts?.length) {
-          html += `<span class="text-dim">key facts</span><ul style="margin:0; padding-left:1.25rem;">${suggestions.key_facts.map(f => `<li>${esc(typeof f === 'string' ? f : f.text || f.fact || JSON.stringify(f))}</li>`).join('')}</ul>`;
+          html += `<span class="text-dim">key facts</span><ul style="margin:0; padding-left:1.25rem;">${suggestions.key_facts.map(f => `<li><strong>${esc(f.label)}</strong>: ${esc(f.value)}${Number.isFinite(f.confidence) ? ` <span class="text-xs text-dim">(${Math.round(f.confidence * 100)}%)</span>` : ''}</li>`).join('')}</ul>`;
         }
         html += `</div></div>`;
       }
