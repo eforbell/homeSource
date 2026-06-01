@@ -810,6 +810,19 @@ app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, 
   }
 });
 
+app.delete('/api/documents/:id/magicindex', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!doc.metadata?.magicindex) return res.status(404).json({ error: 'No MagicIndex data to delete' });
+    const cleaned = { ...doc.metadata };
+    delete cleaned.magicindex;
+    await updateDocument(doc.id, { metadata: cleaned });
+    await audit.log('magicindex.deleted', 'document', doc.id, req.member.id);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) => {
   try {
     if (req.query.permanent === 'true') {
