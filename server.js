@@ -790,6 +790,9 @@ app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, 
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'MagicIndex re-analysis is unavailable for encrypted documents' });
     if (doc.metadata?.magicindex?.state === 'pending') {
       return res.status(409).json({ error: 'MagicIndex re-analysis already pending for this document' });
@@ -808,6 +811,22 @@ app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.delete('/api/documents/:id/magicindex', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!doc.metadata?.magicindex) return res.status(404).json({ error: 'No MagicIndex data to delete' });
+    const cleaned = { ...doc.metadata };
+    delete cleaned.magicindex;
+    await updateDocument(doc.id, { metadata: cleaned });
+    await audit.log('magicindex.deleted', 'document', doc.id, req.member.id);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) => {

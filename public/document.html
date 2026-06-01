@@ -146,6 +146,26 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="magicindex-modal">
+    <div class="modal" style="max-width:640px; max-height:85vh; display:flex; flex-direction:column;">
+      <div class="modal-title">MagicIndex Analysis</div>
+      <div id="magicindex-modal-body" style="overflow-y:auto; flex:1; padding:0.5rem 0;"></div>
+      <div class="modal-actions" id="magicindex-modal-actions">
+        <button class="btn" onclick="document.getElementById('magicindex-modal').classList.add('hidden')">Close</button>
+        <button class="btn" onclick="document.getElementById('magicindex-modal').classList.add('hidden'); openReanalyzeModal()">Re-analyze</button>
+        <button class="btn btn-danger" onclick="showMagicIndexDeleteConfirm()">Delete analysis</button>
+        <button class="btn btn-primary" id="magicindex-modal-apply-btn" style="display:none;">Apply suggestions</button>
+      </div>
+      <div class="modal-actions hidden" id="magicindex-modal-confirm" style="flex-direction:column; align-items:stretch; gap:0.5rem;">
+        <p style="margin:0; text-align:center; font-size:0.9rem;">Delete all MagicIndex analysis data? This cannot be undone.</p>
+        <div style="display:flex; justify-content:center; gap:0.5rem;">
+          <button class="btn" onclick="hideMagicIndexDeleteConfirm()">Cancel</button>
+          <button class="btn btn-danger" onclick="deleteMagicIndex()">Confirm delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="reanalyze-modal">
     <div class="modal">
       <div class="modal-title">Re-analyze with MagicIndex</div>
@@ -291,7 +311,9 @@
       <div class="modal-title">Add Related Document</div>
       <div class="form-group">
         <label class="form-label">Document</label>
-        <select id="link-target" class="form-select"></select>
+        <input type="text" id="link-search" class="form-input" placeholder="Search documents..." autocomplete="off">
+        <div id="link-search-results" style="max-height:200px; overflow-y:auto; margin-top:0.25rem;"></div>
+        <input type="hidden" id="link-target">
       </div>
       <div class="form-group">
         <label class="form-label">Relationship</label>
@@ -1499,6 +1521,7 @@
         if (encryptedDoc) {
           await renderEncryptedLockedState(doc);
         }
+        maybeStartMagicIndexPolling(doc);
 
       } catch (err) {
         document.getElementById('doc-title').textContent = 'Document not found';
@@ -1529,26 +1552,12 @@
 
       if (key === 'magicindex') {
         const state = value.state || 'unknown';
-        const provider = value.provider || 'unknown';
         const confidence = Number(value.confidence);
-        const rawConfidence = Number(value.raw_confidence);
-        const confidenceLabel = Number.isFinite(confidence)
-          ? `${Math.round(confidence * 100)}%${Number.isFinite(rawConfidence) && Math.round(rawConfidence * 100) !== Math.round(confidence * 100) ? ` (raw ${Math.round(rawConfidence * 100)}%)` : ''}`
-          : '—';
-        const importItemId = Number(currentDoc?.metadata?.import_item_id || 0);
-        const canApply = importItemId > 0 && value.state === 'complete' && value.applied_by_user !== true;
-        const evidence = value.extraction_evidence?.source ? `<span class="text-xs text-dim">source: ${esc(value.extraction_evidence.source)}</span>` : '';
-        const hint = value.user_hint ? `<span class="text-xs text-dim">hint: ${esc(value.user_hint)}</span>` : '';
+        const confidenceLabel = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : '';
+        const stateColor = state === 'complete' ? 'var(--success, #16a34a)' : state === 'pending' ? 'var(--amber, #d97706)' : '';
         return `<div style="display:flex; flex-direction:column; gap:0.25rem;">
-          <span><strong>${esc(state)}</strong> · ${esc(provider)} · ${confidenceLabel}</span>
-          ${evidence}
-          ${hint}
-          <div><button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button></div>
-          ${canApply ? `<div><button class="btn btn-sm" onclick="applyMagicIndexFromDocument(${importItemId})">Apply suggestions</button></div>` : ''}
-          <details>
-            <summary class="text-sm text-dim" style="cursor:pointer;">View raw MagicIndex JSON</summary>
-            <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-width:320px; max-height:220px; overflow:auto;">${esc(JSON.stringify(value, null, 2))}</pre>
-          </details>
+          <span><strong style="${stateColor ? `color:${stateColor}` : ''}">${esc(state)}</strong>${confidenceLabel ? ` · ${confidenceLabel}` : ''}</span>
+          <div><button class="btn btn-sm" onclick="openMagicIndexModal()">View details</button></div>
         </div>`;
       }
 
@@ -1570,6 +1579,26 @@
       return 'Relates to';
     }
 
+    function showMagicIndexDeleteConfirm() {
+      document.getElementById('magicindex-modal-actions').classList.add('hidden');
+      document.getElementById('magicindex-modal-confirm').classList.remove('hidden');
+    }
+    function hideMagicIndexDeleteConfirm() {
+      document.getElementById('magicindex-modal-confirm').classList.add('hidden');
+      document.getElementById('magicindex-modal-actions').classList.remove('hidden');
+    }
+    async function deleteMagicIndex() {
+      try {
+        await API.del(`api/documents/${docId}/magicindex`);
+        document.getElementById('magicindex-modal').classList.add('hidden');
+        hideMagicIndexDeleteConfirm();
+        toast('MagicIndex data deleted', 'success');
+        await loadDocument();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
     async function applyMagicIndexFromDocument(importItemId) {
       try {
         await API.post(`api/import/items/${importItemId}/apply-magicindex`, {});
@@ -1578,6 +1607,82 @@
       } catch (err) {
         toast(err.message, 'error');
       }
+    }
+
+    function openMagicIndexModal() {
+      const mi = currentDoc?.metadata?.magicindex;
+      if (!mi) return;
+      const body = document.getElementById('magicindex-modal-body');
+      const state = mi.state || 'unknown';
+      const provider = mi.provider || 'unknown';
+      const model = mi.model || '';
+      const confidence = Number(mi.confidence);
+      const rawConfidence = Number(mi.raw_confidence);
+      const confidenceLabel = Number.isFinite(confidence)
+        ? `${Math.round(confidence * 100)}%${Number.isFinite(rawConfidence) && Math.round(rawConfidence * 100) !== Math.round(confidence * 100) ? ` (raw ${Math.round(rawConfidence * 100)}%)` : ''}`
+        : '—';
+      const analyzedAt = mi.last_analyzed_at ? new Date(mi.last_analyzed_at).toLocaleString() : '—';
+      const evidence = mi.extraction_evidence || {};
+      const suggestions = mi.suggestions || {};
+      const fieldConf = mi.field_confidence || {};
+
+      let html = `<div style="display:flex; flex-direction:column; gap:0.75rem;">`;
+      html += `<div style="display:grid; grid-template-columns:auto 1fr; gap:0.25rem 1rem; font-size:0.9rem;">
+        <span class="text-dim">State</span><strong>${esc(state)}</strong>
+        <span class="text-dim">Provider</span><span>${esc(provider)}${model ? ` · ${esc(model)}` : ''}</span>
+        <span class="text-dim">Confidence</span><span>${confidenceLabel}</span>
+        <span class="text-dim">Analyzed</span><span>${analyzedAt}</span>
+        ${mi.user_hint ? `<span class="text-dim">Hint</span><span>${esc(mi.user_hint)}</span>` : ''}
+        ${evidence.source ? `<span class="text-dim">Source</span><span>${esc(evidence.source)}</span>` : ''}
+      </div>`;
+
+      if (Object.keys(suggestions).length) {
+        html += `<div><strong style="font-size:0.9rem;">Suggestions</strong>`;
+        html += `<div style="display:grid; grid-template-columns:auto 1fr; gap:0.25rem 1rem; font-size:0.85rem; margin-top:0.35rem;">`;
+        const displayFields = ['title', 'document_type', 'summary', 'issued_date', 'expiry_date', 'amount'];
+        for (const field of displayFields) {
+          if (suggestions[field] !== undefined && suggestions[field] !== null && suggestions[field] !== '') {
+            const val = suggestions[field];
+            const conf = fieldConf[field];
+            const confBadge = Number.isFinite(conf) ? ` <span class="text-xs text-dim">(${Math.round(conf * 100)}%)</span>` : '';
+            let display;
+            if (field === 'amount' && typeof val === 'object') {
+              display = `${esc(String(val.value))} ${esc(val.currency || '')}`.trim();
+            } else {
+              display = esc(String(val));
+            }
+            html += `<span class="text-dim">${esc(field.replace(/_/g, ' '))}</span><span>${display}${confBadge}</span>`;
+          }
+        }
+        if (suggestions.suggested_tags?.length) {
+          html += `<span class="text-dim">tags</span><span>${suggestions.suggested_tags.map(t => esc(typeof t === 'string' ? t : t.name || '')).join(', ')}</span>`;
+        }
+        if (suggestions.suggested_owners?.length) {
+          html += `<span class="text-dim">owners</span><span>${suggestions.suggested_owners.map(o => esc(typeof o === 'string' ? o : o.member_name || '')).join(', ')}</span>`;
+        }
+        if (suggestions.key_facts?.length) {
+          html += `<span class="text-dim">key facts</span><ul style="margin:0; padding-left:1.25rem;">${suggestions.key_facts.map(f => `<li><strong>${esc(f.label)}</strong>: ${esc(f.value)}${Number.isFinite(f.confidence) ? ` <span class="text-xs text-dim">(${Math.round(f.confidence * 100)}%)</span>` : ''}</li>`).join('')}</ul>`;
+        }
+        html += `</div></div>`;
+      }
+
+      html += `<details>
+        <summary class="text-sm text-dim" style="cursor:pointer;">Raw JSON</summary>
+        <pre class="text-xs" style="margin-top:0.5rem; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; max-height:300px; overflow:auto; background:var(--bg-elevated); padding:0.75rem; border-radius:6px;">${esc(JSON.stringify(mi, null, 2))}</pre>
+      </details>`;
+      html += `</div>`;
+      body.innerHTML = html;
+
+      const applyBtn = document.getElementById('magicindex-modal-apply-btn');
+      const importItemId = Number(currentDoc?.metadata?.import_item_id || 0);
+      if (importItemId > 0 && mi.state === 'complete' && mi.applied_by_user !== true) {
+        applyBtn.style.display = '';
+        applyBtn.onclick = () => { document.getElementById('magicindex-modal').classList.add('hidden'); applyMagicIndexFromDocument(importItemId); };
+      } else {
+        applyBtn.style.display = 'none';
+      }
+      hideMagicIndexDeleteConfirm();
+      document.getElementById('magicindex-modal').classList.remove('hidden');
     }
 
     async function loadShares() {
@@ -1738,24 +1843,63 @@
       }
     });
 
-    document.getElementById('add-link-btn').addEventListener('click', async () => {
-      const select = document.getElementById('link-target');
-      select.innerHTML = '';
-      try {
-        const docs = await API.get('api/documents?limit=200');
-        for (const doc of docs.documents || []) {
-          if (Number(doc.id) === Number(docId)) continue;
-          select.innerHTML += `<option value="${doc.id}">${esc(doc.title)} (${esc(doc.document_type)})</option>`;
-        }
-      } catch {}
+    document.getElementById('add-link-btn').addEventListener('click', () => {
+      document.getElementById('link-search').value = '';
+      document.getElementById('link-search-results').innerHTML = '<span class="text-dim text-sm">Type to search documents</span>';
+      document.getElementById('link-target').value = '';
       document.getElementById('link-reasoning').value = '';
       document.getElementById('link-modal').classList.remove('hidden');
+      document.getElementById('link-search').focus();
     });
 
+    let linkSearchTimer = null;
+    document.getElementById('link-search').addEventListener('input', (e) => {
+      clearTimeout(linkSearchTimer);
+      const query = e.target.value.trim();
+      if (!query) {
+        document.getElementById('link-search-results').innerHTML = '<span class="text-dim text-sm">Type to search documents</span>';
+        document.getElementById('link-target').value = '';
+        return;
+      }
+      linkSearchTimer = setTimeout(async () => {
+        try {
+          const data = await API.get(`api/documents?q=${encodeURIComponent(query)}&limit=20`);
+          const results = (data.documents || []).filter(d => Number(d.id) !== Number(docId));
+          const container = document.getElementById('link-search-results');
+          if (!results.length) {
+            container.innerHTML = '<span class="text-dim text-sm">No documents found</span>';
+            return;
+          }
+          container.innerHTML = results.map(d =>
+            `<div class="link-search-item" data-id="${d.id}" style="padding:0.35rem 0.5rem; cursor:pointer; border-radius:4px; font-size:0.85rem;"
+                  onmouseenter="this.style.background='var(--bg-hover, #f5f5f5)'"
+                  onmouseleave="this.style.background=''"
+                  onclick="selectLinkTarget(${d.id}, this)">${esc(d.title)} <span class="text-dim">(${esc(d.document_type)})</span></div>`
+          ).join('');
+        } catch {}
+      }, 250);
+    });
+
+    function selectLinkTarget(id, el) {
+      document.getElementById('link-target').value = id;
+      document.querySelectorAll('.link-search-item').forEach(item => {
+        item.style.background = '';
+        item.style.fontWeight = '';
+      });
+      el.style.background = 'var(--amber, #d97706)';
+      el.style.color = '#fff';
+      el.style.fontWeight = '600';
+    }
+
     document.getElementById('save-link-btn').addEventListener('click', async () => {
+      const targetId = document.getElementById('link-target').value;
+      if (!targetId) {
+        toast('Select a document first', 'error');
+        return;
+      }
       try {
         await API.post(`api/documents/${docId}/links`, {
-          target_document_id: Number(document.getElementById('link-target').value),
+          target_document_id: Number(targetId),
           link_type: document.getElementById('link-type').value,
           reasoning: document.getElementById('link-reasoning').value
         });
