@@ -260,22 +260,28 @@ h3 { font-size: 1.1rem; }
 .doc-card-check {
   position: absolute; top: 0.4rem; right: 0.4rem;
   width: 22px; height: 22px;
-  border-radius: 4px;
-  border: 2px solid rgba(255,255,255,0.5);
-  background: rgba(0,0,0,0.35);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
-  appearance: none; -webkit-appearance: none;
-  display: flex; align-items: center; justify-content: center;
+  z-index: 2;
 }
-.doc-card:hover .doc-card-check, .doc-card-check:checked { opacity: 1; }
-.doc-card-check:checked {
+.doc-card-check input { display: none; }
+.doc-card-check .check-box {
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  border: 2px solid rgba(255,255,255,0.5);
+  background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.doc-card-check input:checked + .check-box {
   background: var(--accent); border-color: var(--accent);
 }
-.doc-card-check:checked::after {
+.doc-card-check input:checked + .check-box::after {
   content: '✓'; color: #fff; font-size: 0.8rem; font-weight: 700;
 }
+.doc-card:hover .doc-card-check { opacity: 1; }
+.doc-card .doc-card-check:has(input:checked) { opacity: 1; }
 .doc-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 @media (max-width: 768px) { .doc-card-check { opacity: 0.6; } }
 .bulk-action-bar {

@@ -171,7 +171,10 @@
                 <span>${new Date(d.created_at).toLocaleDateString()}</span>
               </div>
             </div>
-            <input type="checkbox" class="doc-card-check" data-doc-id="${d.id}" data-doc-title="${esc(d.title)}">
+            <label class="doc-card-check" onclick="event.stopPropagation()">
+              <input type="checkbox" data-doc-id="${d.id}" data-doc-title="${esc(d.title)}">
+              <span class="check-box"></span>
+            </label>
           </div>`;
         }).join('');
 
@@ -190,9 +193,8 @@
           });
         });
 
-        grid.querySelectorAll('.doc-card-check').forEach(cb => {
-          cb.addEventListener('click', (e) => {
-            e.stopPropagation();
+        grid.querySelectorAll('.doc-card-check input').forEach(cb => {
+          cb.addEventListener('change', () => {
             cb.closest('.doc-card').classList.toggle('selected', cb.checked);
             updateBulkBar();
           });
@@ -339,7 +341,7 @@
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
     function getSelectedDocs() {
-      return [...document.querySelectorAll('.doc-card-check:checked')].map(cb => ({
+      return [...document.querySelectorAll('.doc-card-check input:checked')].map(cb => ({
         id: cb.dataset.docId,
         title: cb.dataset.docTitle
       }));
@@ -357,7 +359,7 @@
     }
 
     document.getElementById('bulk-clear-btn').addEventListener('click', () => {
-      document.querySelectorAll('.doc-card-check:checked').forEach(cb => {
+      document.querySelectorAll('.doc-card-check input:checked').forEach(cb => {
         cb.checked = false;
         cb.closest('.doc-card').classList.remove('selected');
       });
