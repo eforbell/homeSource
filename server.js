@@ -904,7 +904,11 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
     }
 
     const normalized = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: encryptionMetadata });
-    const primaryKeyId = await pki.validatePkiUpload(normalized.encryption_metadata, req.member.id);
+    const existingEntry = doc.encryption_metadata?.files?.upload || {};
+    const existingHolderKeyIds = Array.isArray(existingEntry.holders)
+      ? existingEntry.holders.map((h) => Number(h.encryption_key_id)).filter(Boolean)
+      : [];
+    const primaryKeyId = await pki.validatePkiUpload(normalized.encryption_metadata, req.member.id, { existingHolderKeyIds });
     if (body.primary_encryption_key_id && Number(body.primary_encryption_key_id) !== Number(primaryKeyId)) {
       return res.status(400).json({ error: 'primary_encryption_key_id does not match the validated primary holder key' });
     }

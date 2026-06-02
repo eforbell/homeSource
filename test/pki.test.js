@@ -599,6 +599,89 @@ describe('validatePkiUpload', () => {
     );
   });
 
+  it('allows revoked existing holders when existingHolderKeyIds is provided', async () => {
+    const pki = require('../lib/pki');
+    const key1 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('revoked-existing-pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Revoked Primary'
+    });
+    const key2 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('revoked-existing-pub2'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'New Backup'
+    });
+    await pki.revokeMemberKey(key1.id, parent.id, parent.id);
+
+    const keyId = await pki.validatePkiUpload({
+      files: {
+        upload: {
+          holders: [
+            {
+              member_id: parent.id,
+              encryption_key_id: key1.id,
+              key_fingerprint: key1.key_fingerprint,
+              role: 'owner',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+            },
+            {
+              member_id: parent.id,
+              encryption_key_id: key2.id,
+              key_fingerprint: key2.key_fingerprint,
+              role: 'backup',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+            }
+          ]
+        }
+      }
+    }, parent.id, { existingHolderKeyIds: [key1.id] });
+    assert.equal(keyId, key1.id);
+  });
+
+  it('still rejects revoked keys that are NOT in existingHolderKeyIds', async () => {
+    const pki = require('../lib/pki');
+    const key1 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('revoked-new-pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Revoked New'
+    });
+    await pki.revokeMemberKey(key1.id, parent.id, parent.id);
+
+    await assert.rejects(
+      () => pki.validatePkiUpload({
+        files: {
+          upload: {
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: key1.id,
+                key_fingerprint: key1.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              }
+            ]
+          }
+        }
+      }, parent.id),
+      /revoked/i
+    );
+  });
+
   it('rejects cross-member holders for non-parent uploaders', async () => {
     const pki = require('../lib/pki');
     const kid = await createMember('Bob', 'kid');
