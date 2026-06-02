@@ -120,6 +120,75 @@ describe('PKI key dependency and revoke guard API', () => {
     assert.equal(otherRes.status, 403);
   });
 
+  it('returns revoked keys for the owner when includeRevoked is requested', async () => {
+    const activeKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: Buffer.from('owner-active-key').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"def"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Owner Active',
+    });
+    const revokedKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: Buffer.from('owner-revoked-key').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"ghi"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Owner Revoked',
+    });
+    await pki.revokeMemberKey(revokedKey.id, parent.id, parent.id);
+
+    const ownerRes = await authedGet(`api/members/${parent.id}/keys?includeRevoked=1`, parentCookie);
+    assert.equal(ownerRes.status, 200);
+    const ownerData = await ownerRes.json();
+    assert.equal(ownerData.length, 2);
+    assert.equal(ownerData[0].id, activeKey.id);
+    assert.equal(ownerData[1].id, revokedKey.id);
+    assert.ok(ownerData[1].revoked_at);
+  });
+
+  it('lets a parent review revoked household keys when includeRevoked is requested', async () => {
+    const kidActive = await pki.registerMemberKey({
+      memberId: kid.id,
+      publicKey: Buffer.from('kid-active-key').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"def"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Kid Active',
+    });
+    const kidRevoked = await pki.registerMemberKey({
+      memberId: kid.id,
+      publicKey: Buffer.from('kid-revoked-key').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"ghi"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Kid Revoked',
+    });
+    await pki.revokeMemberKey(kidRevoked.id, kid.id, kid.id);
+
+    const parentRes = await authedGet(`api/members/${kid.id}/keys?includeRevoked=1`, parentCookie);
+    assert.equal(parentRes.status, 200);
+    const parentData = await parentRes.json();
+    assert.equal(parentData.length, 2);
+    assert.equal(parentData[0].id, kidActive.id);
+    assert.equal(parentData[1].id, kidRevoked.id);
+    assert.ok(parentData[1].revoked_at);
+  });
+
+  it('still prevents a kid from inspecting another member keys even with includeRevoked', async () => {
+    const otherRes = await authedGet(`api/members/${parent.id}/keys?includeRevoked=1`, kidCookie);
+    assert.equal(otherRes.status, 403);
+  });
+
   it('blocks revoke when the key is the sole active holder for a PKI document', async () => {
     const key = await pki.registerMemberKey({
       memberId: parent.id,

@@ -167,7 +167,7 @@
 
     const results = await Promise.all(visibleMembers.map(async (member) => {
       try {
-        const keys = await API.get(`api/members/${member.id}/keys`);
+        const keys = await API.get(`api/members/${member.id}/keys?includeRevoked=1`);
         return [member.id, keys];
       } catch {
         return [member.id, []];
@@ -230,18 +230,27 @@
   }
 
   function renderKeyRow(member, key) {
+    const isRevoked = !!key.revoked_at;
     const badges = [
       `<span class="badge ${key.protection_tier === 'hardware' ? 'badge-info' : (key.protection_tier === 'platform' ? 'badge-warn' : 'badge-muted')}">${key.protection_tier === 'hardware' ? 'Security key' : (key.protection_tier === 'platform' ? 'Passkey' : 'Passphrase')}</span>`,
+      isRevoked ? '<span class="badge badge-danger">Revoked</span>' : '<span class="badge badge-info">Active</span>',
       key.credential_verified ? '<span class="badge badge-info">Verified ceremony</span>' : '<span class="badge badge-muted">Unverified</span>',
       key.recovery_enabled ? '<span class="badge badge-info">Recovery set</span>' : '<span class="badge badge-muted">No recovery</span>',
     ].join(' ');
 
     const actionButtons = [
-      `<button class="btn btn-sm" data-verify-key="${key.id}" data-member-id="${member.id}">Verify</button>`,
+      !isRevoked ? `<button class="btn btn-sm" data-verify-key="${key.id}" data-member-id="${member.id}">Verify</button>` : '',
       (state.me.id === member.id)
-        ? `<button class="btn btn-sm btn-danger" data-revoke-key="${key.id}" data-member-id="${member.id}">Revoke</button>`
+        ? (!isRevoked ? `<button class="btn btn-sm btn-danger" data-revoke-key="${key.id}" data-member-id="${member.id}">Revoke</button>` : '')
         : '',
     ].join('');
+
+    const statusLine = isRevoked
+      ? `Created ${new Date(key.created_at).toLocaleDateString()} · Revoked ${new Date(key.revoked_at).toLocaleDateString()}`
+      : `Created ${new Date(key.created_at).toLocaleDateString()}${key.last_used_at ? ` · Last used ${new Date(key.last_used_at).toLocaleDateString()}` : ''}`;
+    const helperText = isRevoked
+      ? 'Historical key — no longer usable for unlock or new PKI encryption.'
+      : '';
 
     return `
       <div class="card" style="padding:0.85rem; margin-bottom:0.75rem;">
@@ -249,8 +258,9 @@
           <div>
             <div style="font-weight:600;">${esc(key.label || 'Unnamed key')}</div>
             <div class="text-xs text-dim" style="margin-top:0.25rem;">Fingerprint ${esc(truncateFingerprint(key.key_fingerprint))}</div>
-            <div class="text-xs text-dim" style="margin-top:0.2rem;">Created ${new Date(key.created_at).toLocaleDateString()}${key.last_used_at ? ` · Last used ${new Date(key.last_used_at).toLocaleDateString()}` : ''}</div>
+            <div class="text-xs text-dim" style="margin-top:0.2rem;">${statusLine}</div>
             <div style="margin-top:0.5rem; display:flex; gap:0.35rem; flex-wrap:wrap;">${badges}</div>
+            ${helperText ? `<div class="text-xs text-dim" style="margin-top:0.5rem;">${helperText}</div>` : ''}
           </div>
           <div class="flex gap-1" style="flex-wrap:wrap; justify-content:flex-end;">${actionButtons}</div>
         </div>
@@ -260,9 +270,17 @@
 
   function summarizeKeys(keys) {
     if (!keys.length) return 'No encryption keys yet';
+    const activeCount = keys.filter((key) => !key.revoked_at).length;
+    const revokedCount = keys.filter((key) => !!key.revoked_at).length;
     const verifiedCount = keys.filter((key) => key.credential_verified).length;
     const recoveryCount = keys.filter((key) => key.recovery_enabled).length;
-    return `${keys.length} key${keys.length === 1 ? '' : 's'} · ${verifiedCount} verified · ${recoveryCount} with recovery`;
+    const parts = [
+      `${activeCount} active`,
+      revokedCount ? `${revokedCount} revoked` : null,
+      `${verifiedCount} verified`,
+      `${recoveryCount} with recovery`
+    ].filter(Boolean);
+    return parts.join(' · ');
   }
 
   async function verifyStoredFingerprint(memberId, keyId) {
