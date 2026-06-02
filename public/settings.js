@@ -306,6 +306,16 @@
     `;
   }
 
+  function summarizeDependencyTitlesText(documents, maxItems = 3) {
+    const items = (Array.isArray(documents) ? documents : [])
+      .map((doc) => String(doc?.title || '').trim())
+      .filter(Boolean);
+    if (!items.length) return '';
+    const visible = items.slice(0, maxItems);
+    const remaining = items.length - visible.length;
+    return ` Affected: ${visible.join(', ')}${remaining > 0 ? `, + ${remaining} more` : ''}.`;
+  }
+
   function buildRevokeConfirmMessage(keyLabel, dependencies) {
     const dependencyCount = Number(dependencies.document_count || 0);
     if (!dependencyCount) {
@@ -349,7 +359,7 @@
 
       if (unsafeDocs.length) {
         toast(
-          `You cannot revoke "${key.label || 'this key'}" yet. It is the sole active unlock holder for ${unsafeDocs.length} PKI-encrypted document${unsafeDocs.length === 1 ? '' : 's'}.${summarizeDependencyTitles(unsafeDocs)}`,
+          `You cannot revoke "${key.label || 'this key'}" yet. It is the sole active unlock holder for ${unsafeDocs.length} PKI-encrypted document${unsafeDocs.length === 1 ? '' : 's'}.${summarizeDependencyTitlesText(unsafeDocs)}`,
           'error'
         );
         return;
