@@ -1401,7 +1401,7 @@
       };
       document.getElementById('unlock-pki-holder')?.addEventListener('change', refreshPkiUnlockUI);
       refreshPkiUnlockUI();
-      unlockBtn.addEventListener('click', async () => {
+      unlockBtn?.addEventListener('click', async () => {
         const status = document.getElementById('unlock-status');
         const passphrase = !isPki ? (document.getElementById('unlock-passphrase').value || '') : '';
         const keyPassphrase = isPki ? (document.getElementById('unlock-key-passphrase')?.value || '') : '';
