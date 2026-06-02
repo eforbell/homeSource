@@ -284,14 +284,105 @@
     }
   }
 
+  async function getKeyDependencies(memberId, keyId) {
+    return API.get(`api/members/${memberId}/keys/${keyId}/dependencies`);
+  }
+
+  function renderDependencyTitleList(documents, maxItems = 3) {
+    const items = (Array.isArray(documents) ? documents : [])
+      .map((doc) => String(doc?.title || '').trim())
+      .filter(Boolean);
+    if (!items.length) return '';
+    const visible = items.slice(0, maxItems);
+    const remaining = items.length - visible.length;
+    return `
+      <div style="margin-top:0.75rem;">
+        <div class="text-xs text-dim" style="margin-bottom:0.35rem;">Affected documents</div>
+        <ul style="margin:0; padding-left:1.1rem; line-height:1.45;">
+          ${visible.map((title) => `<li>${esc(title)}</li>`).join('')}
+          ${remaining > 0 ? `<li>+ ${remaining} more</li>` : ''}
+        </ul>
+      </div>
+    `;
+  }
+
+  function summarizeDependencyTitlesText(documents, maxItems = 3) {
+    const items = (Array.isArray(documents) ? documents : [])
+      .map((doc) => String(doc?.title || '').trim())
+      .filter(Boolean);
+    if (!items.length) return '';
+    const visible = items.slice(0, maxItems);
+    const remaining = items.length - visible.length;
+    return ` Affected: ${visible.join(', ')}${remaining > 0 ? `, + ${remaining} more` : ''}.`;
+  }
+
+  function buildRevokeConfirmMessage(keyLabel, dependencies) {
+    const dependencyCount = Number(dependencies.document_count || 0);
+    if (!dependencyCount) {
+      return {
+        html: `
+          <div style="line-height:1.5;">
+            <div>Revoke <strong>${esc(keyLabel)}</strong>?</div>
+            <div style="margin-top:0.5rem;">It is not currently referenced by any PKI-encrypted documents.</div>
+          </div>
+        `
+      };
+    }
+
+    return {
+      html: `
+        <div style="line-height:1.5;">
+          <div>Revoke <strong>${esc(keyLabel)}</strong>?</div>
+          <div style="margin-top:0.5rem;">
+            It is referenced by <strong>${dependencyCount}</strong> PKI-encrypted document${dependencyCount === 1 ? '' : 's'}.
+          </div>
+          <div style="margin-top:0.35rem;">
+            Another active holder can still open each one.
+          </div>
+          ${renderDependencyTitleList(dependencies.documents || [])}
+        </div>
+      `
+    };
+  }
+
   async function revokeKey(memberId, keyId) {
     const key = (state.keysByMember.get(memberId) || []).find((entry) => entry.id === keyId);
     if (!key) return toast('Key not found', 'error');
-    if (!await showConfirm('Revoke Key', `Revoke "${key.label || 'this key'}"? Any future PKI uploads tied to it will be blocked.`)) {
-      return;
-    }
     try {
-      await API.del(`api/members/${memberId}/keys/${keyId}`);
+      const dependencies = await getKeyDependencies(memberId, keyId);
+      const unsafeDocs = Array.isArray(dependencies.documents)
+        ? dependencies.documents.filter((doc) => doc.status === 'sole_active_holder')
+        : [];
+      const inconsistentDocs = Array.isArray(dependencies.documents)
+        ? dependencies.documents.filter((doc) => doc.status === 'holder_metadata_inconsistent')
+        : [];
+
+      if (unsafeDocs.length) {
+        toast(
+          `You cannot revoke "${key.label || 'this key'}" yet. It is the sole active unlock holder for ${unsafeDocs.length} PKI-encrypted document${unsafeDocs.length === 1 ? '' : 's'}.${summarizeDependencyTitlesText(unsafeDocs)}`,
+          'error'
+        );
+        return;
+      }
+
+      if (inconsistentDocs.length) {
+        toast(
+          `You cannot revoke "${key.label || 'this key'}" yet because encrypted document holder metadata is inconsistent.`,
+          'error'
+        );
+        return;
+      }
+
+      const message = buildRevokeConfirmMessage(key.label || 'this key', dependencies);
+      if (!await showConfirm('Revoke Key', message)) {
+        return;
+      }
+
+      const res = await fetch(`api/members/${memberId}/keys/${keyId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
       toast('Key revoked', 'success');
       await loadMembersAndKeys();
       if (state.me.role === 'parent') await loadAudit();
@@ -891,7 +982,12 @@
   function showConfirm(title, message) {
     return new Promise((resolve) => {
       document.getElementById('confirm-title').textContent = title;
-      document.getElementById('confirm-message').textContent = message;
+      const messageEl = document.getElementById('confirm-message');
+      if (message && typeof message === 'object' && typeof message.html === 'string') {
+        messageEl.innerHTML = message.html;
+      } else {
+        messageEl.textContent = message;
+      }
       const modal = document.getElementById('confirm-modal');
       const okBtn = document.getElementById('confirm-ok-btn');
       const cancelBtn = document.getElementById('confirm-cancel-btn');

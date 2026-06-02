@@ -266,6 +266,246 @@ describe('PKI key management', () => {
       assert.equal(info.holders[1].role, 'backup');
     });
   });
+
+  describe('getKeyDependencySummary', () => {
+    async function createPkiDoc({ title, primaryKey, extraHolders = [], fileKey = 'upload', extraFiles = {} }) {
+      const { createDocument } = require('../lib/documents');
+      return createDocument({
+        title,
+        document_type: 'other',
+        source_type: 'upload',
+        created_by: parent.id,
+        is_encrypted: true,
+        encryption_mode: 'pki',
+        encryption_key_id: primaryKey.id,
+        encryption_metadata: {
+          version: 1,
+          mode: 'pki',
+          files: {
+            [fileKey]: {
+              cipher: 'aes-256-gcm',
+              iv_b64: 'abc',
+              holders: [
+                {
+                  member_id: parent.id,
+                  encryption_key_id: primaryKey.id,
+                  key_fingerprint: primaryKey.key_fingerprint,
+                  role: 'owner',
+                  wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+                },
+                ...extraHolders
+              ]
+            },
+            ...extraFiles
+          }
+        }
+      }, [parent.id]);
+    }
+
+    it('returns zero counts when the key is unused by PKI docs', async () => {
+      const pki = require('../lib/pki');
+      const key = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('unused-pub'),
+        encryptedPrivateKey: 'enc-unused',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Unused'
+      });
+
+      const summary = await pki.getKeyDependencySummary(key.id, parent.id);
+      assert.ok(summary);
+      assert.equal(summary.document_count, 0);
+      assert.equal(summary.summary.safe_docs, 0);
+      assert.equal(summary.summary.at_risk_docs, 0);
+      assert.equal(summary.summary.already_stranded_docs, 0);
+      assert.equal(summary.summary.inconsistent_docs, 0);
+      assert.deepEqual(summary.documents, []);
+    });
+
+    it('classifies docs with another active holder as alternate_holders_available', async () => {
+      const pki = require('../lib/pki');
+      const key1 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('alt-pub1'),
+        encryptedPrivateKey: 'enc1',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Primary'
+      });
+      const key2 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('alt-pub2'),
+        encryptedPrivateKey: 'enc2',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Backup'
+      });
+
+      await createPkiDoc({
+        title: 'Alternate Holder Doc',
+        primaryKey: key1,
+        extraHolders: [{
+          member_id: parent.id,
+          encryption_key_id: key2.id,
+          key_fingerprint: key2.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+        }]
+      });
+
+      const summary = await pki.getKeyDependencySummary(key1.id, parent.id);
+      assert.equal(summary.document_count, 1);
+      assert.equal(summary.summary.safe_docs, 1);
+      assert.equal(summary.summary.at_risk_docs, 0);
+      assert.equal(summary.documents[0].status, 'alternate_holders_available');
+      assert.equal(summary.documents[0].active_holder_count, 2);
+    });
+
+    it('classifies docs as sole_active_holder when the target key is the only active holder', async () => {
+      const pki = require('../lib/pki');
+      const key1 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('sole-pub1'),
+        encryptedPrivateKey: 'enc1',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Primary'
+      });
+      const key2 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('sole-pub2'),
+        encryptedPrivateKey: 'enc2',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Backup'
+      });
+      await pki.revokeMemberKey(key2.id, parent.id, parent.id);
+
+      await createPkiDoc({
+        title: 'Sole Active Holder Doc',
+        primaryKey: key1,
+        extraHolders: [{
+          member_id: parent.id,
+          encryption_key_id: key2.id,
+          key_fingerprint: key2.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+        }]
+      });
+
+      const summary = await pki.getKeyDependencySummary(key1.id, parent.id);
+      assert.equal(summary.summary.safe_docs, 0);
+      assert.equal(summary.summary.at_risk_docs, 1);
+      assert.equal(summary.documents[0].status, 'sole_active_holder');
+      assert.equal(summary.documents[0].active_holder_count, 1);
+      assert.equal(summary.documents[0].revoked_holder_count, 1);
+    });
+
+    it('classifies docs as all_holders_revoked when no active holders remain', async () => {
+      const pki = require('../lib/pki');
+      const key1 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('revoked-pub1'),
+        encryptedPrivateKey: 'enc1',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Primary'
+      });
+      const key2 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('revoked-pub2'),
+        encryptedPrivateKey: 'enc2',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Backup'
+      });
+
+      await createPkiDoc({
+        title: 'All Revoked Doc',
+        primaryKey: key1,
+        extraHolders: [{
+          member_id: parent.id,
+          encryption_key_id: key2.id,
+          key_fingerprint: key2.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+        }]
+      });
+      await pki.revokeMemberKey(key1.id, parent.id, parent.id);
+      await pki.revokeMemberKey(key2.id, parent.id, parent.id);
+
+      const summary = await pki.getKeyDependencySummary(key1.id, parent.id);
+      assert.equal(summary.summary.already_stranded_docs, 1);
+      assert.equal(summary.documents[0].status, 'all_holders_revoked');
+      assert.equal(summary.documents[0].active_holder_count, 0);
+      assert.equal(summary.documents[0].revoked_holder_count, 2);
+    });
+
+    it('classifies malformed metadata as holder_metadata_inconsistent', async () => {
+      const pki = require('../lib/pki');
+      const { createDocument } = require('../lib/documents');
+      const key1 = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('bad-pub1'),
+        encryptedPrivateKey: 'enc1',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Primary'
+      });
+
+      await createDocument({
+        title: 'Malformed Holder Doc',
+        document_type: 'other',
+        source_type: 'upload',
+        created_by: parent.id,
+        is_encrypted: true,
+        encryption_mode: 'pki',
+        encryption_key_id: key1.id,
+        encryption_metadata: {
+          version: 1,
+          mode: 'pki',
+          files: {
+            upload: {
+              cipher: 'aes-256-gcm',
+              iv_b64: 'abc'
+            },
+            copy: {
+              cipher: 'aes-256-gcm',
+              iv_b64: 'def',
+              holders: [{
+                member_id: parent.id,
+                encryption_key_id: key1.id,
+                key_fingerprint: key1.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+              }]
+            }
+          }
+        }
+      }, [parent.id]);
+
+      const summary = await pki.getKeyDependencySummary(key1.id, parent.id);
+      assert.equal(summary.summary.inconsistent_docs, 1);
+      assert.equal(summary.documents[0].status, 'holder_metadata_inconsistent');
+    });
+  });
 });
 
 describe('validatePkiUpload', () => {
@@ -356,6 +596,223 @@ describe('validatePkiUpload', () => {
         }
       }, parent.id),
       /duplicate/i
+    );
+  });
+
+  it('allows revoked existing holders when existingHolderKeyIds is provided', async () => {
+    const pki = require('../lib/pki');
+    const key1 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('revoked-existing-pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Revoked Primary'
+    });
+    const key2 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('revoked-existing-pub2'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'New Backup'
+    });
+    await pki.revokeMemberKey(key1.id, parent.id, parent.id);
+
+    const keyId = await pki.validatePkiUpload({
+      files: {
+        upload: {
+          holders: [
+            {
+              member_id: parent.id,
+              encryption_key_id: key1.id,
+              key_fingerprint: key1.key_fingerprint,
+              role: 'owner',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+            },
+            {
+              member_id: parent.id,
+              encryption_key_id: key2.id,
+              key_fingerprint: key2.key_fingerprint,
+              role: 'backup',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+            }
+          ]
+        }
+      }
+    }, parent.id, { existingHolderKeyIds: [key1.id] });
+    assert.equal(keyId, key1.id);
+  });
+
+  it('still rejects revoked keys that are NOT in existingHolderKeyIds', async () => {
+    const pki = require('../lib/pki');
+    const key1 = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('revoked-new-pub1'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Revoked New'
+    });
+    await pki.revokeMemberKey(key1.id, parent.id, parent.id);
+
+    await assert.rejects(
+      () => pki.validatePkiUpload({
+        files: {
+          upload: {
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: key1.id,
+                key_fingerprint: key1.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              }
+            ]
+          }
+        }
+      }, parent.id),
+      /revoked/i
+    );
+  });
+
+  it('allows a different member as primary holder when that key is in existingHolderKeyIds', async () => {
+    const pki = require('../lib/pki');
+    const val = await createMember('Val', 'parent');
+    const ericKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('eric-owner-pub'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Eric Owner'
+    });
+    const valKey = await pki.registerMemberKey({
+      memberId: val.id,
+      publicKey: encodePublicKey('val-beneficiary-pub'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Val Beneficiary'
+    });
+    const ericYubikey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('eric-yubikey-pub'),
+      encryptedPrivateKey: 'enc3',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'hardware',
+      label: 'Eric YubiKey'
+    });
+
+    const keyId = await pki.validatePkiUpload({
+      files: {
+        upload: {
+          holders: [
+            {
+              member_id: parent.id,
+              encryption_key_id: ericKey.id,
+              key_fingerprint: ericKey.key_fingerprint,
+              role: 'owner',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+            },
+            {
+              member_id: val.id,
+              encryption_key_id: valKey.id,
+              key_fingerprint: valKey.key_fingerprint,
+              role: 'beneficiary',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+            },
+            {
+              member_id: parent.id,
+              encryption_key_id: ericYubikey.id,
+              key_fingerprint: ericYubikey.key_fingerprint,
+              role: 'beneficiary',
+              wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'stu', hkdf_salt_b64: 'vwx', wrapped_dek_b64: 'yza' }
+            }
+          ]
+        }
+      }
+    }, val.id, { existingHolderKeyIds: [ericKey.id, valKey.id] });
+    assert.equal(keyId, ericKey.id);
+  });
+
+  it('still enforces role constraints on newly added holders even when existing holders are grandfathered', async () => {
+    const pki = require('../lib/pki');
+    const val = await createMember('Val', 'parent');
+    const ericKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('role-enforce-eric-pub'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Eric Owner'
+    });
+    const valKey = await pki.registerMemberKey({
+      memberId: val.id,
+      publicKey: encodePublicKey('role-enforce-val-pub'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Val Beneficiary'
+    });
+    const ericBackupKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('role-enforce-bad-pub'),
+      encryptedPrivateKey: 'enc3',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Eric Backup Attempt'
+    });
+
+    await assert.rejects(
+      () => pki.validatePkiUpload({
+        files: {
+          upload: {
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: ericKey.id,
+                key_fingerprint: ericKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              },
+              {
+                member_id: val.id,
+                encryption_key_id: valKey.id,
+                key_fingerprint: valKey.key_fingerprint,
+                role: 'beneficiary',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: ericBackupKey.id,
+                key_fingerprint: ericBackupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'stu', hkdf_salt_b64: 'vwx', wrapped_dek_b64: 'yza' }
+              }
+            ]
+          }
+        }
+      }, val.id, { existingHolderKeyIds: [ericKey.id, valKey.id] }),
+      /backup holders must belong to the uploading member/i
     );
   });
 

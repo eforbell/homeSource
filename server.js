@@ -584,12 +584,50 @@ app.get('/api/members/:id/keys/:keyId/material', requireAuth, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/members/:id/keys/:keyId/dependencies', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only inspect dependencies for your own keys' });
+    }
+    const summary = await pki.getKeyDependencySummary(keyId, memberId);
+    if (!summary) return res.status(404).json({ error: 'Key not found' });
+    res.json(summary);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
   try {
     const memberId = Number(req.params.id);
     const keyId = Number(req.params.keyId);
     if (req.member.id !== memberId) {
       return res.status(403).json({ error: 'Can only revoke keys for yourself' });
+    }
+    const summary = await pki.getKeyDependencySummary(keyId, memberId);
+    if (!summary) return res.status(404).json({ error: 'Key not found or already revoked' });
+    const soleHolderDocs = summary.documents.filter((doc) => doc.status === 'sole_active_holder');
+    const inconsistentDocs = summary.documents.filter((doc) => doc.status === 'holder_metadata_inconsistent');
+    if (soleHolderDocs.length || inconsistentDocs.length) {
+      const blockedCode = soleHolderDocs.length ? 'PKI_KEY_SOLE_ACTIVE_HOLDER' : 'PKI_KEY_DEPENDENCY_INCONSISTENT';
+      const blockedError = soleHolderDocs.length
+        ? 'Key cannot be revoked because it is the sole active holder for encrypted documents'
+        : 'Key cannot be revoked because encrypted document holder metadata is inconsistent';
+      await audit.log('key.revoke_blocked', 'encryption_key', keyId, req.member.id, {
+        member_id: memberId,
+        code: blockedCode,
+        affected_document_count: summary.document_count,
+        sole_active_holder_document_count: soleHolderDocs.length,
+        inconsistent_document_count: inconsistentDocs.length
+      });
+      return res.status(409).json({
+        error: blockedError,
+        code: blockedCode,
+        affected_documents: (soleHolderDocs.length ? soleHolderDocs : inconsistentDocs).map((doc) => ({
+          document_id: doc.document_id,
+          title: doc.title
+        }))
+      });
     }
     const revoked = await pki.revokeMemberKey(keyId, memberId, req.member.id);
     if (!revoked) return res.status(404).json({ error: 'Key not found or already revoked' });
@@ -866,7 +904,11 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
     }
 
     const normalized = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: encryptionMetadata });
-    const primaryKeyId = await pki.validatePkiUpload(normalized.encryption_metadata, req.member.id);
+    const existingEntry = doc.encryption_metadata?.files?.upload || {};
+    const existingHolderKeyIds = Array.isArray(existingEntry.holders)
+      ? existingEntry.holders.map((h) => Number(h.encryption_key_id)).filter(Boolean)
+      : [];
+    const primaryKeyId = await pki.validatePkiUpload(normalized.encryption_metadata, req.member.id, { existingHolderKeyIds });
     if (body.primary_encryption_key_id && Number(body.primary_encryption_key_id) !== Number(primaryKeyId)) {
       return res.status(400).json({ error: 'primary_encryption_key_id does not match the validated primary holder key' });
     }
