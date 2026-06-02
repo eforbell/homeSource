@@ -48,11 +48,12 @@ stored in `documents.encryption_metadata`. Each encrypted document carries:
 encryption_metadata
   version: 1
   mode: "pki"
-  access_model: "any_one_holder"
+  policy:
+    access_model: "any_one_holder"
+    threshold: 1
   files:
     upload:
-      iv: <base64>
-      tag: <base64>
+      iv_b64: <base64>
       tag_length_bits: 128
       holders:
         - encryption_key_id: 42
@@ -62,6 +63,7 @@ encryption_metadata
           wrapped_dek:
             kind: "pki_x25519"
             ephemeral_public_key_b64: <base64>
+            hkdf_salt_b64: <base64>
             wrapped_dek_b64: <base64>
         - encryption_key_id: 55
           member_id: 1
@@ -140,7 +142,7 @@ Keys are marked verified (`credential_verified = true`) after successful
 WebAuthn assertion. Verification method tracked: `webauthn`, `passphrase`,
 or `manual`.
 
-**Source**: `lib/pki.js:352-353`
+**Source**: `lib/pki.js` registration return fields, `lib/webauthn.js` finalize flow
 
 ### 3.4 Recovery
 
@@ -166,12 +168,14 @@ Does **not**:
 - Rewrite existing document envelopes
 - Remove holder references from documents
 - Check whether affected documents would become stranded
-- Allow recovery of the revoked key's material (including via mnemonic)
+- Allow recovery of the revoked key's material through the normal app/API path
 
-**Known limitation**: Revocation of a sole active holder permanently strands
-any encrypted documents referencing that key. Re-enrolling the same physical
-authenticator does not restore access because a new keypair is generated.
-Hardening work (H1/H2) will add dependency analysis and revoke guards.
+**Known limitation**: Revocation of a sole active holder strands any encrypted
+documents referencing that key in the normal application flow. Re-enrolling the
+same physical authenticator does not restore access because a new keypair is
+generated. Offline break-glass recovery may still be possible if exported key
+material and recovery words were retained. Hardening work (H1/H2) will add
+dependency analysis and revoke guards.
 
 **Source**: `lib/pki.js:115-131`, `server.js:587-598`
 
@@ -225,7 +229,7 @@ Backup archives are optionally encrypted using a separate mechanism from PKI:
 
 | Aspect | Implementation |
 |---|---|
-| KDF | Argon2id (2^16 memory, 3 iterations) with scrypt fallback |
+| KDF | scrypt (N=2^16, r=8, p=1, maxmem 128 MiB) |
 | Cipher | AES-256-GCM |
 | Format | Version 1 header + salt(32) + iv(12) + tag(16) + ciphertext |
 
@@ -233,7 +237,7 @@ Backup encryption is independent of document-level PKI encryption. An
 encrypted backup may contain both plaintext and PKI-encrypted documents.
 PKI-encrypted document files are stored as ciphertext in the backup.
 
-**Source**: `lib/backup.js:104-119`, `public/crypto-helpers.js:76-98`
+**Source**: `lib/backup.js:104-119`
 
 ### 5.2 Backup contents
 
@@ -288,9 +292,13 @@ Token-based document sharing for non-authenticated access:
 
 ### 6.3 Parent-only routes
 
-The following routes are restricted to parent role:
-`/backup.html`, `/import.html`, `/insights.html`, settings, member
-management, key management for other members.
+The following **page surfaces** are restricted to parent role by the HTML page
+gate:
+`/backup.html`, `/import.html`, `/insights.html`
+
+Additional mutation endpoints elsewhere in the app also enforce parent-only or
+equivalent elevated access, but they are not represented by the single
+`PARENT_ONLY_PAGES` constant.
 
 **Source**: `server.js:146`
 

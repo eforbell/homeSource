@@ -23,7 +23,8 @@ primary key is unavailable. This is the filing cabinet with a lock.
 The canonical crypto state lives in per-document JSONB envelopes
 (`documents.encryption_metadata.files.*.holders[]`). This is correct for
 Use Case 1: the envelope is self-describing, travels with the document in
-backups, and needs no cross-document querying.
+backups, and does not require a relational cross-document authorization model
+to remain the source of truth.
 
 ### Use Case 2: Estate planning and inheritance (future, design guide vision)
 
@@ -32,10 +33,11 @@ trustee keys, sealed until a deadman switch trips. Different roles, different
 ceremony, different UX voice. Described in `homesource-treatment.md`.
 
 Estate-planning surfaces (permission matrix, beneficiary directory, sealed
-envelopes) will require a relational holder model for cross-document queries
-("which docs has Eric designated for Daniel?"). The existing `key_holders`
-table was placed as a day-2 placeholder for this — intentionally unused by
-Phase 1/2A, but architecturally load-bearing for Use Case 2.
+envelopes) will likely require a relational holder model or projection for
+cross-document queries ("which docs has Eric designated for Daniel?"). The
+existing `key_holders` table was placed as a day-2 placeholder for this —
+intentionally unused by Phase 1/2A, but reserved for possible Use Case 2
+evolution.
 
 ### Relationship between use cases
 
@@ -135,15 +137,18 @@ These findings are based on current implementation review:
      support an `includeRevoked` parameter before revoked keys can be
      shown in any UI
 
-9. **Recovery key material is inaccessible after revocation**
+9. **Recovery key material is inaccessible after revocation through the app**
    - `getMemberKeyMaterial()` filters `revoked_at IS NULL`
    - `saveRecoveryWrap()` also requires non-revoked status
    - If a key is revoked, the recovery-wrapped private key becomes
-     unreachable through the API — even mnemonic-based recovery cannot
-     restore it through the application
+     unreachable through the API — mnemonic-based recovery cannot restore it
+     through the normal application runtime
    - Combined with finding #5 (re-enrollment doesn't reconnect), this
      means revocation severs both the primary and recovery decryption
-     paths permanently
+     paths inside the app
+   - Note: this is distinct from offline break-glass recovery using exported
+     backup material and recovery words; that path may still exist if the
+     operator retained the necessary artifacts
 
 10. **`key_holders` table is unused but architecturally reserved**
     - Zero application reads in shipped code
@@ -151,9 +156,9 @@ These findings are based on current implementation review:
       roles (`owner, backup, beneficiary`)
     - Exported in backups (`lib/backup.js:85`) despite being empty, which
       creates false confidence on restore
-    - However, the table is a forward placeholder for Use Case 2
+    - However, the table is a forward placeholder for possible Use Case 2
       (estate-planning relational model) — see "Use case context" and
-      "Data model stance" sections. Do not drop.
+      "Data model stance" sections. Do not drop casually.
 
 ---
 

@@ -122,8 +122,9 @@ or quorum is required.
 
 ### Key lifecycle
 
-1. **Registration** — WebAuthn ceremony with PRF extension generates a
-   hardware-bound key. Passphrase-derived keys available as fallback.
+1. **Registration** — WebAuthn ceremony with PRF extension establishes a
+   hardware/passkey-protected unlock path for a client-generated X25519
+   keypair. Passphrase-derived keys available as fallback.
 2. **Verification** — keys are marked verified after successful assertion.
 3. **Recovery setup** — optional BIP39 mnemonic wraps the private key for
    offline recovery.
