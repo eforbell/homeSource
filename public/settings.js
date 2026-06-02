@@ -288,13 +288,51 @@
     return API.get(`api/members/${memberId}/keys/${keyId}/dependencies`);
   }
 
-  function summarizeDependencyTitles(documents) {
-    const titles = (Array.isArray(documents) ? documents : [])
+  function renderDependencyTitleList(documents, maxItems = 3) {
+    const items = (Array.isArray(documents) ? documents : [])
       .map((doc) => String(doc?.title || '').trim())
-      .filter(Boolean)
-      .slice(0, 3);
-    if (!titles.length) return '';
-    return ` Affected: ${titles.join(', ')}${documents.length > titles.length ? ', …' : ''}.`;
+      .filter(Boolean);
+    if (!items.length) return '';
+    const visible = items.slice(0, maxItems);
+    const remaining = items.length - visible.length;
+    return `
+      <div style="margin-top:0.75rem;">
+        <div class="text-xs text-dim" style="margin-bottom:0.35rem;">Affected documents</div>
+        <ul style="margin:0; padding-left:1.1rem; line-height:1.45;">
+          ${visible.map((title) => `<li>${esc(title)}</li>`).join('')}
+          ${remaining > 0 ? `<li>+ ${remaining} more</li>` : ''}
+        </ul>
+      </div>
+    `;
+  }
+
+  function buildRevokeConfirmMessage(keyLabel, dependencies) {
+    const dependencyCount = Number(dependencies.document_count || 0);
+    if (!dependencyCount) {
+      return {
+        html: `
+          <div style="line-height:1.5;">
+            <div>Revoke <strong>${esc(keyLabel)}</strong>?</div>
+            <div style="margin-top:0.5rem;">It is not currently referenced by any PKI-encrypted documents.</div>
+          </div>
+        `
+      };
+    }
+
+    return {
+      html: `
+        <div style="line-height:1.5;">
+          <div>Revoke <strong>${esc(keyLabel)}</strong>?</div>
+          <div style="margin-top:0.5rem;">
+            It is referenced by <strong>${dependencyCount}</strong> PKI-encrypted document${dependencyCount === 1 ? '' : 's'}.
+          </div>
+          <div style="margin-top:0.35rem;">
+            Another active holder can still open each one.
+          </div>
+          ${renderDependencyTitleList(dependencies.documents || [])}
+        </div>
+      `
+    };
   }
 
   async function revokeKey(memberId, keyId) {
@@ -319,16 +357,13 @@
 
       if (inconsistentDocs.length) {
         toast(
-          `You cannot revoke "${key.label || 'this key'}" yet because encrypted document holder metadata is inconsistent.${summarizeDependencyTitles(inconsistentDocs)}`,
+          `You cannot revoke "${key.label || 'this key'}" yet because encrypted document holder metadata is inconsistent.`,
           'error'
         );
         return;
       }
 
-      const dependencyCount = Number(dependencies.document_count || 0);
-      const message = dependencyCount
-        ? `Revoke "${key.label || 'this key'}"? It is referenced by ${dependencyCount} PKI-encrypted document${dependencyCount === 1 ? '' : 's'}, but each still has another active holder who can open it.${summarizeDependencyTitles(dependencies.documents || [])}`
-        : `Revoke "${key.label || 'this key'}"? It is not currently referenced by any PKI-encrypted documents.`;
+      const message = buildRevokeConfirmMessage(key.label || 'this key', dependencies);
       if (!await showConfirm('Revoke Key', message)) {
         return;
       }
@@ -937,7 +972,12 @@
   function showConfirm(title, message) {
     return new Promise((resolve) => {
       document.getElementById('confirm-title').textContent = title;
-      document.getElementById('confirm-message').textContent = message;
+      const messageEl = document.getElementById('confirm-message');
+      if (message && typeof message === 'object' && typeof message.html === 'string') {
+        messageEl.innerHTML = message.html;
+      } else {
+        messageEl.textContent = message;
+      }
       const modal = document.getElementById('confirm-modal');
       const okBtn = document.getElementById('confirm-ok-btn');
       const cancelBtn = document.getElementById('confirm-cancel-btn');
