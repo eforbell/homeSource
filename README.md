@@ -85,6 +85,73 @@ Passphrase-based with scrypt hashing and session cookies (30-day TTL). Cookie na
 - Kids get read-only access to their own and shared documents
 - Share links use token + optional PIN, no session required
 
+## PKI Document Encryption
+
+Home Source supports end-to-end encryption of individual documents using a
+per-member public key infrastructure. The server never holds plaintext private
+keys or DEKs — all encryption and decryption happens client-side in the browser.
+
+### Cryptographic foundation
+
+- **Key agreement**: X25519 ECDH (via Web Crypto)
+- **Key wrapping**: AES-KW (RFC 3394) — nonce-free with intrinsic integrity
+- **Data encryption**: AES-256-GCM per file (random DEK per document)
+- **Key protection**: WebAuthn PRF extension (hardware keys) or PBKDF2
+  passphrase derivation (fallback)
+- **Recovery**: BIP39 12-word mnemonic wraps the member private key for
+  offline recovery
+
+### Envelope model
+
+Each encrypted document carries a self-describing envelope in
+`documents.encryption_metadata`:
+
+```
+document
+  └── files
+       └── upload
+            ├── iv, tag, ciphertext (AES-256-GCM)
+            └── holders[]
+                 ├── holder 0: owner (wrapped DEK → owner's public key)
+                 ├── holder 1: backup (wrapped DEK → backup key)
+                 └── holder 2: beneficiary (wrapped DEK → alternate member)
+```
+
+Any one holder can independently decrypt (1-of-M access model). No threshold
+or quorum is required.
+
+### Key lifecycle
+
+1. **Registration** — WebAuthn ceremony with PRF extension generates a
+   hardware-bound key. Passphrase-derived keys available as fallback.
+2. **Verification** — keys are marked verified after successful assertion.
+3. **Recovery setup** — optional BIP39 mnemonic wraps the private key for
+   offline recovery.
+4. **Revocation** — logical disablement (`revoked_at` timestamp). Revoked
+   keys are excluded from new encryptions and unlock eligibility. Note:
+   revocation is currently irreversible — re-enrolling the same physical
+   authenticator generates a new cryptographic identity.
+
+### Multi-holder support
+
+- **Backup keys** — same member registers a second key (e.g., YubiKey +
+  1Password passkey). Existing encrypted documents can be extended with
+  `POST /api/documents/:id/pki-holders/add`.
+- **Trusted alternates** — parent can authorize another household member as
+  a beneficiary holder on specific documents.
+- **Holder roles**: `owner`, `backup`, `beneficiary`
+
+### Current limitations
+
+Key revocation does not rewrite existing document envelopes. Revoking the
+sole active holder for a document renders it permanently unrecoverable.
+Hardening work is planned to add dependency visibility, revoke guards, and
+holder replacement flows — see
+[planning/features/feature-11-pki-hardening-plan.md](planning/features/feature-11-pki-hardening-plan.md).
+
+For the full security capabilities inventory, see
+[docs/security-capabilities.md](docs/security-capabilities.md).
+
 ## Document Scanning
 
 Client-side scanning via jscanify (vendored) + OpenCV.js (CDN):
