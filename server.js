@@ -422,11 +422,12 @@ app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
 app.get('/api/members/:id/keys', requireAuth, async (req, res) => {
   try {
     const memberId = Number(req.params.id);
+    const includeRevoked = req.query.includeRevoked === '1' || req.query.includeRevoked === 'true';
     // Kids can only see their own keys
     if (req.member.role === 'kid' && req.member.id !== memberId) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    res.json(await pki.listMemberKeys(memberId));
+    res.json(await pki.listMemberKeys(memberId, { includeRevoked }));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

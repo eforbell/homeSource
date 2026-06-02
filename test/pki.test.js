@@ -104,6 +104,40 @@ describe('PKI key management', () => {
       assert.equal(keys.length, 1);
       assert.equal(keys[0].label, 'Key 2');
     });
+
+    it('returns active and revoked keys when includeRevoked is true', async () => {
+      const pki = require('../lib/pki');
+
+      const activeKey = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('active-key'),
+        encryptedPrivateKey: 'enc-active',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Active Key'
+      });
+
+      const revokedKey = await pki.registerMemberKey({
+        memberId: parent.id,
+        publicKey: encodePublicKey('revoked-key'),
+        encryptedPrivateKey: 'enc-revoked',
+        algorithm: 'x25519',
+        credentialId: null,
+        prfEnabled: false,
+        protectionTier: 'passphrase',
+        label: 'Revoked Key'
+      });
+      await pki.revokeMemberKey(revokedKey.id, parent.id, parent.id);
+
+      const keys = await pki.listMemberKeys(parent.id, { includeRevoked: true });
+      assert.equal(keys.length, 2);
+      assert.equal(keys[0].id, activeKey.id);
+      assert.equal(keys[0].revoked_at, null);
+      assert.equal(keys[1].id, revokedKey.id);
+      assert.ok(keys[1].revoked_at);
+    });
   });
 
   describe('getMemberKey', () => {
