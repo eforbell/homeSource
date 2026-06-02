@@ -1357,7 +1357,9 @@
             <label class="form-label">Key Passphrase</label>
             <input type="password" id="unlock-key-passphrase" class="form-input" placeholder="Enter the passphrase for your encryption key">
           </div>
-          <button id="unlock-btn" class="btn btn-primary" ${eligibleHolders.length ? '' : 'disabled'}>Unlock with Your Key</button>
+          ${eligibleHolders.length
+            ? '<button id="unlock-btn" class="btn btn-primary">Unlock with Your Key</button>'
+            : '<button class="btn" disabled aria-disabled="true">No Active Unlock Key</button>'}
           <div id="unlock-status" class="text-sm mt-1 text-dim"></div>
         </div>` : `
         <div style="max-width:460px; margin:0 auto; text-align:left; padding:1rem;">
