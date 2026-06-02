@@ -563,6 +563,38 @@
         });
     }
 
+    function countActivePkiHolders(holders) {
+      return (Array.isArray(holders) ? holders : []).filter((holder) => !holder?.revoked_at).length;
+    }
+
+    function countRevokedPkiHolders(holders) {
+      return (Array.isArray(holders) ? holders : []).filter((holder) => !!holder?.revoked_at).length;
+    }
+
+    function classifyDocumentPkiHealth(holders) {
+      const activeCount = countActivePkiHolders(holders);
+      const revokedCount = countRevokedPkiHolders(holders);
+      if (activeCount === 0) {
+        return {
+          status: 'stranded_no_active',
+          title: 'Stranded: no active unlock paths remain',
+          detail: `${activeCount} active holders · ${revokedCount} revoked holder${revokedCount === 1 ? '' : 's'}`
+        };
+      }
+      if (activeCount === 1) {
+        return {
+          status: 'at_risk_single_active',
+          title: 'At risk: only one active unlock path remains',
+          detail: `${activeCount} active holder · ${revokedCount} revoked holder${revokedCount === 1 ? '' : 's'}`
+        };
+      }
+      return {
+        status: 'healthy_redundancy',
+        title: 'Healthy redundancy',
+        detail: `${activeCount} active holders · ${revokedCount} revoked holder${revokedCount === 1 ? '' : 's'}`
+      };
+    }
+
     function getSelectedEligiblePkiHolder(doc, keyInfo) {
       const eligible = getEligiblePkiHolders(doc, keyInfo);
       if (!eligible.length) return null;
@@ -576,6 +608,16 @@
       const role = holder.role ? ` (${holder.role})` : '';
       const protection = holder.protection_tier ? ` · ${holder.protection_tier}` : '';
       return `${holder.label || 'Unnamed key'}${role}${protection}`;
+    }
+
+    function renderPkiHolderStatusBadges(holder, primaryKeyId) {
+      const badges = [
+        `<span class="badge ${holder?.revoked_at ? 'badge-danger' : 'badge-info'}">${holder?.revoked_at ? 'Revoked' : 'Active'}</span>`,
+        `<span class="badge badge-muted">${esc(holder?.role || 'holder')}</span>`,
+        holder?.protection_tier ? `<span class="badge ${holder.protection_tier === 'hardware' ? 'badge-info' : (holder.protection_tier === 'platform' ? 'badge-warn' : 'badge-muted')}">${esc(holder.protection_tier)}</span>` : '',
+        String(holder?.encryption_key_id) === String(primaryKeyId || '') ? '<span class="badge badge-warn">Primary</span>' : ''
+      ].filter(Boolean);
+      return badges.join(' ');
     }
 
     function buildNormalizedPkiEnvelope(doc, keyInfo) {
@@ -1266,6 +1308,10 @@
       if (!availableMembers.length && holders.some((h) => Number(h.member_id) !== currentMember?.id)) {
         try { availableMembers = await API.get('api/members'); } catch {}
       }
+      const primaryKeyId = keyInfo?.primary_key?.id || keyInfo?.encryption_key_id || null;
+      const pkiHealth = classifyDocumentPkiHealth(holders);
+      const currentMemberHolders = holders.filter((holder) => currentMember && Number(holder.member_id) === Number(currentMember.id));
+      const currentMemberRevokedOnly = currentMemberHolders.length > 0 && currentMemberHolders.every((holder) => !!holder.revoked_at);
       const holderDisplayName = (holder) => holder
         ? (holder.member_name
           || (doc.owners || []).find((owner) => Number(owner.id) === Number(holder.member_id))?.name
@@ -1280,7 +1326,19 @@
           <div class="text-dim text-sm mb-1">Mode: <strong>pki</strong></div>
           <div class="text-dim text-sm mb-1">This document is encrypted to registered member keys. It will be unlocked locally in your browser.</div>
           <div class="text-dim text-sm mb-1"><strong>Access model:</strong> 1-of-M (any one selected key can unlock)</div>
-          ${holders.length ? `<div class="text-dim text-sm mb-1"><strong>Authorized holders:</strong><div style="margin-top:0.25rem;">${holders.map((holder) => `${esc(holderDisplayName(holder) || 'Unknown member')} — ${esc(formatUnlockHolderLabel(holder))}`).join('<br>')}</div></div>` : ''}
+          ${holders.length ? `
+            <div class="text-dim text-sm mb-1">
+              <strong>PKI health:</strong> ${esc(pkiHealth.title)}
+              <div style="margin-top:0.2rem;">${esc(pkiHealth.detail)}</div>
+            </div>` : ''}
+          ${holders.length ? `<div class="text-dim text-sm mb-1"><strong>Authorized holders:</strong><div style="margin-top:0.35rem; display:flex; flex-direction:column; gap:0.45rem;">${holders.map((holder) => `
+            <div style="padding:0.55rem 0.65rem; border:1px solid var(--border); border-radius:0.65rem;">
+              <div style="font-weight:600;">${esc(holderDisplayName(holder) || 'Unknown member')}</div>
+              <div style="margin-top:0.15rem;">${esc(formatUnlockHolderLabel(holder))}</div>
+              ${holder.key_fingerprint ? `<div class="text-xs text-dim" style="margin-top:0.2rem; overflow-wrap:anywhere; word-break:break-word;">${esc(holder.key_fingerprint)}</div>` : ''}
+              <div style="margin-top:0.45rem; display:flex; gap:0.35rem; flex-wrap:wrap;">${renderPkiHolderStatusBadges(holder, primaryKeyId)}</div>
+            </div>
+          `).join('')}</div></div>` : ''}
           ${selectedHolder?.key_fingerprint ? `<div class="text-dim text-sm mb-1"><strong>Selected fingerprint:</strong><div style="margin-top:0.15rem; overflow-wrap:anywhere; word-break:break-word;">${esc(selectedHolder.key_fingerprint)}</div></div>` : ''}
           ${eligibleHolders.length > 1 ? `
             <div class="form-group mt-1">
@@ -1288,7 +1346,13 @@
               <select id="unlock-pki-holder" class="form-select">${eligibleHolders.map((holder) => `<option value="${esc(String(holder.encryption_key_id))}">${esc(formatUnlockHolderLabel(holder))}</option>`).join('')}</select>
             </div>` : ''}
           ${selectedHolder ? `<div class="text-dim text-sm mb-1"><strong>Selected key:</strong><div style="margin-top:0.15rem; overflow-wrap:anywhere; word-break:break-word;">${esc(formatUnlockHolderLabel(selectedHolder))}</div></div>` : ''}
-          ${!eligibleHolders.length ? '<div class="text-dim text-sm mb-1">None of your enrolled keys currently match this document.</div>' : ''}
+          ${!eligibleHolders.length ? `<div class="text-dim text-sm mb-1">${
+            currentMemberRevokedOnly
+              ? 'Your historical holder entries on this document are revoked and can no longer unlock it.'
+              : (countActivePkiHolders(holders) === 0
+                ? 'This document currently has no active unlock paths in the app.'
+                : 'None of your enrolled keys currently match this document.')
+          }</div>` : ''}
           <div class="form-group mt-1" id="unlock-key-passphrase-wrap" style="display:${selectedRequiresKeyPassphrase ? 'block' : 'none'};">
             <label class="form-label">Key Passphrase</label>
             <input type="password" id="unlock-key-passphrase" class="form-input" placeholder="Enter the passphrase for your encryption key">
