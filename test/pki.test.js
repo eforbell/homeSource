@@ -748,6 +748,74 @@ describe('validatePkiUpload', () => {
     assert.equal(keyId, ericKey.id);
   });
 
+  it('still enforces role constraints on newly added holders even when existing holders are grandfathered', async () => {
+    const pki = require('../lib/pki');
+    const val = await createMember('Val', 'parent');
+    const ericKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('role-enforce-eric-pub'),
+      encryptedPrivateKey: 'enc1',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Eric Owner'
+    });
+    const valKey = await pki.registerMemberKey({
+      memberId: val.id,
+      publicKey: encodePublicKey('role-enforce-val-pub'),
+      encryptedPrivateKey: 'enc2',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Val Beneficiary'
+    });
+    const ericBackupKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: encodePublicKey('role-enforce-bad-pub'),
+      encryptedPrivateKey: 'enc3',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Eric Backup Attempt'
+    });
+
+    await assert.rejects(
+      () => pki.validatePkiUpload({
+        files: {
+          upload: {
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: ericKey.id,
+                key_fingerprint: ericKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'abc', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              },
+              {
+                member_id: val.id,
+                encryption_key_id: valKey.id,
+                key_fingerprint: valKey.key_fingerprint,
+                role: 'beneficiary',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: ericBackupKey.id,
+                key_fingerprint: ericBackupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'stu', hkdf_salt_b64: 'vwx', wrapped_dek_b64: 'yza' }
+              }
+            ]
+          }
+        }
+      }, val.id, { existingHolderKeyIds: [ericKey.id, valKey.id] }),
+      /backup holders must belong to the uploading member/i
+    );
+  });
+
   it('rejects cross-member holders for non-parent uploaders', async () => {
     const pki = require('../lib/pki');
     const kid = await createMember('Bob', 'kid');

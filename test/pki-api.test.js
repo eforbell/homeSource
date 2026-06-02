@@ -2,7 +2,7 @@
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedDel } = require('./helpers');
+const { startServer, stopServer, resetDatabase, createMember, loginAs, authedGet, authedDel, authedPost } = require('./helpers');
 const pki = require('../lib/pki');
 
 let parent;
@@ -192,5 +192,66 @@ describe('PKI key dependency and revoke guard API', () => {
     const ownerData = await ownerRes.json();
     assert.equal(ownerData.code, 'PKI_KEY_DEPENDENCY_INCONSISTENT');
     assert.equal(ownerData.affected_documents[0].title, 'Inconsistent Protected Doc');
+  });
+
+  it('rejects add-holder when existing holder integrity is altered', async () => {
+    const key = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: Buffer.from('integrity-owner').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"def"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Integrity Owner',
+    });
+    const backupKey = await pki.registerMemberKey({
+      memberId: parent.id,
+      publicKey: Buffer.from('integrity-backup').toString('base64'),
+      encryptedPrivateKey: '{"kind":"passphrase_pbkdf2_v1","salt_b64":"abc","wrapped_private_key_b64":"ghi"}',
+      algorithm: 'x25519',
+      credentialId: null,
+      prfEnabled: false,
+      protectionTier: 'passphrase',
+      label: 'Integrity Backup',
+    });
+
+    const doc = await createPkiDocForKey({
+      title: 'Integrity Test Doc',
+      owner: parent,
+      primaryKey: key
+    });
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/add`, parentCookie, {
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'abc',
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: key.id,
+                key_fingerprint: key.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'TAMPERED', hkdf_salt_b64: 'def', wrapped_dek_b64: 'ghi' }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'jkl', hkdf_salt_b64: 'mno', wrapped_dek_b64: 'pqr' }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.ok([400, 409].includes(res.status), `Expected 400 or 409, got ${res.status}`);
+    const data = await res.json();
+    assert.match(data.error, /existing PKI holder|holder.*metadata|integrity/i);
   });
 });
