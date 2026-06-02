@@ -284,14 +284,60 @@
     }
   }
 
+  async function getKeyDependencies(memberId, keyId) {
+    return API.get(`api/members/${memberId}/keys/${keyId}/dependencies`);
+  }
+
+  function summarizeDependencyTitles(documents) {
+    const titles = (Array.isArray(documents) ? documents : [])
+      .map((doc) => String(doc?.title || '').trim())
+      .filter(Boolean)
+      .slice(0, 3);
+    if (!titles.length) return '';
+    return ` Affected: ${titles.join(', ')}${documents.length > titles.length ? ', …' : ''}.`;
+  }
+
   async function revokeKey(memberId, keyId) {
     const key = (state.keysByMember.get(memberId) || []).find((entry) => entry.id === keyId);
     if (!key) return toast('Key not found', 'error');
-    if (!await showConfirm('Revoke Key', `Revoke "${key.label || 'this key'}"? Any future PKI uploads tied to it will be blocked.`)) {
-      return;
-    }
     try {
-      await API.del(`api/members/${memberId}/keys/${keyId}`);
+      const dependencies = await getKeyDependencies(memberId, keyId);
+      const unsafeDocs = Array.isArray(dependencies.documents)
+        ? dependencies.documents.filter((doc) => doc.status === 'sole_active_holder')
+        : [];
+      const inconsistentDocs = Array.isArray(dependencies.documents)
+        ? dependencies.documents.filter((doc) => doc.status === 'holder_metadata_inconsistent')
+        : [];
+
+      if (unsafeDocs.length) {
+        toast(
+          `You cannot revoke "${key.label || 'this key'}" yet. It is the sole active unlock holder for ${unsafeDocs.length} PKI-encrypted document${unsafeDocs.length === 1 ? '' : 's'}.${summarizeDependencyTitles(unsafeDocs)}`,
+          'error'
+        );
+        return;
+      }
+
+      if (inconsistentDocs.length) {
+        toast(
+          `You cannot revoke "${key.label || 'this key'}" yet because encrypted document holder metadata is inconsistent.${summarizeDependencyTitles(inconsistentDocs)}`,
+          'error'
+        );
+        return;
+      }
+
+      const dependencyCount = Number(dependencies.document_count || 0);
+      const message = dependencyCount
+        ? `Revoke "${key.label || 'this key'}"? It is referenced by ${dependencyCount} PKI-encrypted document${dependencyCount === 1 ? '' : 's'}, but each still has another active holder who can open it.${summarizeDependencyTitles(dependencies.documents || [])}`
+        : `Revoke "${key.label || 'this key'}"? It is not currently referenced by any PKI-encrypted documents.`;
+      if (!await showConfirm('Revoke Key', message)) {
+        return;
+      }
+
+      const res = await fetch(`api/members/${memberId}/keys/${keyId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
       toast('Key revoked', 'success');
       await loadMembersAndKeys();
       if (state.me.role === 'parent') await loadAudit();
