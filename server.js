@@ -1025,6 +1025,210 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
   }
 });
 
+app.post('/api/documents/:id/pki-holders/replace', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') {
+      return res.status(409).json({ error: 'Document is not PKI-encrypted' });
+    }
+
+    const body = req.body || {};
+    const oldHolderKeyId = Number(body.old_holder_key_id);
+    const newHolderKeyId = Number(body.new_holder_key_id);
+    const encryptionMetadata = body.encryption_metadata && typeof body.encryption_metadata === 'object'
+      ? body.encryption_metadata
+      : null;
+    if (!oldHolderKeyId) {
+      return res.status(400).json({ error: 'old_holder_key_id is required' });
+    }
+    if (!newHolderKeyId) {
+      return res.status(400).json({ error: 'new_holder_key_id is required' });
+    }
+    if (!encryptionMetadata) {
+      return res.status(400).json({ error: 'encryption_metadata is required' });
+    }
+
+    const normalized = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: encryptionMetadata });
+    const existingEntry = doc.encryption_metadata?.files?.upload || {};
+    const existingHolders = Array.isArray(existingEntry.holders) ? existingEntry.holders : [];
+    const normalizedExistingHolders = existingHolders.map((holder, index) => ({
+      ...holder,
+      role: holder.role || (index === 0 ? 'owner' : 'backup'),
+      wrapped_dek: holder.wrapped_dek || (index === 0 && existingEntry.wrapped_dek ? existingEntry.wrapped_dek : null)
+    }));
+    const existingByKeyId = new Map(normalizedExistingHolders.map((holder) => [Number(holder.encryption_key_id), holder]));
+    const oldHolder = existingByKeyId.get(oldHolderKeyId);
+    if (!oldHolder) {
+      return res.status(400).json({ error: 'old_holder_key_id is not an existing holder on this document' });
+    }
+    if (Number(oldHolder.member_id) !== Number(req.member.id)) {
+      return res.status(400).json({ error: 'This route currently supports replacing your own revoked holder only' });
+    }
+    if (existingByKeyId.has(newHolderKeyId)) {
+      return res.status(400).json({ error: 'new_holder_key_id is already enrolled on this document' });
+    }
+
+    const { rows: holderKeyRows } = await pool.query(
+      `SELECT id, member_id, revoked_at
+       FROM encryption_keys
+       WHERE id = ANY($1::int[]) AND key_type = 'member'`,
+      [[...new Set([...normalizedExistingHolders.map((holder) => Number(holder.encryption_key_id)), newHolderKeyId])]]
+    );
+    const holderKeysById = new Map(holderKeyRows.map((row) => [Number(row.id), row]));
+    const oldHolderKeyRow = holderKeysById.get(oldHolderKeyId);
+    if (!oldHolderKeyRow) {
+      return res.status(400).json({ error: 'Existing holder key material is missing' });
+    }
+    if (!oldHolderKeyRow.revoked_at) {
+      return res.status(400).json({ error: 'This route currently supports replacing revoked holders only' });
+    }
+
+    const existingHolderKeyIds = normalizedExistingHolders
+      .map((holder) => Number(holder.encryption_key_id))
+      .filter((keyId) => keyId !== oldHolderKeyId);
+    await pki.validatePkiUpload(normalized.encryption_metadata, req.member.id, { existingHolderKeyIds });
+
+    const updatedHolders = normalized.encryption_metadata?.files?.upload?.holders || [];
+    const updatedByKeyId = new Map(updatedHolders.map((holder) => [Number(holder.encryption_key_id), holder]));
+    if (updatedByKeyId.has(oldHolderKeyId)) {
+      return res.status(400).json({ error: 'The replaced holder must be removed from the updated envelope' });
+    }
+    const newHolder = updatedByKeyId.get(newHolderKeyId);
+    if (!newHolder) {
+      return res.status(400).json({ error: 'The replacement holder must be present in the updated envelope' });
+    }
+    if (updatedHolders.length !== normalizedExistingHolders.length) {
+      return res.status(400).json({ error: 'This route supports replacing exactly one holder at a time' });
+    }
+    if (Number(newHolder.member_id) !== Number(req.member.id)) {
+      return res.status(400).json({ error: 'This route currently supports same-member replacement only' });
+    }
+    if (String(newHolder.role || '') !== String(oldHolder.role || '')) {
+      return res.status(400).json({ error: 'Replacement holder must inherit the replaced holder role' });
+    }
+
+    function choosePrimaryHolderKeyId(holders, previousPrimaryKeyId, keysById) {
+      const previous = holders.find((holder) => Number(holder.encryption_key_id) === Number(previousPrimaryKeyId));
+      if (previous) {
+        const row = keysById.get(Number(previous.encryption_key_id));
+        if (row && !row.revoked_at) return Number(previous.encryption_key_id);
+      }
+      const firstActive = holders.find((holder) => {
+        const row = keysById.get(Number(holder.encryption_key_id));
+        return row && !row.revoked_at;
+      });
+      return firstActive ? Number(firstActive.encryption_key_id) : null;
+    }
+
+    const updated = await updatePkiDocumentAccess(doc.id, {
+      encryptionMetadata: normalized.encryption_metadata,
+      encryptionKeyId: choosePrimaryHolderKeyId(updatedHolders, doc.encryption_key_id, holderKeysById),
+      validate: async (lockedDoc) => {
+        const lockedEntry = lockedDoc.encryption_metadata?.files?.upload || {};
+        const lockedHolders = Array.isArray(lockedEntry.holders) ? lockedEntry.holders : [];
+        const normalizedLockedHolders = lockedHolders.map((holder, index) => ({
+          ...holder,
+          role: holder.role || (index === 0 ? 'owner' : 'backup'),
+          wrapped_dek: holder.wrapped_dek || (index === 0 && lockedEntry.wrapped_dek ? lockedEntry.wrapped_dek : null)
+        }));
+        const lockedByKeyId = new Map(normalizedLockedHolders.map((holder) => [Number(holder.encryption_key_id), holder]));
+
+        for (const existingHolder of normalizedLockedHolders) {
+          const keyId = Number(existingHolder.encryption_key_id);
+          if (keyId === oldHolderKeyId) continue;
+          const updatedHolder = updatedByKeyId.get(keyId);
+          if (!updatedHolder) {
+            throw new Error('Unchanged PKI holder metadata is missing from the updated envelope');
+          }
+          const existingWrappedDek = existingHolder.wrapped_dek || null;
+          const updatedWrappedDek = updatedHolder.wrapped_dek || null;
+          const wrappedDekChanged =
+            String(updatedWrappedDek?.kind || '') !== String(existingWrappedDek?.kind || '')
+            || String(updatedWrappedDek?.ephemeral_public_key_b64 || '') !== String(existingWrappedDek?.ephemeral_public_key_b64 || '')
+            || String(updatedWrappedDek?.hkdf_salt_b64 || '') !== String(existingWrappedDek?.hkdf_salt_b64 || '')
+            || String(updatedWrappedDek?.wrapped_dek_b64 || '') !== String(existingWrappedDek?.wrapped_dek_b64 || '');
+          const holderIntegrityChanged =
+            Number(updatedHolder.member_id) !== Number(existingHolder.member_id)
+            || String(updatedHolder.role || '') !== String(existingHolder.role || '')
+            || String(updatedHolder.key_fingerprint || '') !== String(existingHolder.key_fingerprint || '')
+            || wrappedDekChanged;
+          if (holderIntegrityChanged) {
+            throw new Error(`Existing PKI holder ${keyId} cannot be modified by the replace-holder route`);
+          }
+        }
+
+        if (!lockedByKeyId.has(oldHolderKeyId)) {
+          throw new Error('The replaced holder no longer exists on this document');
+        }
+      }
+    });
+    if (!updated) return res.status(404).json({ error: 'Document not found' });
+
+    await audit.log('document.pki_holder_replaced', 'document', doc.id, req.member.id, {
+      removed_holder_member_id: Number(oldHolder.member_id),
+      removed_holder_key_id: oldHolderKeyId,
+      role: oldHolder.role,
+      replacement_holder_member_id: Number(newHolder.member_id),
+      replacement_holder_key_id: newHolderKeyId,
+      holder_count_before: normalizedExistingHolders.length,
+      holder_count_after: updatedHolders.length,
+      old_primary_pointer: Number(doc.encryption_key_id || 0) || null,
+      new_primary_pointer: Number(updated.encryption_key_id || 0) || null
+    });
+    res.json({ ok: true, document: updated });
+  } catch (err) {
+    const safeMessage = String(err?.message || 'Unable to replace PKI holder');
+    const knownSafe = [
+      'Document not found',
+      'Access denied',
+      'Document is not PKI-encrypted',
+      'old_holder_key_id is required',
+      'new_holder_key_id is required',
+      'encryption_metadata is required',
+      'old_holder_key_id is not an existing holder on this document',
+      'This route currently supports replacing your own revoked holder only',
+      'new_holder_key_id is already enrolled on this document',
+      'Existing holder key material is missing',
+      'This route currently supports replacing revoked holders only',
+      'The replaced holder must be removed from the updated envelope',
+      'The replacement holder must be present in the updated envelope',
+      'This route supports replacing exactly one holder at a time',
+      'This route currently supports same-member replacement only',
+      'Replacement holder must inherit the replaced holder role',
+      'Unchanged PKI holder metadata is missing from the updated envelope',
+      'The replaced holder no longer exists on this document',
+      'PKI uploads require at least one holder per file',
+      'PKI holder must specify encryption_key_id',
+      'PKI upload contains duplicate holder encryption_key_id values',
+      'PKI holder must specify member_id',
+      'PKI holder must specify key_fingerprint',
+      'Multi-holder PKI uploads require holder-local wrapped_dek metadata for every holder',
+      'PKI backup holders must belong to the uploading member',
+      'PKI beneficiary holders must belong to a different member',
+      'The primary PKI holder must belong to the uploading member',
+      'PKI uploads must use the same primary encryption key for every file entry',
+      'PKI uploads require a primary holder',
+      'Only parent members may assign cross-member PKI holders',
+      'PKI envelope requires a non-empty holders array for each file'
+    ];
+    const knownSafePrefixes = [
+      'PKI holder role ',
+      'Encryption key ',
+      'Key fingerprint mismatch for encryption key ',
+      'Existing PKI holder '
+    ];
+    if (knownSafe.includes(safeMessage) || knownSafePrefixes.some((prefix) => safeMessage.startsWith(prefix))) {
+      return res.status(400).json({ error: safeMessage });
+    }
+    console.error('Unexpected PKI holder replacement error:', err);
+    res.status(500).json({ error: 'Unable to replace PKI holder' });
+  }
+});
+
 // ── Document files ──────────────────────────────────────────────────────────
 
 app.post('/api/documents/:id/files', requireAuth, async (req, res) => {
