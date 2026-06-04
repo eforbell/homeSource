@@ -398,4 +398,455 @@ describe('PKI holder repair API', () => {
     const afterBytes = fs.readFileSync(getFilePath(record.stored_filename));
     assert.deepEqual(afterBytes, beforeBytes);
   });
+
+  it('removes a revoked holder without changing ciphertext bytes when an active holder remains', async () => {
+    const { doc, record } = await createPkiDoc({
+      title: 'remove-revoked-holder',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: backupKey.id,
+          key_fingerprint: backupKey.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+    const beforeBytes = fs.readFileSync(getFilePath(record.stored_filename));
+    await pki.revokeMemberKey(backupKey.id, parent.id, parent.id);
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/remove`, parentCookie, {
+      remove_holder_key_id: backupKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.document.encryption_key_id, primaryKey.id);
+
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.encryption_metadata.files.upload.holders.length, 1);
+    assert.equal(detail.encryption_metadata.files.upload.holders[0].encryption_key_id, primaryKey.id);
+
+    const afterBytes = fs.readFileSync(getFilePath(record.stored_filename));
+    assert.deepEqual(afterBytes, beforeBytes);
+  });
+
+  it('reassigns the compatibility pointer if the removed revoked holder was primary', async () => {
+    const { doc } = await createPkiDoc({
+      title: 'remove-revoked-primary-pointer',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: backupKey.id,
+          key_fingerprint: backupKey.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+    await pki.revokeMemberKey(primaryKey.id, parent.id, parent.id);
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/remove`, parentCookie, {
+      remove_holder_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'stu',
+                  hkdf_salt_b64: 'vwx',
+                  wrapped_dek_b64: 'yza'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.document.encryption_key_id, backupKey.id);
+  });
+
+  it('rejects removal if the target holder is not revoked', async () => {
+    const { doc } = await createPkiDoc({
+      title: 'remove-active-holder-reject',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: backupKey.id,
+          key_fingerprint: backupKey.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/remove`, parentCookie, {
+      remove_holder_key_id: backupKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /supports removing revoked holders only/i);
+  });
+
+  it('rejects removal if it would leave the document without any active unlock holders', async () => {
+    const { doc } = await createPkiDoc({
+      title: 'remove-last-active-path-reject',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: backupKey.id,
+          key_fingerprint: backupKey.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+    await pki.revokeMemberKey(primaryKey.id, parent.id, parent.id);
+    await pki.revokeMemberKey(backupKey.id, parent.id, parent.id);
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/remove`, parentCookie, {
+      remove_holder_key_id: primaryKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'stu',
+                  hkdf_salt_b64: 'vwx',
+                  wrapped_dek_b64: 'yza'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /without any active unlock holders/i);
+  });
+
+  it('rejects removal if submitted envelope adds a new holder', async () => {
+    const extraKey = await createPassphraseProtectedKey(parent.id, 'Extra Added Key', 'extra-added-passphrase');
+    const { doc } = await createPkiDoc({
+      title: 'remove-with-added-holder-reject',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: backupKey.id,
+          key_fingerprint: backupKey.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+    await pki.revokeMemberKey(backupKey.id, parent.id, parent.id);
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/remove`, parentCookie, {
+      remove_holder_key_id: backupKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: extraKey.id,
+                key_fingerprint: extraKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'jkl',
+                  hkdf_salt_b64: 'mno',
+                  wrapped_dek_b64: 'pqr'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /does not allow adding replacement holders/i);
+  });
+
+  it('rejects removal if unchanged holder metadata is altered', async () => {
+    const secondRevoked = await createPassphraseProtectedKey(parent.id, 'Second Revoked Holder', 'second-revoked-passphrase');
+    const { doc } = await createPkiDoc({
+      title: 'remove-unchanged-holder-integrity',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: secondRevoked.id,
+          key_fingerprint: secondRevoked.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+    await pki.revokeMemberKey(secondRevoked.id, parent.id, parent.id);
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/remove`, parentCookie, {
+      remove_holder_key_id: secondRevoked.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: primaryKey.id,
+                key_fingerprint: primaryKey.key_fingerprint,
+                role: 'beneficiary',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'abc',
+                  hkdf_salt_b64: 'def',
+                  wrapped_dek_b64: 'ghi'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.match(data.error, /cannot be modified by the remove-holder route/i);
+  });
 });
