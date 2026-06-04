@@ -1276,6 +1276,7 @@
       }
       oldKeySelect.innerHTML = revokedSameMemberHolders.map((holder) => `<option value="${esc(String(holder.encryption_key_id))}">${esc(formatUnlockHolderLabel(holder))}</option>`).join('');
 
+      const holders = getPkiHoldersFromDoc(currentDoc, keyInfo);
       const currentHolderIds = new Set(holders.map((holder) => String(holder.encryption_key_id)));
       const replacementCandidates = memberKeys.filter((key) => !currentHolderIds.has(String(key.id)));
       if (!replacementCandidates.length) {
