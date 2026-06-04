@@ -563,6 +563,7 @@ describe('extend existing PKI document access', () => {
     return { doc, record };
   }
 
+
   it('adds a same-member backup key to an existing PKI document without changing ciphertext bytes', async () => {
     const { doc, record } = await createLegacySingleHolderPkiDoc();
     const beforeBytes = fs.readFileSync(getFilePath(record.stored_filename));
@@ -817,6 +818,7 @@ describe('extend existing PKI document access', () => {
     });
     assert.equal(res.status, 400);
   });
+
 });
 
 describe('kid access control', () => {
