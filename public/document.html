@@ -592,6 +592,14 @@
         });
     }
 
+    function getRevokedSameMemberHolders(doc, keyInfo) {
+      return getPkiHoldersFromDoc(doc, keyInfo).filter((holder) =>
+        currentMember
+        && Number(holder.member_id) === Number(currentMember.id)
+        && !!holder.revoked_at
+      );
+    }
+
     function countActivePkiHolders(holders) {
       return (Array.isArray(holders) ? holders : []).filter((holder) => !holder?.revoked_at).length;
     }
@@ -1262,10 +1270,7 @@
       if (!eligibleHolders.length) throw new Error('None of your current keys can unlock this document');
       holderSelect.innerHTML = eligibleHolders.map((holder) => `<option value="${esc(String(holder.encryption_key_id))}">${esc(formatUnlockHolderLabel(holder))}</option>`).join('');
 
-      const holders = getPkiHoldersFromDoc(currentDoc, keyInfo);
-      const revokedSameMemberHolders = holders.filter((holder) =>
-        Number(holder.member_id) === Number(currentMember.id) && !!holder.revoked_at
-      );
+      const revokedSameMemberHolders = getRevokedSameMemberHolders(currentDoc, keyInfo);
       if (!revokedSameMemberHolders.length) {
         throw new Error('No revoked same-member holders are available to replace on this document');
       }
@@ -1627,6 +1632,17 @@
         document.getElementById('doc-title').textContent = doc.title;
         document.title = `Home Source — ${doc.title}`;
 
+        let keyInfoForActions = null;
+        let canReplaceRevokedHolder = false;
+        if (doc.encryption_mode === 'pki') {
+          try {
+            keyInfoForActions = await API.get(`api/documents/${doc.id}/key-info`);
+            canReplaceRevokedHolder = getRevokedSameMemberHolders(doc, keyInfoForActions).length > 0;
+          } catch (err) {
+            console.error(err);
+          }
+        }
+
         // Actions
         const actions = document.getElementById('doc-actions');
         const encryptedDoc = isEncryptedDoc(doc);
@@ -1635,7 +1651,7 @@
           ${!encryptedDoc ? '<button class="btn btn-sm" onclick="openEncryptModal()">Encrypt</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddBackupKeyModal()">Add Backup Key</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddTrustedHolderModal()">Add Trusted Holder</button>' : ''}
-          ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openReplaceRevokedHolderModal()">Replace Revoked Holder</button>' : ''}
+          ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' && canReplaceRevokedHolder ? '<button class="btn btn-sm" onclick="openReplaceRevokedHolderModal()">Replace Revoked Holder</button>' : ''}
           <button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button>
           <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
           <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>

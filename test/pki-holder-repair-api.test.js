@@ -302,4 +302,100 @@ describe('PKI holder repair API', () => {
     const data = await res.json();
     assert.match(data.error, /cannot be modified by the replace-holder route/i);
   });
+
+  it('replaces a revoked primary on a multi-holder doc and points to the replacement holder', async () => {
+    const { doc, record } = await createPkiDoc({
+      title: 'multi-holder-primary-replace',
+      encryptionKeyId: primaryKey.id,
+      holders: [
+        {
+          member_id: parent.id,
+          encryption_key_id: primaryKey.id,
+          key_fingerprint: primaryKey.key_fingerprint,
+          role: 'owner',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'abc',
+            hkdf_salt_b64: 'def',
+            wrapped_dek_b64: 'ghi'
+          }
+        },
+        {
+          member_id: parent.id,
+          encryption_key_id: backupKey.id,
+          key_fingerprint: backupKey.key_fingerprint,
+          role: 'backup',
+          wrapped_dek: {
+            kind: 'pki_x25519',
+            ephemeral_public_key_b64: 'stu',
+            hkdf_salt_b64: 'vwx',
+            wrapped_dek_b64: 'yza'
+          }
+        }
+      ]
+    });
+    const beforeBytes = fs.readFileSync(getFilePath(record.stored_filename));
+    await pki.revokeMemberKey(primaryKey.id, parent.id, parent.id);
+
+    const res = await authedPost(`api/documents/${doc.id}/pki-holders/replace`, parentCookie, {
+      old_holder_key_id: primaryKey.id,
+      new_holder_key_id: replacementKey.id,
+      encryption_metadata: {
+        version: 1,
+        mode: 'pki',
+        policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: {
+          upload: {
+            cipher: 'aes-256-gcm',
+            iv_b64: 'legacy-iv',
+            tag_length_bits: 128,
+            encrypted_file_meta: {
+              iv_b64: 'meta-iv',
+              payload_b64: 'meta-payload'
+            },
+            holders: [
+              {
+                member_id: parent.id,
+                encryption_key_id: replacementKey.id,
+                key_fingerprint: replacementKey.key_fingerprint,
+                role: 'owner',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'jkl',
+                  hkdf_salt_b64: 'mno',
+                  wrapped_dek_b64: 'pqr'
+                }
+              },
+              {
+                member_id: parent.id,
+                encryption_key_id: backupKey.id,
+                key_fingerprint: backupKey.key_fingerprint,
+                role: 'backup',
+                wrapped_dek: {
+                  kind: 'pki_x25519',
+                  ephemeral_public_key_b64: 'stu',
+                  hkdf_salt_b64: 'vwx',
+                  wrapped_dek_b64: 'yza'
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.document.encryption_key_id, replacementKey.id);
+
+    const detailRes = await authedGet(`api/documents/${doc.id}`, parentCookie);
+    const detail = await detailRes.json();
+    assert.equal(detail.encryption_metadata.files.upload.holders.length, 2);
+    assert.equal(detail.encryption_metadata.files.upload.holders[0].encryption_key_id, replacementKey.id);
+    assert.equal(detail.encryption_metadata.files.upload.holders[1].encryption_key_id, backupKey.id);
+    assert.equal(detail.encryption_key_id, replacementKey.id);
+
+    const afterBytes = fs.readFileSync(getFilePath(record.stored_filename));
+    assert.deepEqual(afterBytes, beforeBytes);
+  });
 });
