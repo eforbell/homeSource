@@ -266,6 +266,22 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="remove-revoked-holder-modal">
+    <div class="modal">
+      <div class="modal-title">Remove Revoked Holder</div>
+      <div class="text-dim text-sm mb-1">Remove a historical revoked holder from this document. Ciphertext bytes stay unchanged. At least one active holder must remain afterward.</div>
+      <div class="form-group">
+        <label class="form-label">Revoked Holder to Remove</label>
+        <select id="remove-holder-key" class="form-select"></select>
+      </div>
+      <div id="remove-holder-status" class="text-sm text-dim" style="min-height:1.25rem;"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeRemoveRevokedHolderModal()">Cancel</button>
+        <button class="btn btn-primary" id="confirm-remove-holder-btn">Remove Holder</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="owner-modal">
     <div class="modal">
       <div class="modal-title">Add Owner</div>
@@ -600,6 +616,12 @@
       );
     }
 
+    function getRemovableRevokedHolders(doc, keyInfo) {
+      const holders = getPkiHoldersFromDoc(doc, keyInfo);
+      if (countActivePkiHolders(holders) === 0) return [];
+      return holders.filter((holder) => !!holder.revoked_at);
+    }
+
     function countActivePkiHolders(holders) {
       return (Array.isArray(holders) ? holders : []).filter((holder) => !holder?.revoked_at).length;
     }
@@ -778,6 +800,13 @@
           wrapped_dek_b64: PKICrypto.toBase64(wrappedDek.wrappedDek)
         }
       };
+      return updated;
+    }
+
+    function buildRemovalEnvelope(doc, keyInfo, removeHolderKeyId) {
+      const updated = buildNormalizedPkiEnvelope(doc, keyInfo);
+      const holders = Array.isArray(updated?.files?.upload?.holders) ? updated.files.upload.holders : [];
+      updated.files.upload.holders = holders.filter((holder) => String(holder.encryption_key_id) !== String(removeHolderKeyId));
       return updated;
     }
 
@@ -1344,6 +1373,58 @@
       }
     }
 
+    async function refreshRemoveRevokedHolderModal() {
+      const statusEl = document.getElementById('remove-holder-status');
+      const oldKeySelect = document.getElementById('remove-holder-key');
+      if (!currentDoc || currentDoc.encryption_mode !== 'pki') throw new Error('Document is not PKI-encrypted');
+      const keyInfo = await API.get(`api/documents/${docId}/key-info`);
+      const removableRevokedHolders = getRemovableRevokedHolders(currentDoc, keyInfo);
+      if (!removableRevokedHolders.length) {
+        throw new Error('No revoked holders are currently removable on this document');
+      }
+      oldKeySelect.innerHTML = removableRevokedHolders.map((holder) => `<option value="${esc(String(holder.encryption_key_id))}">${esc(formatUnlockHolderLabel(holder))}</option>`).join('');
+      statusEl.textContent = '';
+    }
+
+    async function openRemoveRevokedHolderModal() {
+      try {
+        await refreshRemoveRevokedHolderModal();
+        document.getElementById('remove-revoked-holder-modal').classList.remove('hidden');
+      } catch (err) {
+        toast(err.message || 'Unable to prepare holder removal', 'error');
+      }
+    }
+
+    function closeRemoveRevokedHolderModal() {
+      document.getElementById('remove-revoked-holder-modal').classList.add('hidden');
+    }
+
+    async function submitRemoveRevokedHolder() {
+      const button = document.getElementById('confirm-remove-holder-btn');
+      const statusEl = document.getElementById('remove-holder-status');
+      const removeHolderKeyId = document.getElementById('remove-holder-key').value;
+      try {
+        button.disabled = true;
+        statusEl.textContent = 'Loading current key info...';
+        const keyInfo = await API.get(`api/documents/${docId}/key-info`);
+        const removeHolder = getRemovableRevokedHolders(currentDoc, keyInfo).find((holder) => String(holder.encryption_key_id) === String(removeHolderKeyId));
+        if (!removeHolder) throw new Error('Select a revoked holder to remove');
+        const encryptionMetadata = buildRemovalEnvelope(currentDoc, keyInfo, removeHolderKeyId);
+        statusEl.textContent = 'Saving updated PKI access...';
+        await API.post(`api/documents/${docId}/pki-holders/remove`, {
+          remove_holder_key_id: Number(removeHolderKeyId),
+          encryption_metadata: encryptionMetadata
+        });
+        closeRemoveRevokedHolderModal();
+        toast('Revoked holder removed', 'success');
+        await loadDocument();
+      } catch (err) {
+        statusEl.textContent = err.message || 'Unable to remove revoked holder';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function submitAddTrustedHolder() {
       const button = document.getElementById('confirm-add-trusted-holder-btn');
       const statusEl = document.getElementById('trusted-holder-status');
@@ -1635,10 +1716,12 @@
 
         let keyInfoForActions = null;
         let canReplaceRevokedHolder = false;
+        let canRemoveRevokedHolder = false;
         if (doc.encryption_mode === 'pki') {
           try {
             keyInfoForActions = await API.get(`api/documents/${doc.id}/key-info`);
             canReplaceRevokedHolder = getRevokedSameMemberHolders(doc, keyInfoForActions).length > 0;
+            canRemoveRevokedHolder = getRemovableRevokedHolders(doc, keyInfoForActions).length > 0;
           } catch (err) {
             console.error(err);
           }
@@ -1653,6 +1736,7 @@
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddBackupKeyModal()">Add Backup Key</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddTrustedHolderModal()">Add Trusted Holder</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' && canReplaceRevokedHolder ? '<button class="btn btn-sm" onclick="openReplaceRevokedHolderModal()">Replace Revoked Holder</button>' : ''}
+          ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' && canRemoveRevokedHolder ? '<button class="btn btn-sm" onclick="openRemoveRevokedHolderModal()">Remove Revoked Holder</button>' : ''}
           <button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button>
           <button class="btn btn-sm btn-danger" onclick="archiveDoc()">Archive</button>
           <button class="btn btn-sm btn-danger" onclick="deleteDoc()" style="opacity:0.7;">Delete</button>
@@ -2343,6 +2427,8 @@
     window.closeAddTrustedHolderModal = closeAddTrustedHolderModal;
     window.openReplaceRevokedHolderModal = openReplaceRevokedHolderModal;
     window.closeReplaceRevokedHolderModal = closeReplaceRevokedHolderModal;
+    window.openRemoveRevokedHolderModal = openRemoveRevokedHolderModal;
+    window.closeRemoveRevokedHolderModal = closeRemoveRevokedHolderModal;
 
     // File upload
     document.getElementById('add-file-btn').addEventListener('click', () => {
@@ -2441,6 +2527,7 @@
     document.getElementById('confirm-encrypt-btn').addEventListener('click', submitEncryptExisting);
     document.getElementById('confirm-add-backup-key-btn').addEventListener('click', submitAddBackupKey);
     document.getElementById('confirm-replace-holder-btn').addEventListener('click', submitReplaceRevokedHolder);
+    document.getElementById('confirm-remove-holder-btn').addEventListener('click', submitRemoveRevokedHolder);
     document.getElementById('confirm-add-trusted-holder-btn').addEventListener('click', submitAddTrustedHolder);
 
     loadDocument().then(() => {
