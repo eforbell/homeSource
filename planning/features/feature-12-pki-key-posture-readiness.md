@@ -1,7 +1,7 @@
 # Feature #12: PKI Key Posture and Readiness
 
 Date: 2026-07-04
-Status: Draft implementation plan
+Status: Complete for current scope; optional document-list posture deferred
 Parent: Feature #11 PKI Document Vault
 Depends on: Feature #11 PKI hardening H1-H4.2 shipped on `main`
 Scope: Operator-visible key/document posture before destructive key lifecycle actions
@@ -519,6 +519,56 @@ Why this order:
 
 ---
 
+## Implementation readiness artifacts
+
+Prepared 2026-07-04:
+
+- `.omx/plans/prd-feature-12-pki-key-posture-readiness.md`
+- `.omx/plans/test-spec-feature-12-pki-key-posture-readiness.md`
+
+Locked first-pass decisions:
+
+- Implement `GET /api/pki/posture` as the canonical posture source.
+- Refactor `lib/pki.getKeyDependencySummary(...)` classification into shared
+  helpers so revoke-time guardrails and pre-mutation posture cannot drift.
+- Ship Settings readiness panel, per-key posture counts, and a protected-docs
+  modal before implementing Test Unlock.
+- Keep Test Unlock as a separate Slice 3 because it changes ceremony behavior
+  and `last_used_at` semantics.
+- Treat active keys without recovery as warning-level posture.
+- Kid posture must be scoped to own keys and document-owner access; parent
+  posture can include household keys and document titles.
+
+Implemented 2026-07-04:
+
+- Shared PKI posture classification helpers in `lib/pki.js`.
+- `GET /api/pki/posture` route.
+- API regression coverage in `test/pki-posture-api.test.js`.
+- Settings PKI Readiness panel, per-key posture counts, and protected-documents
+  modal.
+- Self-only `POST /api/members/:id/keys/:keyId/tested` route.
+- Settings Test Unlock ceremony for active self-owned keys. The ceremony unwraps
+  the member private key locally before recording `last_used_at`.
+
+Verification:
+
+- `npm run test:prepare` passed on local Postgres test DB.
+- Slices 1-2 targeted PKI tests passed: 15 tests, 0 failures.
+- Slice 3 targeted PKI/WebAuthn tests passed: 29 tests, 0 failures.
+- Full suite passed after Slices 1-2: 297 tests, 0 failures.
+- Full suite passed after Slice 3: 299 tests, 0 failures.
+- Slice 1-2 operator smoke passed.
+- Slice 3 operator/browser smoke passed.
+- Protected-documents modal prioritization smoke passed.
+
+Deferred:
+
+- Slice 4 document-list posture indicators are intentionally deferred. Settings
+  now provides global PKI readiness, per-key risk counts, Test Unlock readiness,
+  and an attention-first protected-documents modal. Adding PKI posture directly
+  to `GET /api/documents` would increase list/API surface area before there is
+  evidence that browse-page badges are needed.
+
 ## Acceptance criteria summary
 
 Feature #12 is ready when:
@@ -535,4 +585,3 @@ Feature #12 is ready when:
 8. Optional Test Unlock updates readiness metadata only after successful local
    proof.
 9. Full test suite passes with existing PKI hardening tests intact.
-

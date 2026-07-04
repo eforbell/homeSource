@@ -55,6 +55,7 @@
           <div class="form-hint">Register a verified key ceremony for your account. Parents can also review household key posture.</div>
         </div>
       </div>
+      <div id="pki-readiness-panel" style="margin-bottom:1rem;"></div>
       <div id="keys-list"></div>
     </div>
 
@@ -153,6 +154,48 @@
       <div class="modal-actions">
         <button class="btn" id="confirm-cancel-btn">Cancel</button>
         <button class="btn btn-danger" id="confirm-ok-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Protected documents modal -->
+  <div class="modal-backdrop hidden" id="protected-documents-modal">
+    <div class="modal" style="max-width:760px; width:min(100%, 760px);">
+      <div class="modal-head" style="margin-bottom:1rem;">
+        <div>
+          <h2 id="protected-documents-title">Protected Documents</h2>
+          <div class="modal-sub" id="protected-documents-subtitle">Documents currently referencing this key.</div>
+        </div>
+        <button class="modal-close" data-close-modal="protected-documents-modal" aria-label="Close protected documents">&times;</button>
+      </div>
+      <div class="modal-body" id="protected-documents-body"></div>
+      <div class="modal-foot">
+        <button class="btn" data-close-modal="protected-documents-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test unlock modal -->
+  <div class="modal-backdrop hidden" id="test-unlock-modal">
+    <div class="modal" style="max-width:560px; width:min(100%, 560px);">
+      <div class="modal-head" style="margin-bottom:1rem;">
+        <div>
+          <h2 id="test-unlock-title">Test Key Unlock</h2>
+          <div class="modal-sub" id="test-unlock-subtitle">Confirm you can still use this key. This does not open documents or change access.</div>
+        </div>
+        <button class="modal-close" data-close-modal="test-unlock-modal" aria-label="Close test unlock">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-dim text-sm mb-1">This non-destructive test unwraps your member private key locally, then updates its last-tested timestamp.</p>
+        <div class="form-group" id="test-unlock-passphrase-group">
+          <label class="form-label">Key passphrase</label>
+          <input type="password" id="test-unlock-passphrase" class="form-input" autocomplete="current-password" placeholder="Enter this key's passphrase">
+        </div>
+        <div id="test-unlock-status" class="form-hint"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close-modal="test-unlock-modal">Cancel</button>
+        <button class="btn btn-primary" id="test-unlock-run-btn">Test Unlock</button>
       </div>
     </div>
   </div>

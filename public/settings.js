@@ -5,13 +5,17 @@
     me: null,
     members: [],
     keysByMember: new Map(),
+    pkiPosture: null,
+    pkiPostureError: null,
     registration: null,
     passphraseMember: null,
+    testUnlock: null,
   };
 
   const themeSelect = document.getElementById('theme-select');
   const membersList = document.getElementById('members-list');
   const keysList = document.getElementById('keys-list');
+  const pkiReadinessPanel = document.getElementById('pki-readiness-panel');
   const auditTbody = document.getElementById('audit-tbody');
 
   themeSelect.value = window.SourceTheme?.getPreference() || 'system';
@@ -72,6 +76,8 @@
       toast(err.message, 'error');
     }
   });
+
+  document.getElementById('test-unlock-run-btn')?.addEventListener('click', testSelectedKeyUnlock);
 
   document.getElementById('logout-btn').addEventListener('click', async () => {
     await API.post('api/auth/logout', {});
@@ -175,11 +181,23 @@
     }));
 
     state.keysByMember = new Map(results);
+    await loadPkiPosture();
     renderMembers();
     renderKeys();
   }
 
+  async function loadPkiPosture() {
+    try {
+      state.pkiPosture = await API.get('api/pki/posture');
+      state.pkiPostureError = null;
+    } catch (err) {
+      state.pkiPosture = null;
+      state.pkiPostureError = err;
+    }
+  }
+
   function renderKeys() {
+    renderPkiReadinessPanel();
     const visibleMembers = state.me.role === 'parent'
       ? state.members
       : state.members.filter((member) => member.id === state.me.id);
@@ -227,10 +245,26 @@
     document.querySelectorAll('[data-revoke-key]').forEach((button) => {
       button.addEventListener('click', () => revokeKey(Number(button.getAttribute('data-member-id')), Number(button.getAttribute('data-revoke-key'))));
     });
+
+    document.querySelectorAll('[data-view-key-docs]').forEach((button) => {
+      button.addEventListener('click', () => openProtectedDocumentsModal(Number(button.getAttribute('data-view-key-docs'))));
+    });
+
+    document.querySelectorAll('[data-test-unlock-key]').forEach((button) => {
+      button.addEventListener('click', () => openTestUnlockModal(
+        Number(button.getAttribute('data-member-id')),
+        Number(button.getAttribute('data-test-unlock-key'))
+      ));
+    });
   }
 
   function renderKeyRow(member, key) {
     const isRevoked = !!key.revoked_at;
+    const posture = getKeyPosture(key.id);
+    const documentCount = Number(posture?.document_count || 0);
+    const soleHolderCount = Number(posture?.at_risk_docs || 0);
+    const atRiskCount = soleHolderCount + Number(posture?.already_stranded_docs || 0) + Number(posture?.inconsistent_docs || 0);
+    const lastTestedAt = posture?.last_used_at || key.last_used_at;
     const badges = [
       `<span class="badge ${key.protection_tier === 'hardware' ? 'badge-info' : (key.protection_tier === 'platform' ? 'badge-warn' : 'badge-muted')}">${key.protection_tier === 'hardware' ? 'Security key' : (key.protection_tier === 'platform' ? 'Passkey' : 'Passphrase')}</span>`,
       isRevoked ? '<span class="badge badge-danger">Revoked</span>' : '<span class="badge badge-info">Active</span>',
@@ -239,6 +273,8 @@
     ].join(' ');
 
     const actionButtons = [
+      documentCount > 0 ? `<button class="btn btn-sm" data-view-key-docs="${key.id}">View Protected Documents</button>` : '',
+      (!isRevoked && state.me.id === member.id) ? `<button class="btn btn-sm" data-test-unlock-key="${key.id}" data-member-id="${member.id}">Test Unlock</button>` : '',
       !isRevoked ? `<button class="btn btn-sm" data-verify-key="${key.id}" data-member-id="${member.id}">Verify</button>` : '',
       (state.me.id === member.id)
         ? (!isRevoked ? `<button class="btn btn-sm btn-danger" data-revoke-key="${key.id}" data-member-id="${member.id}">Revoke</button>` : '')
@@ -247,9 +283,18 @@
 
     const statusLine = isRevoked
       ? `Created ${new Date(key.created_at).toLocaleDateString()} · Revoked ${new Date(key.revoked_at).toLocaleDateString()}`
-      : `Created ${new Date(key.created_at).toLocaleDateString()}${key.last_used_at ? ` · Last used ${new Date(key.last_used_at).toLocaleDateString()}` : ''}`;
+      : `Created ${new Date(key.created_at).toLocaleDateString()}${lastTestedAt ? ` · Last tested ${new Date(lastTestedAt).toLocaleDateString()}` : ' · Never tested'}`;
     const helperText = isRevoked
       ? 'Historical key — no longer usable for unlock or new PKI encryption.'
+      : '';
+    const postureLines = state.pkiPosture
+      ? `
+        <div class="text-xs" style="margin-top:0.6rem; display:grid; gap:0.25rem;">
+          <div>Protects <strong>${documentCount}</strong> PKI document${documentCount === 1 ? '' : 's'}</div>
+          <div>Sole active holder for <strong>${soleHolderCount}</strong> document${soleHolderCount === 1 ? '' : 's'}</div>
+          <div class="${atRiskCount ? '' : 'text-dim'}" style="${atRiskCount ? 'color:var(--danger);' : ''}">At-risk docs: <strong>${atRiskCount}</strong></div>
+        </div>
+      `
       : '';
 
     return `
@@ -260,12 +305,297 @@
             <div class="text-xs text-dim" style="margin-top:0.25rem;">Fingerprint ${esc(truncateFingerprint(key.key_fingerprint))}</div>
             <div class="text-xs text-dim" style="margin-top:0.2rem;">${statusLine}</div>
             <div style="margin-top:0.5rem; display:flex; gap:0.35rem; flex-wrap:wrap;">${badges}</div>
+            ${postureLines}
             ${helperText ? `<div class="text-xs text-dim" style="margin-top:0.5rem;">${helperText}</div>` : ''}
           </div>
           <div class="flex gap-1" style="flex-wrap:wrap; justify-content:flex-end;">${actionButtons}</div>
         </div>
       </div>
     `;
+  }
+
+  function renderPkiReadinessPanel() {
+    if (!pkiReadinessPanel) return;
+    if (state.pkiPostureError) {
+      pkiReadinessPanel.innerHTML = `
+        <div class="card" style="padding:0.85rem; background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.35);">
+          <div style="font-weight:600;">PKI Readiness unavailable</div>
+          <div class="text-sm text-dim" style="margin-top:0.25rem;">Key registration still works. Refresh to retry posture loading.</div>
+        </div>
+      `;
+      return;
+    }
+    const summary = state.pkiPosture?.summary;
+    if (!summary) {
+      pkiReadinessPanel.innerHTML = '<div class="text-sm text-dim">Loading PKI readiness…</div>';
+      return;
+    }
+    const riskCount = Number(summary.at_risk_document_count || 0) +
+      Number(summary.stranded_document_count || 0) +
+      Number(summary.inconsistent_document_count || 0);
+    const riskClass = riskCount ? 'badge-danger' : 'badge-info';
+    pkiReadinessPanel.innerHTML = `
+      <div class="card" style="padding:0.85rem; background:rgba(255,255,255,0.02);">
+        <div class="flex-between gap-1" style="align-items:flex-start;">
+          <div>
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+              <strong>PKI Readiness</strong>
+              <span class="badge ${riskClass}">${riskCount ? `${riskCount} risk${riskCount === 1 ? '' : 's'}` : 'No visible PKI risks'}</span>
+            </div>
+            <div class="form-hint">Pre-mutation posture from current PKI document holders and key metadata.</div>
+          </div>
+        </div>
+        <div style="margin-top:0.75rem; display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:0.55rem;">
+          ${renderReadinessMetric('PKI docs', summary.pki_document_count)}
+          ${renderReadinessMetric('Healthy', summary.healthy_document_count)}
+          ${renderReadinessMetric('At risk', summary.at_risk_document_count, summary.at_risk_document_count ? 'warn' : '')}
+          ${renderReadinessMetric('Stranded', summary.stranded_document_count, summary.stranded_document_count ? 'danger' : '')}
+          ${renderReadinessMetric('Inconsistent', summary.inconsistent_document_count, summary.inconsistent_document_count ? 'danger' : '')}
+          ${renderReadinessMetric('Never tested', summary.untested_active_key_count, summary.untested_active_key_count ? 'warn' : '')}
+          ${renderReadinessMetric('No recovery', summary.keys_without_recovery_count, summary.keys_without_recovery_count ? 'warn' : '')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderReadinessMetric(label, value, tone = '') {
+    const color = tone === 'danger'
+      ? 'var(--danger)'
+      : (tone === 'warn' ? 'var(--warn)' : 'var(--text)');
+    return `
+      <div style="padding:0.55rem; border:1px solid var(--border); border-radius:0.6rem;">
+        <div class="text-xs text-dim">${esc(label)}</div>
+        <div style="font-weight:700; color:${color}; margin-top:0.2rem;">${Number(value || 0)}</div>
+      </div>
+    `;
+  }
+
+  function getKeyPosture(keyId) {
+    return (state.pkiPosture?.keys || []).find((key) => Number(key.id) === Number(keyId)) || null;
+  }
+
+  function getMemberName(memberId) {
+    return state.members.find((member) => Number(member.id) === Number(memberId))?.name || `Member #${memberId}`;
+  }
+
+  function openProtectedDocumentsModal(keyId) {
+    const posture = getKeyPosture(keyId);
+    if (!posture) {
+      toast('PKI posture is not available for this key yet', 'error');
+      return;
+    }
+    const documents = (state.pkiPosture?.key_documents || [])
+      .filter((doc) => Number(doc.key_id) === Number(keyId));
+    document.getElementById('protected-documents-title').textContent = posture.label || 'Protected Documents';
+    document.getElementById('protected-documents-subtitle').textContent =
+      `${getMemberName(posture.member_id)} · ${documents.length} PKI document${documents.length === 1 ? '' : 's'} referencing this key.`;
+    document.getElementById('protected-documents-body').innerHTML = renderProtectedDocumentsTable(documents);
+    document.getElementById('protected-documents-modal').classList.remove('hidden');
+  }
+
+  function renderProtectedDocumentsTable(documents) {
+    if (!documents.length) {
+      return '<div class="empty-state">No PKI documents currently reference this key.</div>';
+    }
+    const sortedDocuments = [...documents].sort((a, b) => {
+      const diff = documentAttentionRank(a) - documentAttentionRank(b);
+      if (diff !== 0) return diff;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+    const attentionDocs = sortedDocuments.filter((doc) => documentAttentionRank(doc) < 50);
+    const attentionSummary = attentionDocs.length
+      ? `
+        <div class="card" style="padding:0.75rem; margin-bottom:0.75rem; border-color:rgba(239,68,68,0.35); background:rgba(239,68,68,0.06);">
+          <strong>${attentionDocs.length} document${attentionDocs.length === 1 ? '' : 's'} need attention</strong>
+          <div class="text-sm text-dim" style="margin-top:0.25rem;">Attention rows are sorted first so at-risk documents do not get buried in healthy references.</div>
+        </div>
+      `
+      : `
+        <div class="card" style="padding:0.75rem; margin-bottom:0.75rem; background:rgba(34,197,94,0.06);">
+          <strong>No protected documents need attention for this key.</strong>
+          <div class="text-sm text-dim" style="margin-top:0.25rem;">All listed documents currently have alternate active unlock paths.</div>
+        </div>
+      `;
+    return `
+      ${attentionSummary}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Document</th>
+              <th>Role</th>
+              <th>Holder posture</th>
+              <th>Key pointer</th>
+              <th>Next action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sortedDocuments.map((doc) => `
+              <tr style="${documentAttentionRowStyle(doc)}">
+                <td><a href="document.html?id=${encodeURIComponent(doc.document_id)}">${esc(doc.title || `Document #${doc.document_id}`)}</a></td>
+                <td>${esc(labelRole(doc.target_key_role))}</td>
+                <td>
+                  ${statusBadge(doc.status)}
+                  <div class="text-xs text-dim">${Number(doc.active_holder_count || 0)} active · ${Number(doc.revoked_holder_count || 0)} revoked</div>
+                </td>
+                <td>${doc.is_primary_pointer ? '<span class="badge badge-info">Primary</span>' : '<span class="badge badge-muted">Alternate</span>'}</td>
+                <td>${nextActionBadge(doc.next_action)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function documentAttentionRank(doc) {
+    if (doc.status === 'holder_metadata_inconsistent') return 0;
+    if (doc.status === 'all_holders_revoked') return 1;
+    if (doc.status === 'sole_active_holder') return 2;
+    if (doc.next_action && doc.next_action !== 'healthy') return 3;
+    return 50;
+  }
+
+  function documentAttentionRowStyle(doc) {
+    return documentAttentionRank(doc) < 50
+      ? 'background:rgba(239,68,68,0.045);'
+      : '';
+  }
+
+  function labelRole(role) {
+    if (role === 'owner') return 'Owner';
+    if (role === 'backup') return 'Backup';
+    if (role === 'beneficiary') return 'Beneficiary';
+    return 'Unknown';
+  }
+
+  function statusLabel(status) {
+    const labels = {
+      alternate_holders_available: 'Alternate holders available',
+      sole_active_holder: 'Sole active holder',
+      all_holders_revoked: 'No active holders',
+      holder_metadata_inconsistent: 'Holder metadata inconsistent'
+    };
+    return labels[status] || status || 'Unknown';
+  }
+
+  function statusBadge(status) {
+    const className = status === 'holder_metadata_inconsistent' || status === 'all_holders_revoked'
+      ? 'badge-danger'
+      : (status === 'sole_active_holder' ? 'badge-warn' : 'badge-info');
+    return `<span class="badge ${className}">${esc(statusLabel(status))}</span>`;
+  }
+
+  function nextActionLabel(action) {
+    const labels = {
+      add_backup_key: 'Add backup key',
+      replace_revoked_holder: 'Replace revoked holder',
+      recover_stranded_document: 'Recover stranded document',
+      remove_revoked_holder: 'Remove revoked holder',
+      repair_metadata: 'Repair metadata',
+      healthy: 'Healthy'
+    };
+    return labels[action] || action || 'Review';
+  }
+
+  function nextActionBadge(action) {
+    const className = !action || action === 'healthy'
+      ? 'badge-info'
+      : (action === 'add_backup_key' ? 'badge-warn' : 'badge-danger');
+    return `<span class="badge ${className}">${esc(nextActionLabel(action))}</span>`;
+  }
+
+  function openTestUnlockModal(memberId, keyId) {
+    if (memberId !== state.me.id) {
+      toast('You can only test your own keys', 'error');
+      return;
+    }
+    const key = (state.keysByMember.get(memberId) || []).find((entry) => Number(entry.id) === Number(keyId));
+    if (!key || key.revoked_at) {
+      toast('Key is not available for testing', 'error');
+      return;
+    }
+    state.testUnlock = { memberId, keyId, key };
+    document.getElementById('test-unlock-title').textContent = `Test ${key.label || 'this key'}`;
+    document.getElementById('test-unlock-subtitle').textContent = 'Confirm you can still use this key. This does not open documents, change access, or revoke anything.';
+    document.getElementById('test-unlock-status').textContent = '';
+    document.getElementById('test-unlock-passphrase').value = '';
+    const needsPassphrase = key.protection_tier === 'passphrase' || key.verification_method === 'passphrase';
+    document.getElementById('test-unlock-passphrase-group').style.display = needsPassphrase ? '' : 'none';
+    document.getElementById('test-unlock-run-btn').disabled = false;
+    document.getElementById('test-unlock-modal').classList.remove('hidden');
+    if (needsPassphrase) document.getElementById('test-unlock-passphrase')?.focus();
+  }
+
+  async function getAssertionPrfResult(memberId, credentialId, statusEl) {
+    if (!window.PublicKeyCredential || !navigator.credentials?.get) {
+      throw new Error('This browser does not support WebAuthn key testing');
+    }
+    statusEl.textContent = 'Requesting key assertion…';
+    const payload = await API.post(`api/members/${memberId}/keys/webauthn/assertion-options`, {
+      credential_id: credentialId
+    });
+    statusEl.textContent = 'Complete your security-key sign-in…';
+    const assertion = await navigator.credentials.get({
+      publicKey: PKICrypto.toPublicKeyRequestOptions(payload.options)
+    });
+    if (!assertion) throw new Error('WebAuthn assertion was cancelled');
+    const extensionResults = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
+    const prfResult = extensionResults?.prf?.results?.first;
+    if (!prfResult) throw new Error('This key did not expose the PRF extension during sign-in');
+    return prfResult;
+  }
+
+  async function deriveMemberKekForTest(material, passphrase, statusEl) {
+    if (material?.revoked_at) {
+      throw new Error('This key has been revoked and cannot be tested.');
+    }
+    if (material.credential_verified && material.verification_method === 'webauthn' && material.credential_id) {
+      const prfResult = await getAssertionPrfResult(material.member_id, material.credential_id, statusEl);
+      statusEl.textContent = 'Deriving unlock key…';
+      return PKICrypto.deriveKekFromPrf(prfResult);
+    }
+    if (material.protection_tier === 'passphrase' || material.verification_method === 'passphrase') {
+      if (!passphrase) throw new Error('Enter this key’s passphrase to test unlock');
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+      if (wrapped.kind !== 'passphrase_pbkdf2_v1' || !wrapped.salt_b64) {
+        throw new Error('Unsupported passphrase-wrapped key format');
+      }
+      statusEl.textContent = 'Deriving unlock key…';
+      return (await PKICrypto.deriveKekFromPassphrase(passphrase, PKICrypto.fromBase64(wrapped.salt_b64))).kek;
+    }
+    throw new Error('This key cannot yet be tested in the browser');
+  }
+
+  async function testSelectedKeyUnlock() {
+    const test = state.testUnlock;
+    if (!test) return;
+    const runBtn = document.getElementById('test-unlock-run-btn');
+    const statusEl = document.getElementById('test-unlock-status');
+    const passphrase = document.getElementById('test-unlock-passphrase').value || '';
+    runBtn.disabled = true;
+    try {
+      statusEl.textContent = 'Loading wrapped key material…';
+      const material = await API.get(`api/members/${test.memberId}/keys/${test.keyId}/material`);
+      const wrapped = PKICrypto.parseWrappedPrivateKeyPayload(material);
+      const kek = await deriveMemberKekForTest(material, passphrase, statusEl);
+      statusEl.textContent = 'Unwrapping private key locally…';
+      await PKICrypto.unwrapPrivateKey(
+        PKICrypto.fromBase64(wrapped.wrapped_private_key_b64),
+        kek
+      );
+      statusEl.textContent = 'Recording last-tested time…';
+      await API.post(`api/members/${test.memberId}/keys/${test.keyId}/tested`, {});
+      document.getElementById('test-unlock-passphrase').value = '';
+      closeModal('test-unlock-modal');
+      toast('Key unlock tested successfully', 'success');
+      await loadMembersAndKeys();
+      if (state.me.role === 'parent') await loadAudit();
+    } catch (err) {
+      statusEl.textContent = err.message || 'Key test failed';
+      toast(err.message || 'Key test failed', 'error');
+      runBtn.disabled = false;
+    }
   }
 
   function summarizeKeys(keys) {
@@ -969,6 +1299,11 @@
     }
     if (id === 'passphrase-modal') {
       state.passphraseMember = null;
+    }
+    if (id === 'test-unlock-modal') {
+      state.testUnlock = null;
+      const passInput = document.getElementById('test-unlock-passphrase');
+      if (passInput) passInput.value = '';
     }
     document.getElementById(id)?.classList.add('hidden');
   }
