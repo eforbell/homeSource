@@ -56,3 +56,10 @@
   - optional dependency index / batch repair tooling
   - future threshold/quorum and estate/deadman architecture
 - Verification: started local Docker Postgres test DB, ran `npm run test:prepare`, then `npm test`; full suite passed (290 tests, 0 failures).
+
+---
+
+## 2026-07-04 — Feature #12 PKI key posture planning
+- Captured Feature #12 as the next PKI maturity slice before Use Case 2 estate/quorum work.
+- Theme: make key usage, at-risk docs, backup-key testing, and recovery posture observable before destructive key lifecycle actions.
+- Planned first slices: `GET /api/pki/posture`, Settings PKI Readiness panel, per-key protected-document lists, then a separate Test Unlock ceremony for updating readiness metadata.

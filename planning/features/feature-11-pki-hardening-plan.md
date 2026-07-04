@@ -22,7 +22,9 @@ gate and first repair flows have now shipped on `main`:
 The remaining work is not basic PKI functionality; it is product policy and
 operator-scale hardening: revoked-key recovery semantics, stranded-document
 recovery policy, list/dashboard PKI health, optional dependency indexing, batch
-repair, and future threshold/estate-planning architecture.
+repair, and future threshold/estate-planning architecture. The operator
+posture/readiness slice is captured as
+[Feature #12: PKI Key Posture and Readiness](feature-12-pki-key-posture-readiness.md).
 
 ---
 

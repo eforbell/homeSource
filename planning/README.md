@@ -25,6 +25,7 @@ Feature-driven development tracking for Home Source, the sovereign family docume
 | 9 | OCR (tesseract.js) | future |
 | 10 | MCP Server | future |
 | 11 | PKI vaulted document access (single-holder, 1-of-M, lifecycle hardening H1-H4.2) | shipped foundation; future threshold/estate phases |
+| 12 | PKI Key Posture and Readiness | planned |
 
 ## Open bugBase Tickets
 
