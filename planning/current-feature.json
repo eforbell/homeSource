@@ -1,8 +1,8 @@
 {
-  "currentFeature": "Feature #11 Phase 2A: Multi-Holder PKI (1-of-M, Same-Member-First)",
-  "status": "in-flight",
-  "branch": "feature/11-phase2a-multi-holder-pki",
-  "prdPath": "planning/features/feature-11-phase2a-multi-holder-pki.md",
+  "currentFeature": "Feature #11 remaining PKI policy / estate-quorum planning gate",
+  "status": "needs-planning",
+  "branch": "main",
+  "prdPath": "planning/features/feature-11-pki-hardening-plan.md",
   "completedFeatures": [
     "Feature #1: Foundation (Schema + Auth + Document CRUD + File Upload + Search + Backup + Sharing)",
     "Feature #2: MVP Hardening (iOS/WKWebView fixes, scanner overhaul, mobile polish, tag editor)",
@@ -12,7 +12,15 @@
     "Feature #3: PDF Thumbnails",
     "Feature #4: MagicIndex foundation + substantial LLM extraction work",
     "Feature #5A: Multi-page Document Scanning",
-    "Feature #6: Batch Uploads"
+    "Feature #6: Batch Uploads",
+    "Feature #11 Phase 2A: Multi-Holder PKI (1-of-M same-member-first)",
+    "Feature #11 Phase 2A.1: Add backup key to existing PKI documents",
+    "Feature #11 Phase 2A.1B: Add trusted alternate holder to existing PKI documents",
+    "Feature #11 PKI Hardening H1/H2: Dependency visibility and revoke guardrails",
+    "Feature #11 PKI Hardening H3: Revoked-holder document visibility",
+    "Feature #11 PKI Hardening H4.1: Replace revoked same-member holder",
+    "Feature #11 PKI Hardening H4.2: Remove revoked holder cleanup",
+    "PKI post-hardening docs/test reconciliation (2026-07-04)"
   ],
   "skippedFeatures": [],
   "futureFeatures": [
@@ -20,6 +28,7 @@
     "Feature #8: Expiry Tracking + Alerts \u2014 dashboard alerts for expiring passports, insurance, warranties",
     "Feature #9: OCR (tesseract.js) \u2014 text extraction fed into search_vector for full-text search of scanned docs",
     "Feature #10: MCP Server \u2014 agent automation sidecar for document operations",
+    "Feature #11 remaining hardening decisions: revoked-key recovery mode, stranded-document recovery policy, PKI health list/reporting, optional dependency index",
     "Feature #11 Phase 2B/3: Threshold / quorum PKI, Shamir-wrapped shares, coordinated unlock ceremonies",
     "Feature #11 Deadman Switch / Estate Automation"
   ]

@@ -144,10 +144,14 @@ or quorum is required.
 
 ### Current limitations
 
-Key revocation does not rewrite existing document envelopes. Revoking the
-sole active holder for a document renders it permanently unrecoverable.
-Hardening work is planned to add dependency visibility, revoke guards, and
-holder replacement flows — see
+PKI lifecycle hardening has shipped dependency visibility, impact-aware revoke
+confirmation, server-side revoke guards, revoked-holder visibility, and narrow
+repair flows for replacing or removing revoked holders. Revocation still does
+not rewrite existing document envelopes, and re-enrolling the same physical
+authenticator creates a new cryptographic identity. The remaining high-value
+planning decisions are controlled recovery access for revoked key material,
+stranded-document recovery policy, list/dashboard PKI health reporting, and the
+future threshold/quorum estate-planning model — see
 [planning/features/feature-11-pki-hardening-plan.md](planning/features/feature-11-pki-hardening-plan.md).
 
 For the full security capabilities inventory, see

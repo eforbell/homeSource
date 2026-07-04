@@ -40,3 +40,19 @@
   - nginx default client_max_body_size is 1MB, needs 55M for doc uploads
   - Share page relative URLs resolve wrong when served at /share/:token
 ---
+
+## 2026-07-04 — PKI post-hardening reconciliation
+- Repository state shows Feature #11 PKI foundation and lifecycle hardening have shipped through H4.2 on `main`:
+  - single-holder and 1-of-M multi-holder PKI encryption/unlock
+  - same-member backup holder and trusted alternate holder extension
+  - key dependency summaries and impact-aware revoke guardrails
+  - revoked-holder visibility and document PKI health display
+  - revoked same-member holder replacement and revoked-holder removal cleanup
+- Planning/docs had lagged behind implementation and were updated to distinguish shipped H1-H4.2 work from remaining policy decisions.
+- Remaining PKI planning questions:
+  - recovery-mode access for revoked key material
+  - stranded-document recovery policy
+  - document-list/dashboard PKI health posture
+  - optional dependency index / batch repair tooling
+  - future threshold/quorum and estate/deadman architecture
+- Verification: started local Docker Postgres test DB, ran `npm run test:prepare`, then `npm test`; full suite passed (290 tests, 0 failures).

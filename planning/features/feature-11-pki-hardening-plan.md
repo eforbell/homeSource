@@ -1,10 +1,28 @@
 # Feature #11 PKI Hardening Plan: Revocation Safety, Dependency Visibility, and Holder Lifecycle
 
 Date: 2026-06-02
-Status: Draft hardening plan
+Status: H1-H4.2 shipped on main; remaining decisions/backlog documented
 Parent: Feature #11 PKI Document Vault
 Depends on: Feature #11 Phase 1 (shipped), Feature #11 Phase 2A multi-holder PKI (shipped), Feature #11 Phase 2A.1 / 2A.1B holder extension (shipped)
 Scope: Close the highest-risk operational gaps before adding new PKI features
+
+---
+
+## Implementation status update — 2026-07-04
+
+This plan started as the hardening gate for PKI lifecycle safety. The mandatory
+gate and first repair flows have now shipped on `main`:
+
+- **H1 shipped**: key-to-document dependency summary helper and API route.
+- **H2 shipped**: impact-aware revoke UI, server-side sole-active-holder / inconsistent-metadata revoke block, and `key.revoke_blocked` audit event.
+- **H3 shipped**: revoked holders remain visible on document detail, active unlock eligibility stays filtered, and document-level PKI health is surfaced.
+- **H4.1 shipped**: revoked same-member holder replacement without changing ciphertext bytes.
+- **H4.2 shipped**: standalone removal of already-revoked holders when at least one active holder remains.
+
+The remaining work is not basic PKI functionality; it is product policy and
+operator-scale hardening: revoked-key recovery semantics, stranded-document
+recovery policy, list/dashboard PKI health, optional dependency indexing, batch
+repair, and future threshold/estate-planning architecture.
 
 ---
 
@@ -700,29 +718,30 @@ Recommended stronger gate:
 
 0. Fix revoke confirmation copy in `settings.js:290`
 
-### Mandatory before new PKI feature work
+### Shipped hardening gate
 
-1. H1 dependency summary helper + API
-2. H1 prerequisite: `listMemberKeys` must support `includeRevoked` parameter
-3. H2 revoke preflight UI
-4. H2 server-side revoke block for sole-active-holder cases
-5. H3 revoked-holder document surfacing
+1. H1 dependency summary helper + API — shipped
+2. H1 prerequisite: `listMemberKeys` supports `includeRevoked` — shipped
+3. H2 revoke preflight UI — shipped
+4. H2 server-side revoke block for sole-active-holder / inconsistent metadata cases — shipped
+5. H3 revoked-holder document surfacing — shipped
+6. H4.1 replace revoked same-member holder flow — shipped
+7. H4.2 remove revoked holder cleanup flow — shipped
+8. Primary-pointer reassignment during replace/remove — shipped in repair routes
 
-### Next after mandatory gate
+### Next policy decisions
 
-6. H4 replace-holder flow
-7. H4 remove-holder flow
-8. H4 primary-pointer reassignment UX
 9. Product decision on revoked-key recovery path (open decision #5)
+10. Product decision on already-stranded document recovery path (open decision #6)
+11. Decide whether PKI health belongs on document lists/dashboard before estate work
 
 ### Optional later
 
-10. H5 derived dependency index/projection
-11. Document list PKI health indicators
-12. Reporting/dashboard posture views
-13. Batch repair tooling
-14. Remove `key_holders` from backup export (`lib/backup.js:85`)
-15. Add schema comment on `key_holders` marking it as reserved for
+12. H5 derived dependency index/projection
+13. Reporting/dashboard posture views
+14. Batch repair tooling
+15. Remove `key_holders` from backup export (`lib/backup.js:85`) or preserve it with explicit reserved-schema documentation
+16. Add schema comment on `key_holders` marking it as reserved for
     estate-planning phases
 
 ---

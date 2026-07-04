@@ -1,10 +1,10 @@
 # Home Source — Security & Vaulting Capabilities
 
-Last updated: 2026-06-02
+Last updated: 2026-07-04
 Status: Living document — reflects shipped implementation, not planned work
 
 This document inventories the security, encryption, and access control
-capabilities currently shipped in Home Source. For planned hardening work,
+capabilities currently shipped in Home Source. For hardening history and remaining PKI decisions,
 see [feature-11-pki-hardening-plan.md](../planning/features/feature-11-pki-hardening-plan.md).
 
 ---
@@ -160,24 +160,27 @@ using the mnemonic words and a backup archive — no running server required.
 Logical disablement only — sets `encryption_keys.revoked_at` timestamp.
 
 Effects:
-- Revoked keys are excluded from new PKI uploads (`lib/pki.js:296-298`)
-- Server refuses to serve key material for revoked keys (`lib/pki.js:45-59`)
-- Client-side unlock filters out revoked holders (`public/document.html:553-564`)
+- Revoked keys are excluded from new PKI uploads and new holder additions
+- Server refuses to serve key material for revoked keys
+- Client-side unlock filters out revoked holders
+- Settings revoke flow runs dependency analysis before mutation
+- Server blocks revocation when the key is the sole active holder for any PKI document or holder metadata is inconsistent
+- Blocked revoke attempts are audit logged as `key.revoke_blocked`
 
 Does **not**:
 - Rewrite existing document envelopes
-- Remove holder references from documents
-- Check whether affected documents would become stranded
-- Allow recovery of the revoked key's material through the normal app/API path
+- Automatically remove holder references from documents
+- Make a re-enrolled physical authenticator match old envelopes
+- Allow recovery of revoked key material through the normal key-material API path
 
-**Known limitation**: Revocation of a sole active holder strands any encrypted
-documents referencing that key in the normal application flow. Re-enrolling the
-same physical authenticator does not restore access because a new keypair is
-generated. Offline break-glass recovery may still be possible if exported key
-material and recovery words were retained. Hardening work (H1/H2) will add
-dependency analysis and revoke guards.
+**Known limitation**: Revocation remains irreversible for the key identity. The
+current guard prevents normal-app revocation when it would newly strand a
+document, but documents stranded before the guard or by manual database changes
+still require a product decision: controlled recovery-mode access, manual
+intervention, or accepting loss. Offline break-glass recovery may still be
+possible if exported key material and recovery words were retained.
 
-**Source**: `lib/pki.js:115-131`, `server.js:587-598`
+**Source**: `lib/pki.js`, `server.js:588-636`, `public/settings.js:337-410`
 
 ---
 
@@ -201,13 +204,14 @@ independently. No threshold or quorum required in the current implementation.
 | Operation | Route | Status |
 |---|---|---|
 | Add holder (backup or beneficiary) | `POST /api/documents/:id/pki-holders/add` | Shipped |
-| Remove holder | — | Not implemented |
-| Replace holder | — | Not implemented |
+| Replace revoked same-member holder | `POST /api/documents/:id/pki-holders/replace` | Shipped narrow repair flow |
+| Remove revoked holder | `POST /api/documents/:id/pki-holders/remove` | Shipped when at least one active holder remains |
 
-Add-holder requires live proof: the acting holder must unwrap the existing
-DEK with their active key, then re-wrap to the new holder's public key.
-Legacy Phase 1 envelopes (top-level `wrapped_dek`) are normalized to
-Phase 2A holder-local format on first mutation.
+Add and replace require live proof: the acting holder must unwrap the existing
+DEK with an active key, then re-wrap to the new holder's public key. Remove is
+a restricted cleanup mutation for already-revoked holders and does not change
+ciphertext bytes. Legacy Phase 1 envelopes (top-level `wrapped_dek`) are
+normalized to Phase 2A holder-local format on first mutation.
 
 ### 4.4 Validation rules
 
@@ -314,15 +318,14 @@ action, entity type/ID, actor ID, JSONB details, and timestamp.
 | Category | Events |
 |---|---|
 | Auth | `auth.passphrase_changed` |
-| Keys | `key.registered`, `key.revoked`, `key.recovery_enabled` |
-| Documents | `document.viewed`, `document.updated`, `document.deleted`, `document.archived`, `document.encrypted`, `document.pki_holder_added` |
+| Keys | `key.registered`, `key.revoked`, `key.recovery_enabled`, `key.revoke_blocked` |
+| Documents | `document.viewed`, `document.updated`, `document.deleted`, `document.archived`, `document.encrypted`, `document.pki_holder_added`, `document.pki_holder_replaced`, `document.pki_holder_removed` |
 | Sharing | `share.created` |
 | WebAuthn | `webauthn.credential_registered` |
 
 ### Not currently logged
 
 - Key material retrieval (`GET /api/members/:id/keys/:keyId/material`)
-- Revoke denial attempts (planned for hardening H2)
 - Document unlock/decryption attempts (client-side, not observable by server)
 
 **Source**: `lib/audit.js:12-47`, various `server.js` routes
@@ -347,24 +350,24 @@ Full FIDO2/WebAuthn implementation for key registration and assertion:
 
 ---
 
-## 9. Known Limitations & Planned Hardening
+## 9. Known Limitations & Remaining Hardening
 
-These are documented limitations in the current implementation. See
+H1-H4.2 lifecycle hardening has shipped. These are the remaining documented
+limitations and planning decisions. See
 [feature-11-pki-hardening-plan.md](../planning/features/feature-11-pki-hardening-plan.md)
-for the remediation plan.
+for the implementation history and open decisions.
 
-| Limitation | Risk | Planned fix |
+| Limitation / open decision | Risk | Current posture / next step |
 |---|---|---|
-| No revoke guard — sole active holder can be revoked | Permanent data loss | H2: server-side 409 block |
-| No key-to-document dependency visibility | Operator cannot assess revoke impact | H1: dependency summary API |
-| Revocation is irreversible (re-enrollment creates new identity) | No undo path | H2: revoke copy fix; open decision on recovery-mode key material access |
-| `listMemberKeys` excludes revoked keys | Cannot display revoked keys in UI | H1 prerequisite: `includeRevoked` parameter |
-| Recovery wrap inaccessible after revocation | Mnemonic recovery blocked for revoked keys | Open product decision (#5 in hardening plan) |
-| No holder removal or replacement | Add-only lifecycle | H4: replace-holder and remove-holder flows |
-| Revoke confirmation copy misleading | User not informed of document impact | Immediate: fix `settings.js:290` copy |
-| No audit on key material retrieval | Forensic gap | H2: add audit event |
-| `key_holders` table exported in backups despite being empty | Restoration confusion | Cleanup: remove from backup export |
-| Unlock/decrypt is entirely client-side | Server cannot enforce access denial beyond refusing key material | Architectural — by design for zero-knowledge model |
+| Revocation is irreversible (re-enrollment creates new identity) | No automatic undo path | Guard blocks newly stranding normal revokes; decide controlled recovery-mode access or explicit loss policy |
+| Recovery wrap inaccessible after revocation through normal API | Mnemonic recovery blocked in running app after revocation | Open product decision: recovery-mode endpoint, pre-revoke export, or offline-only recovery |
+| Already-stranded documents from pre-guard/manual states | Possible permanent data loss | Decide stranded-document recovery policy |
+| Holder repair is intentionally narrow | Cannot remove active holders or perform general role/policy edits | Plan separate policy-editing feature if needed |
+| No batch repair or document-list PKI health indicators | Operators must inspect documents individually | Optional dashboard/list health and batch repair backlog |
+| No derived PKI dependency index | Envelope scanning may be slow at large scale | H5 optional projection/index only if needed |
+| No audit on key material retrieval | Forensic gap | Add audit event if key-material access needs stronger traceability |
+| `key_holders` table exported in backups despite being reserved/empty | Restoration confusion | Decide whether to remove from backup export or keep with explicit reserved-schema note |
+| Unlock/decrypt is entirely client-side | Server cannot observe successful or failed decryption attempts | Architectural — by design for zero-knowledge model |
 
 ---
 
