@@ -77,103 +77,117 @@ Home Source PKI is mature in its core cryptographic path:
 - same-member backup-key extension works
 - parent-only trusted alternate holder extension works
 
-The main weakness is no longer "can PKI encrypt and unlock?" It is now:
+The original hardening weakness was not "can PKI encrypt and unlock?" It was:
 
 > **Can operators safely understand and manage the consequences of key revocation and holder drift?**
 
-Current posture is good for encryption and unlock, but under-hardened for:
-- revoking keys that still encumber encrypted documents
-- discovering which encrypted docs depend on which keys
-- warning when a revoke would strand a document
-- distinguishing between "revoked key still referenced in metadata" and
-  "document still has healthy alternate unlock paths"
-- removing or replacing holders after a document is already encrypted
+That mandatory lifecycle gate has now shipped for the current 1-of-M PKI model:
+- operators can discover which encrypted docs depend on a key
+- revoke confirmation shows affected documents and whether alternate holders remain
+- server-side revoke guard blocks newly stranding a document through the normal app/API path
+- document detail distinguishes active vs revoked holders and shows PKI health
+- narrow replace/remove flows repair revoked holder metadata without changing ciphertext
 
-This plan prioritizes operational safety and user visibility before any new PKI
-feature expansion.
+The remaining work is product-policy and scale hardening rather than basic
+revocation safety: revoked-key recovery semantics, already-stranded document
+recovery, list/dashboard health posture, batch repair, optional dependency
+indexing, and future threshold/estate-planning architecture.
 
 ---
 
 ## Confirmed current-state findings
 
-These findings are based on current implementation review:
+These findings are based on the shipped implementation after H1-H4.2:
 
-1. **Revocation is logical disablement only**
-   - Revoking a member key sets `encryption_keys.revoked_at`
-   - It does not rewrite existing document envelopes
-   - It does not remove holder references from existing PKI docs
+1. **Revocation is logical disablement plus guarded impact analysis**
+   - Revoking a member key sets `encryption_keys.revoked_at`.
+   - Revoke does not rewrite existing document envelopes or automatically remove
+     holder references from PKI documents.
+   - Before revoke, the app can inspect referenced PKI documents and classify
+     whether alternate active holders remain.
+   - The normal app/API path blocks revoke when it would make a document newly
+     stranded, or when holder metadata is inconsistent.
 
-2. **Per-document holder visibility exists**
-   - Document detail can show authorized holders and 1-of-M posture
-   - `GET /api/documents/:id/key-info` resolves holder/key/member information
+2. **Per-document holder visibility exists and includes health posture**
+   - Document detail shows authorized holders, active vs revoked status, holder
+     roles, primary/preferred pointer, and 1-of-M posture.
+   - `GET /api/documents/:id/key-info` resolves holder/key/member information,
+     including revoked keys referenced by the envelope.
+   - Document detail computes health states such as healthy redundancy, at risk
+     with one active path, or stranded with no active paths.
 
-3. **Reverse dependency visibility does not exist**
-   - There is no key-centric view of "which documents depend on this key"
-   - Settings revoke flow has no impact analysis
+3. **Reverse dependency visibility exists and powers revoke confirmation**
+   - `GET /api/members/:id/keys/:keyId/dependencies` answers which PKI documents
+     reference a key and how each document would be affected by revocation.
+   - Settings uses that lookup before showing the revoke confirmation dialog.
+   - Safe revokes show affected document counts/titles and explain that another
+     active holder can still open each document.
+   - Unsafe revokes are blocked with affected document details instead of relying
+     on warning copy alone.
 
-4. **Unsafe revoke is currently possible**
-   - A user can revoke a sole usable key for a PKI document
-   - The app does not currently warn or block this
+4. **Unsafe revoke is no longer possible through the normal route**
+   - `DELETE /api/members/:id/keys/:keyId` computes dependency summary before
+     mutating key state.
+   - It returns `409` for sole-active-holder cases and inconsistent metadata.
+   - Blocked attempts are audit-logged as `key.revoke_blocked`.
+   - Remaining risk is limited to already-stranded legacy/manual states or
+     direct database intervention outside the normal app path.
 
-5. **Revocation is irreversible — re-enrollment does not restore access**
-   - Each key registration generates a fresh X25519 keypair client-side
-     (`pki-crypto.js:60-70`), regardless of the physical authenticator
-   - Re-enrolling the same YubiKey or 1Password passkey produces a new
-     public key, new fingerprint, and new `encryption_keys.id`
-   - Old document envelopes still reference the old key ID in their
-     `holders[]` array — no reconnection mechanism exists
-   - This means revocation of a sole active holder is **permanent data
-     loss**, not a recoverable inconvenience
-   - The revoke confirmation copy in `settings.js:290` is dangerously
-     misleading — it says "Any future PKI uploads tied to it will be
-     blocked" but does not mention that existing encrypted documents
-     become unrecoverable
+5. **Revocation is still irreversible for the key identity**
+   - Each key registration generates a fresh X25519 keypair client-side,
+     regardless of the physical authenticator.
+   - Re-enrolling the same YubiKey or 1Password passkey produces a new public
+     key, fingerprint, and `encryption_keys.id`.
+   - Old document envelopes still reference the old key ID in `holders[]`; no
+     automatic reconnection mechanism exists.
+   - The shipped revoke dialog now distinguishes safe vs unsafe dependencies,
+     but the product still needs a policy decision for controlled recovery-mode
+     access to revoked key material and already-stranded documents.
 
-6. **Revoked holders are filtered from unlock eligibility**
-   - Client-side: `getEligiblePkiHolders()` in `document.html:553-564`
-     filters out holders where `revoked_at` is set
-   - Server-side: `getMemberKeyMaterial()` in `lib/pki.js:45-59` filters
-     `WHERE revoked_at IS NULL`, so the server refuses to serve key material
-     for revoked keys
-   - Belt-and-suspenders: `deriveMemberKekForUnlock()` throws on revoked
-     material at the client
-   - Note: unlock/decrypt is entirely client-side crypto — there is no
-     server "decrypt" endpoint to guard. Enforcement relies on the server
-     refusing to serve key material.
+6. **Revoked holders are visible for explanation but filtered from unlock eligibility**
+   - Client-side eligible-holder selection filters out holders where
+     `revoked_at` is set.
+   - Server-side `getMemberKeyMaterial()` filters `WHERE revoked_at IS NULL`, so
+     the server refuses to serve normal key material for revoked keys.
+   - `deriveMemberKekForUnlock()` also throws on revoked material at the client.
+   - Note: unlock/decrypt is entirely client-side crypto — there is no server
+     "decrypt" endpoint to guard. Enforcement relies on the server refusing to
+     serve key material.
 
-7. **Phase 2A canonical state is still document-envelope metadata**
-   - `documents.encryption_metadata.files.*.holders[]` is the live auth source
-   - `documents.encryption_key_id` is only a compatibility pointer
-   - existing `key_holders` schema is not the live source of truth
-   - this is correct for Use Case 1 (see "Use case context" above)
+7. **Phase 2A/H4 canonical state is still document-envelope metadata**
+   - `documents.encryption_metadata.files.*.holders[]` is the live auth source.
+   - `documents.encryption_key_id` is only a compatibility/preferred pointer and
+     repair routes reassign it when the removed/replaced primary pointer is no
+     longer active.
+   - Existing `key_holders` schema is not the live source of truth.
+   - This remains correct for Use Case 1 (see "Use case context" above).
 
-8. **`listMemberKeys` excludes revoked keys entirely**
-   - `pki.listMemberKeys()` at `lib/pki.js:13-27` filters
-     `WHERE revoked_at IS NULL`
-   - The settings page cannot currently display revoked keys at all
-   - This blocks Phase H3 (revoked-holder surfacing) — the API must
-     support an `includeRevoked` parameter before revoked keys can be
-     shown in any UI
+8. **`listMemberKeys` supports revoked-key visibility where requested**
+   - `pki.listMemberKeys(memberId, { includeRevoked: true })` returns active and
+     revoked member keys, active first.
+   - `GET /api/members/:id/keys?includeRevoked=1` exposes that shape through
+     existing auth boundaries.
+   - Settings can show historical revoked keys while keeping new encryption and
+     unlock eligibility limited to active keys.
 
-9. **Recovery key material is inaccessible after revocation through the app**
-   - `getMemberKeyMaterial()` filters `revoked_at IS NULL`
-   - `saveRecoveryWrap()` also requires non-revoked status
-   - If a key is revoked, the recovery-wrapped private key becomes
-     unreachable through the API — mnemonic-based recovery cannot restore it
-     through the normal application runtime
-   - Combined with finding #5 (re-enrollment doesn't reconnect), this
-     means revocation severs both the primary and recovery decryption
-     paths inside the app
-   - Note: this is distinct from offline break-glass recovery using exported
-     backup material and recovery words; that path may still exist if the
-     operator retained the necessary artifacts
+9. **Recovery key material remains inaccessible after revocation through the normal app path**
+   - `getMemberKeyMaterial()` filters `revoked_at IS NULL`.
+   - `saveRecoveryWrap()` also requires non-revoked status.
+   - If a key is revoked, recovery-wrapped private key material is unreachable
+     through the normal runtime API; mnemonic-based recovery inside the app does
+     not currently bypass revocation.
+   - This is distinct from offline break-glass recovery using exported backup
+     material and recovery words; that path may still exist if the operator
+     retained the necessary artifacts.
+   - This is now the main unresolved PKI policy decision, not an unimplemented
+     revoke preflight feature.
 
 10. **`key_holders` table is unused but architecturally reserved**
-    - Zero application reads in shipped code
-    - Role enum (`owner, cosigner, recovery`) does not match shipped PKI
-      roles (`owner, backup, beneficiary`)
-    - Exported in backups (`lib/backup.js:85`) despite being empty, which
-      creates false confidence on restore
+    - Zero application reads in shipped code.
+    - Role enum (`owner, cosigner, recovery`) does not match shipped PKI roles
+      (`owner, backup, beneficiary`).
+    - It is exported in backups despite being reserved/empty, which may create
+      restoration confusion unless documented or removed from export.
     - However, the table is a forward placeholder for possible Use Case 2
       (estate-planning relational model) — see "Use case context" and
       "Data model stance" sections. Do not drop casually.
