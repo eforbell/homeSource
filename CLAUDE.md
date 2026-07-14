@@ -85,11 +85,21 @@ DEKs encrypted per-holder with their KEK. Multi-sig covenants for inheritance.
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |
 | MAX_FILE_SIZE_MB | No | 50 | Upload size limit |
+| SMTP_HOST | No | — | Outbound mail; unset disables all mail |
+| SMTP_FROM | No | — | Required for any mail to send |
+| NOTIFICATION_TO | No | — | Comma-separated key-event alert recipients |
+
+Mail is fail-closed: nothing sends unless SMTP and `NOTIFICATION_TO` are both
+configured. See `.env.example` for the full SMTP/transport set.
 
 ## Data Model
 
 Core tables: family_members, sessions, app_config, documents, document_files,
 document_owners, tags, document_tags, share_links, backup_log, audit_log,
-encryption_keys, key_holders.
+encryption_keys.
+
+PKI holder authorization is envelope-canonical — it lives in
+`documents.encryption_metadata`, not in a holder table. The unused `key_holders`
+placeholder was retired in migration 012.
 
 Accent color: amber #d97706.

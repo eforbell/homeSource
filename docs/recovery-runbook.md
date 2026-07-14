@@ -40,8 +40,12 @@ Home Source backups include:
 - `documents/`
 - PKI key tables needed for offline recovery:
   - `encryption_keys`
-  - `key_holders`
   - `webauthn_credentials`
+
+PKI holder authorization is not a separate table: it lives in the
+`documents.encryption_metadata` envelope and travels with the document rows.
+Backups taken before migration 012 also contain an empty `key_holders` table;
+it carried no recovery-relevant data and can be ignored.
 
 ## 1. Decrypt the outer backup archive (encrypted backups only)
 
