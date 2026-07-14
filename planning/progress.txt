@@ -118,3 +118,31 @@
 - Decided to defer optional Slice 4 document-list PKI badges/API expansion.
 - Rationale: Settings now surfaces global posture and per-key risk with promoted next-action rows; adding posture directly to `GET /api/documents` would broaden list/API scope before there is evidence that document browse badges are needed.
 - Feature #12 is complete for the current pre-mutation key posture/readiness scope; future work can reopen document-list badges if browse-page discovery becomes painful.
+
+---
+
+## 2026-07-07 — Feature #13 charter: Continuity & Inheritance (Use Case 2)
+
+- Conducted a full repo survey of estate-planning readiness (design treatment, feature-11 planning artifacts, threat model, crypto research, shipped PKI code, schema placeholders).
+- Created planning/features/feature-13-estate-continuity-phase-a.md: clean-slate program charter (subsumes former "Feature #11 Phase 2B/3" and "Deadman Switch" future items), survey log of what exists today with file references, decision points D13-1..D13-6 pending attestation, Phase 0 enablers, and the Phase A implementation plan.
+- Key survey findings:
+  - The sealing ceremony's crypto already ships: parent-only beneficiary holder add performs live DEK unwrap + re-wrap to another member's key. Sealed envelopes need only a flag + API gate.
+  - The deadman trigger path requires zero new cryptography (design Decision 2 already holds).
+  - Phase E break-glass is ~80% shipped (offline CLI verified); Phase D Shamir has a chosen library (Privy shamir-secret-sharing + AES-GCM wrapper) but no implementation.
+  - Hard gaps: no outbound email anywhere, no trustee identity/table, no sealed state, no long-interval job (bin/import-worker.js is the precedent), D6-B notifications attested but unbuilt.
+  - Two attestation conflicts logged: design Decision 4 (async quorum) vs threat-model D3 (sync v1); design Decision 1 (beneficiaries stay family_members) vs feature-11 doc Option B.
+- Updated planning/README.md pipeline (added #13, marked #12 shipped) and current-feature.json (moved #12 to completed, replaced #11 future estate items with #13).
+- **Learnings:**
+  - Feature #11's suffix sprawl (phases + hardening) made status hard to read; #13 uses phase-lettered child docs (feature-13-phase-X) from the start.
+  - Attested security decisions (threat model D1-D8) must be explicitly superseded, not silently diverged from — D13-4 exists for exactly this.
+
+---
+
+## 2026-07-14 — Feature #13 Phase 0: SMTP mailer
+
+- Recorded Eric's attestations for D13-1 through D13-6 in the Feature #13 Phase A charter.
+- Added `lib/mailer.js` with Nodemailer and a small, testable API. It uses SMTP only when `SMTP_HOST` and `SMTP_FROM` are configured; otherwise it returns a logged, non-delivery result without opening a network connection.
+- SMTP requires TLS by default, supports optional paired authentication, and disables URL/file message-content access. Explicit `console` and owner-only `file` transports support offline local inspection.
+- Added `test/mailer.test.js` and documented the SMTP and local-transport environment variables.
+- Verification: targeted mailer suite passed (8 tests); full suite passed (307 tests); `git diff --check` passed.
+- **Remaining Phase 0:** basic notification dispatch and the deliberate `key_holders` replacement/backup-export cleanup.
