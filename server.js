@@ -27,6 +27,8 @@ const pki = require('./lib/pki');
 const webauthn = require('./lib/webauthn');
 const { notifyKeyEvent } = require('./lib/notifications');
 const { createKeyNotificationDispatcher } = require('./lib/key-notification-dispatcher');
+const { sendMail } = require('./lib/mailer');
+const trustees = require('./lib/trustees');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -419,6 +421,121 @@ app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
     if (!rows[0]) return res.status(404).json({ error: 'Member not found' });
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Continuity trustees ──────────────────────────────────────────────────────
+
+function trusteeInvitationUrl(token) {
+  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
+  if (!configuredBaseUrl) throw new Error('APP_URL is required for trustee invitations');
+  let invitationUrl;
+  try {
+    invitationUrl = new URL('/trustee-invite.html', configuredBaseUrl);
+  } catch {
+    throw new Error('APP_URL must be an absolute http(s) URL');
+  }
+  if (!['http:', 'https:'].includes(invitationUrl.protocol)) {
+    throw new Error('APP_URL must be an absolute http(s) URL');
+  }
+  invitationUrl.searchParams.set('token', token);
+  return invitationUrl.toString();
+}
+
+function trusteeInvitationMessage({ trustee, operatorName, invitationUrl, expiresAt }) {
+  const expiry = new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'long', timeStyle: 'short', timeZone: process.env.HOUSEHOLD_TIMEZONE || 'America/New_York'
+  }).format(new Date(expiresAt));
+  return {
+    to: trustee.email,
+    subject: 'A private Home Source continuity invitation',
+    text: `${operatorName} has asked you to prepare a private continuity key with Home Source. This invitation does not give access to any documents.\n\nOpen this one-time link to create your key:\n${invitationUrl}\n\nThis link expires ${expiry}. If you were not expecting this invitation, you can ignore this email.`
+  };
+}
+
+app.get('/api/trustees', requireAuth, requireParent, async (_req, res) => {
+  try {
+    res.json(await trustees.listTrustees());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {
+  try {
+    const { name, relationship, email } = req.body || {};
+    // Validate the deployment URL before persisting a token that cannot be delivered.
+    trusteeInvitationUrl('placeholder');
+    const trustee = await trustees.createTrustee({
+      name,
+      relationship,
+      email,
+      createdBy: req.member.id
+    });
+    const invitation = await trustees.createTrusteeInvitation({ trusteeId: trustee.id });
+    const invitationUrl = trusteeInvitationUrl(invitation.token);
+    const delivery = await sendMail(trusteeInvitationMessage({
+      trustee,
+      operatorName: req.member.name,
+      invitationUrl,
+      expiresAt: invitation.expires_at
+    }));
+    await audit.log('trustee.invited', 'vault_trustee', trustee.id, req.member.id, {
+      invitation_id: invitation.id,
+      expires_at: invitation.expires_at,
+      email_delivery: {
+        delivered: delivery.delivered === true,
+        transport: delivery.transport || null,
+        reason: delivery.reason || null
+      }
+    });
+    res.status(201).json({
+      trustee,
+      invitation: {
+        expires_at: invitation.expires_at,
+        delivered: delivery.delivered === true
+      }
+    });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/trustees/:id', requireAuth, requireParent, async (req, res) => {
+  try {
+    const trustee = await trustees.revokeTrustee(req.params.id);
+    if (!trustee) return res.status(404).json({ error: 'Trustee not found or already revoked' });
+    await audit.log('trustee.revoked', 'vault_trustee', trustee.id, req.member.id);
+    res.json({ ok: true, trustee });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/trustee-invitations/:token', async (req, res) => {
+  try {
+    const invitation = await trustees.getValidTrusteeInvitation(req.params.token);
+    if (!invitation) return res.status(404).json({ error: 'Invitation not found or expired' });
+    res.json({
+      trustee: { name: invitation.name, relationship: invitation.relationship },
+      invited_by: invitation.created_by_name,
+      expires_at: invitation.expires_at
+    });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/trustee-invitations/:token/register', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const registered = await trustees.registerTrusteeFromInvitation({
+      token: req.params.token,
+      publicKey: body.public_key,
+      encryptedPrivateKey: body.encrypted_private_key,
+      algorithm: body.algorithm || 'x25519',
+      protectionTier: body.protection_tier || 'passphrase',
+      label: body.label || null
+    });
+    if (!registered) return res.status(404).json({ error: 'Invitation not found or expired' });
+    await audit.log('trustee.registered', 'vault_trustee', registered.trustee.id, null, {
+      invitation_id: registered.invitation.id,
+      encryption_key_id: registered.key.id,
+      protection_tier: registered.key.protection_tier
+    });
+    res.status(201).json({ trustee: registered.trustee, key: registered.key });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // ── PKI Key Management ─────────────────────────────────────────────────────

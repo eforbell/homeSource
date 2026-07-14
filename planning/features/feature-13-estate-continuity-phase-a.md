@@ -472,6 +472,25 @@ Phase B/C planning, not Phase A.
   principals, trustee key ownership, sealed beneficiary projection, and
   invalid mixed-principal rows. The full suite passed (319 tests).
 
+### Implementation record — 2026-07-14: Phase A trustee invitation ceremony
+
+- Added parent-only trustee creation, listing, and revocation APIs. Inviting a
+  trustee creates a random 256-bit token, stores only its SHA-256 hash, and
+  expires it after seven days. The email link is built from the required
+  canonical `APP_URL`; the response never exposes the raw token.
+- Added an intentionally sessionless `trustee-invite.html` landing page. It
+  generates an X25519 keypair and passphrase-wraps the private key locally,
+  then uses the one-time invitation only to register the public key and wrapped
+  private material. No app session or document access is granted.
+- Registration locks and consumes the token in the same transaction that
+  creates the trustee-owned key and changes trustee status to `registered`.
+  Expired, used, and revoked invitations are uniformly rejected. Invite,
+  registration, and revocation events are audit-logged.
+- The invitation email is deliberately content-free: it says only that the
+  operator asked the recipient to prepare a continuity key. SMTP remains
+  best-effort per Phase 0; its delivery result is captured in the invite audit
+  record.
+
 ### Implementation record — 2026-07-14: Phase 0 SMTP mailer
 
 - Added `lib/mailer.js` using Nodemailer SMTP, with relay settings read only
