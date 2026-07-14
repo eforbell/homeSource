@@ -59,6 +59,10 @@ describe('getMailerConfig', () => {
       port: 587,
       secure: false,
       requireTLS: true,
+      dnsTimeout: 5_000,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
       auth: { user: 'vault', pass: 'secret' },
       disableFileAccess: true,
       disableUrlAccess: true

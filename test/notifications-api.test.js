@@ -41,12 +41,11 @@ describe('key-event notification dispatch', () => {
     const { rows } = await pool.query(
       `SELECT details
        FROM audit_log
-       WHERE action = 'notification.key_event' AND entity_id = $1
+      WHERE action = 'notification.key_event_queued' AND entity_id = $1
        ORDER BY id`,
       [parent.id]
     );
     assert.deepEqual(rows.map((row) => row.details.event), ['key.registered', 'key.revoked']);
-    assert.ok(rows.every((row) => row.details.delivered === false));
-    assert.ok(rows.every((row) => row.details.reason === 'NOTIFICATION_TO is not configured'));
+    assert.ok(rows.every((row) => Object.keys(row.details).length === 1));
   });
 });

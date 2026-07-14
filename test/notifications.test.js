@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createNotifier, getNotificationRecipients } = require('../lib/notifications');
+const { createKeyNotificationDispatcher } = require('../lib/key-notification-dispatcher');
 
 describe('getNotificationRecipients', () => {
   it('parses comma-separated household notification recipients', () => {
@@ -55,5 +56,26 @@ describe('createNotifier', () => {
   it('rejects unknown notification events', async () => {
     const notifier = createNotifier({ env: { NOTIFICATION_TO: 'first@family.test' }, mailer: { sendMail: async () => ({}) } });
     await assert.rejects(notifier.notifyKeyEvent({ event: 'document.decrypted', memberName: 'Parker' }), /Unsupported key notification event/);
+  });
+});
+
+describe('key notification dispatcher', () => {
+  it('queues audit logging but does not wait for a stalled mail transport', async () => {
+    const auditEntries = [];
+    const dispatcher = createKeyNotificationDispatcher({
+      notifyKeyEvent: async () => new Promise(() => {}),
+      audit: { log: async (...args) => auditEntries.push(args) },
+      logger: { warn() {}, error() {} }
+    });
+
+    await dispatcher.dispatch({ event: 'key.registered', memberId: 7, memberName: 'Parker', actorId: 7 });
+
+    assert.deepEqual(auditEntries, [[
+      'notification.key_event_queued',
+      'family_member',
+      7,
+      7,
+      { event: 'key.registered' }
+    ]]);
   });
 });
