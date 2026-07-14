@@ -64,18 +64,6 @@ CREATE UNIQUE INDEX idx_encryption_keys_member_fingerprint
   ON encryption_keys (member_id, key_fingerprint)
   WHERE key_type = 'member' AND revoked_at IS NULL;
 
--- ── Key holders (multi-sig support, day 2) ──────────────────────────────────
-
-CREATE TABLE key_holders (
-  id SERIAL PRIMARY KEY,
-  encryption_key_id INT NOT NULL REFERENCES encryption_keys(id) ON DELETE CASCADE,
-  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('owner', 'cosigner', 'recovery')),
-  encrypted_key_share TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (encryption_key_id, member_id)
-);
-
 CREATE TABLE webauthn_challenges (
   id SERIAL PRIMARY KEY,
   member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,

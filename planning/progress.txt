@@ -145,4 +145,18 @@
 - SMTP requires TLS by default, supports optional paired authentication, and disables URL/file message-content access. Explicit `console` and owner-only `file` transports support offline local inspection.
 - Added `test/mailer.test.js` and documented the SMTP and local-transport environment variables.
 - Verification: targeted mailer suite passed (8 tests); full suite passed (307 tests); `git diff --check` passed.
-- **Remaining Phase 0:** basic notification dispatch and the deliberate `key_holders` replacement/backup-export cleanup.
+- **Remaining Phase 0:** basic notification dispatch.
+
+---
+
+## 2026-07-14 — Feature #13 Phase 0: key-holder placeholder retirement
+
+- Added guarded migration `012-retire-key-holders.sql` to drop the unused
+  `key_holders` placeholder only when empty; it fails rather than silently
+  discard unexpected data.
+- Removed the retired table from the schema baseline, test cleanup, and backup
+  exports. Existing PKI authorization remains envelope-canonical.
+- Added a backup regression test confirming the table is absent and omitted
+  from archives.
+- Verification: `npm run test:prepare`; targeted backup suite passed (6 tests).
+- **Remaining Phase 0:** basic notification dispatch.

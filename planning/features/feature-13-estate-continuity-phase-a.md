@@ -73,7 +73,7 @@ so future sessions can re-verify instead of re-deriving. Items marked
 
 | Placeholder | State | Notes |
 |---|---|---|
-| `key_holders` table | Exists, zero application reads | `db/schema.sql:69-77`. Roles (`owner, cosigner, recovery`) do **not** match shipped roles. Reserved as the relational projection for estate surfaces — hardening plan says "do not drop casually" but also that it "will need evolution." Currently exported in backups despite being empty (`lib/backup.js:85`) — cleanup queued (hardening backlog #15/#16). Shape decision is D13-3 below. |
+| `key_holders` placeholder | **Retired 2026-07-14** | Migration `012-retire-key-holders.sql` drops it only when empty; it had zero application reads and its roles (`owner, cosigner, recovery`) did **not** match shipped PKI roles. Backups no longer export it. Phase A will add the purpose-built `document_designations` projection from D13-3. |
 | `timelock` encryption mode | Reserved in CHECK constraint, unimplemented | `lib/encryption-mode.js:3` |
 | `document_owners` ownership types `beneficiary`, `custodian` | In schema since migration 001 | `db/schema.sql:193` — ownership-layer (not crypto-layer) designation; relationship to sealed designations **needs deeper look** during Phase A build |
 | `policy.threshold` field in envelope | Present, always `1` | Ready to carry M-of-N values in Phase D |
@@ -287,7 +287,7 @@ served what, and a projection rebuild could silently unseal.
 2. Minimal notification dispatch on key events (registration, revocation,
    holder add) — retires the attested-but-unbuilt D6-B at basic level
 3. `key_holders` disposition migration (per D13-3) including backup-export
-   cleanup — closes hardening backlog #15/#16
+   cleanup — **complete 2026-07-14**; closes hardening backlog #15/#16
 4. Attest D13-1 through D13-6; record D13-4 supersession in the threat model
    attestation log
 
@@ -445,7 +445,7 @@ Phase B/C planning, not Phase A.
 1. **Complete (2026-07-14):** Eric attested D13-1 through D13-6 (this document).
 2. **Complete (2026-07-14):** Phase 0 SMTP mailer — `lib/mailer.js`, env-configured SMTP with TLS required by default, disabled fallback, and explicit console/file inspection transports.
 3. Phase 0 basic notification dispatch (registration, revocation, holder add).
-4. Phase 0 `key_holders` disposition migration and backup-export cleanup.
+4. **Complete (2026-07-14):** Phase 0 `key_holders` disposition migration and backup-export cleanup.
 5. `encryption_keys` member-assumption audit (A1 "needs deeper look").
 6. Phase A implementation per plan above.
 
@@ -463,3 +463,13 @@ Phase B/C planning, not Phase A.
 - Added regression tests for disabled fallback, SMTP configuration/delivery,
   partial-credential rejection, safe file output, and header-injection input
   rejection. The full suite passed (307 tests).
+
+### Implementation record — 2026-07-14: Phase 0 key-holder placeholder retirement
+
+- Added migration `012-retire-key-holders.sql`. It drops the unused placeholder
+  only when it is empty, failing closed if a deployment has unexpected data
+  requiring a deliberate migration.
+- Removed the table from the current schema baseline, test cleanup, and backup
+  export. Existing PKI authorization remains envelope-canonical and unchanged.
+- Added regression coverage that verifies the table is absent and backup
+  archives omit it.

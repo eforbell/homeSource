@@ -40,5 +40,5 @@ mcp bugBase list_bug_tickets --app_slug home-source
 - **Local-first**: No cloud storage dependencies. All documents on local disk.
 - **Nginx subpath compatible**: All fetch() calls use relative paths. Never absolute `/api/...`.
 - **No build step**: Vanilla HTML/CSS/JS frontend. Libraries from CDN or vendored.
-- **PKI envelope-canonical**: shipped PKI authorization lives in `documents.encryption_metadata`; `key_holders` remains reserved for estate-planning projection work.
+- **PKI envelope-canonical**: shipped PKI authorization lives in `documents.encryption_metadata`; the unused `key_holders` placeholder was retired in migration 012, and a future `document_designations` projection must never become an authorization source of truth.
 - **Mobile-first**: All UI designed for touch and small screens first, desktop second.
