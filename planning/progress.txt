@@ -63,3 +63,58 @@
 - Captured Feature #12 as the next PKI maturity slice before Use Case 2 estate/quorum work.
 - Theme: make key usage, at-risk docs, backup-key testing, and recovery posture observable before destructive key lifecycle actions.
 - Planned first slices: `GET /api/pki/posture`, Settings PKI Readiness panel, per-key protected-document lists, then a separate Test Unlock ceremony for updating readiness metadata.
+
+---
+
+## 2026-07-04 — Feature #12 implementation readiness
+- Converted Feature #12 from draft planning into an implementation-ready Slices 1-2 handoff.
+- Added `.omx/plans/prd-feature-12-pki-key-posture-readiness.md` with locked API/UI decisions, helper-refactor strategy, response contract, and acceptance criteria.
+- Added `.omx/plans/test-spec-feature-12-pki-key-posture-readiness.md` with concrete API, regression, UI/static, and manual smoke checks.
+- Updated Feature #12 planning status to implementation-ready for posture API + Settings visibility; Test Unlock remains a separate Slice 3.
+- **Learnings:**
+  - The safest first implementation path is to extract shared PKI document classification helpers in `lib/pki.js` so `GET /api/pki/posture` and revoke preflight remain aligned.
+  - Kid posture must be document-owner scoped, not merely PKI-holder scoped, because current document access checks are owner-based.
+  - UI should label `last_used_at` as readiness/test metadata, not document-decryption proof.
+
+---
+
+## 2026-07-04 — Feature #12 Slices 1-2 implementation
+- Implemented shared PKI posture classification helpers in `lib/pki.js` and refactored key dependency summaries to use them so revoke preflight and pre-mutation posture share status logic.
+- Added `GET /api/pki/posture` for parent household posture and kid-scoped own/accessibile posture without exposing key material.
+- Added API coverage in `test/pki-posture-api.test.js` for auth, parent/kid scope, per-key dependency counts, stranded docs, inconsistent metadata, and active-key readiness counts.
+- Added Settings PKI Readiness panel, per-key posture counts, and a protected-documents modal; Test Unlock remains deferred to Slice 3.
+- Verification: `npm run test:prepare`; targeted PKI tests passed (15 tests, 0 failures); full suite passed (297 tests, 0 failures).
+- **Learnings:**
+  - The existing test machine foundation is usable: local Postgres test DB on port 5438 is reachable and migrated.
+  - Posture can remain envelope-derived at household scale without adding a dependency index.
+  - Keep operator/browser smoke tests separate from automated acceptance for this pass.
+
+---
+
+## 2026-07-04 — Feature #12 Slice 3 Test Unlock
+- Implemented self-only `POST /api/members/:id/keys/:keyId/tested` endpoint; it rejects cross-member and revoked-key attempts and updates `last_used_at` only for active owned keys.
+- Added Settings `Test Unlock` action for active self-owned keys only.
+- The browser ceremony fetches wrapped key material through the existing self-only material route, proves possession by locally unwrapping the member private key via passphrase or WebAuthn PRF, then records the last-tested timestamp.
+- Added API tests for tested timestamp updates and authorization/revoked-key rejection.
+- Verification: `npm run test:prepare`; targeted PKI/WebAuthn tests passed (29 tests, 0 failures); full suite passed (299 tests, 0 failures).
+- **Learnings:**
+  - Test Unlock can reuse the existing document/upload key-unlock primitives without decrypting any document DEK.
+  - `last_used_at` remains advisory readiness metadata; the server trusts the client only after local proof and does not treat this timestamp as cryptographic authorization.
+
+---
+
+## 2026-07-04 — Feature #12 protected-documents modal prioritization
+- Improved the per-key protected-documents modal so at-risk, stranded, inconsistent, or action-needed rows sort before healthy rows.
+- Added a compact modal summary stating whether any listed documents need attention.
+- Added status and next-action badges so `Add backup key` and repair actions stand out in longer key dependency lists.
+- Verification: `node --check public/settings.js`; confirmed no absolute `/api/...` paths were introduced; restarted local dev server on port 3008.
+- **Learnings:**
+  - Key-level risk counts are useful, but longer protected-document lists need attention-first ordering to keep the risky documents from being buried by healthy references.
+
+---
+
+## 2026-07-04 — Feature #12 current-scope completion
+- Operator smoke confirmed PKI readiness panel, per-key counts, Test Unlock timestamp updates, and attention-first protected-documents modal behavior.
+- Decided to defer optional Slice 4 document-list PKI badges/API expansion.
+- Rationale: Settings now surfaces global posture and per-key risk with promoted next-action rows; adding posture directly to `GET /api/documents` would broaden list/API scope before there is evidence that document browse badges are needed.
+- Feature #12 is complete for the current pre-mutation key posture/readiness scope; future work can reopen document-list badges if browse-page discovery becomes painful.

@@ -585,6 +585,25 @@ app.get('/api/members/:id/keys/:keyId/material', requireAuth, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.post('/api/members/:id/keys/:keyId/tested', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only test your own keys' });
+    }
+    const key = await pki.getMemberKey(keyId, memberId);
+    if (!key || key.revoked_at) return res.status(404).json({ error: 'Key not found' });
+    const updated = await pki.updateKeyLastUsed(keyId);
+    await audit.log('key.tested', 'encryption_key', keyId, req.member.id, {
+      member_id: memberId,
+      protection_tier: key.protection_tier,
+      verification_method: key.verification_method
+    });
+    res.json({ ok: true, key: updated });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/members/:id/keys/:keyId/dependencies', requireAuth, async (req, res) => {
   try {
     const memberId = Number(req.params.id);
@@ -649,6 +668,12 @@ app.post('/api/members/:id/keys/:keyId/verify-fingerprint', requireAuth, async (
     if (!expected_fingerprint) return res.status(400).json({ error: 'expected_fingerprint required' });
     const match = key.key_fingerprint === expected_fingerprint;
     res.json({ match, server_fingerprint: key.key_fingerprint });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/pki/posture', requireAuth, async (req, res) => {
+  try {
+    res.json(await pki.getPkiPostureSummary(req.member));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
