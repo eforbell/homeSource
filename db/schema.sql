@@ -32,17 +32,48 @@ CREATE TABLE app_config (
   value TEXT
 );
 
+-- ── Continuity trustees (external principals; no standing app sessions) ──────
+
+CREATE TABLE vault_trustees (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  relationship TEXT,
+  email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'invited'
+    CHECK (status IN ('invited', 'registered', 'revoked')),
+  created_by INT NOT NULL REFERENCES family_members(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  registered_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX idx_vault_trustees_email ON vault_trustees (LOWER(email));
+
+CREATE TABLE trustee_invitations (
+  id SERIAL PRIMARY KEY,
+  trustee_id INT NOT NULL REFERENCES vault_trustees(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_trustee_invitations_active
+  ON trustee_invitations (trustee_id, expires_at)
+  WHERE used_at IS NULL;
+
 -- ── Encryption keys (day 2 — schema present from day 1) ─────────────────────
 
 CREATE TABLE encryption_keys (
   id SERIAL PRIMARY KEY,
-  key_type TEXT NOT NULL CHECK (key_type IN ('document', 'member', 'recovery')),
+  key_type TEXT NOT NULL CHECK (key_type IN ('document', 'member', 'recovery', 'trustee')),
   public_key TEXT,
   encrypted_private_key TEXT,
   algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   member_id INT REFERENCES family_members(id),
+  trustee_id INT REFERENCES vault_trustees(id),
   credential_id TEXT,
   prf_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   key_fingerprint TEXT,
@@ -57,12 +88,21 @@ CREATE TABLE encryption_keys (
   credential_attachment TEXT CHECK (credential_attachment IN ('platform', 'cross-platform')),
   verified_at TIMESTAMPTZ,
   recovery_wrapped_private_key TEXT,
-  recovery_type TEXT CHECK (recovery_type IN ('mnemonic_bip39'))
+  recovery_type TEXT CHECK (recovery_type IN ('mnemonic_bip39')),
+  CHECK (
+    (key_type = 'member' AND member_id IS NOT NULL AND trustee_id IS NULL)
+    OR (key_type = 'trustee' AND member_id IS NULL AND trustee_id IS NOT NULL)
+    OR (key_type IN ('document', 'recovery') AND trustee_id IS NULL)
+  )
 );
 
 CREATE UNIQUE INDEX idx_encryption_keys_member_fingerprint
   ON encryption_keys (member_id, key_fingerprint)
   WHERE key_type = 'member' AND revoked_at IS NULL;
+
+CREATE UNIQUE INDEX idx_encryption_keys_trustee_fingerprint
+  ON encryption_keys (trustee_id, key_fingerprint)
+  WHERE key_type = 'trustee' AND revoked_at IS NULL;
 
 CREATE TABLE webauthn_challenges (
   id SERIAL PRIMARY KEY,
@@ -184,6 +224,30 @@ CREATE TABLE document_owners (
 );
 
 CREATE INDEX idx_document_owners_member ON document_owners (member_id);
+
+-- ── Continuity designation projection (envelope remains canonical) ──────────
+
+CREATE TABLE document_designations (
+  id SERIAL PRIMARY KEY,
+  document_id INT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  member_id INT REFERENCES family_members(id),
+  trustee_id INT REFERENCES vault_trustees(id),
+  role TEXT NOT NULL CHECK (role IN ('beneficiary', 'trustee')),
+  sealed BOOLEAN NOT NULL DEFAULT TRUE,
+  sealed_until TEXT NOT NULL DEFAULT 'deadman_trigger',
+  encryption_key_id INT REFERENCES encryption_keys(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (role = 'beneficiary' AND member_id IS NOT NULL AND trustee_id IS NULL)
+    OR (role = 'trustee' AND member_id IS NULL AND trustee_id IS NOT NULL)
+  ),
+  UNIQUE (document_id, encryption_key_id)
+);
+
+CREATE INDEX idx_document_designations_member ON document_designations (member_id)
+  WHERE member_id IS NOT NULL;
+CREATE INDEX idx_document_designations_trustee ON document_designations (trustee_id)
+  WHERE trustee_id IS NOT NULL;
 
 -- ── Tags ────────────────────────────────────────────────────────────────────
 

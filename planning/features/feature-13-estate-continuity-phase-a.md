@@ -1,7 +1,7 @@
 # Feature #13: Continuity & Inheritance — Program Charter + Phase A Plan
 
 Date: 2026-07-07
-Status: Draft planning — repo survey complete; decision points pending attestation
+Status: Phase A implementation in progress — A1 data-model foundation complete
 Parent: Use Case 2 (estate planning / inheritance) — see design guide
 Depends on: Feature #11 PKI foundation + hardening H1-H4.2 (shipped), Feature #12 posture/readiness (shipped)
 Design guide: `design/homesource-treatment.md` ("a letter, not a vault", Phases A-E)
@@ -447,8 +447,30 @@ Phase B/C planning, not Phase A.
 2. **Complete (2026-07-14):** Phase 0 SMTP mailer — `lib/mailer.js`, env-configured SMTP with TLS required by default, disabled fallback, and explicit console/file inspection transports.
 3. **Complete (2026-07-14):** Phase 0 basic notification dispatch (registration, revocation, holder add).
 4. **Complete (2026-07-14):** Phase 0 `key_holders` disposition migration and backup-export cleanup.
-5. `encryption_keys` member-assumption audit (A1 "needs deeper look").
-6. Phase A implementation per plan above.
+5. **Complete (2026-07-14):** `encryption_keys` member-assumption audit and
+   A1 data-model foundation (trustees, invitations, trustee key ownership, and
+   sealed designation projection).
+6. Continue Phase A implementation per plan: invitation ceremony, sealed
+   envelope v2, directory, and permission matrix.
+
+### Implementation record — 2026-07-14: Phase A A1 data-model foundation
+
+- Audited every current `encryption_keys.member_id` use. The established PKI
+  registration, key-material, WebAuthn, and holder-management paths are
+  intentionally household-member scoped; this work leaves them unchanged.
+  Trustee-specific ceremony and key-serving paths will be additive and scoped
+  to a one-time invitation token rather than weakening those routes.
+- Added migration `013-phase-a-trustee-designations.sql`: external
+  `vault_trustees`, hashed-token `trustee_invitations`, trustee-owned
+  `encryption_keys`, and envelope-projection `document_designations` with real
+  foreign keys and principal/role XOR constraints.
+- `document_designations` defaults to `sealed = true` and
+  `sealed_until = deadman_trigger`; it remains a rebuildable projection, not
+  the source of cryptographic authorization. Envelope v2 writing is deferred
+  to A2 so existing version-1 PKI behavior remains untouched.
+- Added a small trustee repository and regression coverage for external
+  principals, trustee key ownership, sealed beneficiary projection, and
+  invalid mixed-principal rows. The full suite passed (319 tests).
 
 ### Implementation record — 2026-07-14: Phase 0 SMTP mailer
 
