@@ -39,7 +39,7 @@ async function resetDatabase() {
     'webauthn_challenges',
     'webauthn_credentials',
     'share_links', 'document_tags', 'document_owners', 'document_files',
-    'documents', 'key_holders', 'encryption_keys',
+    'documents', 'encryption_keys',
     'tags', 'sessions', 'app_config', 'family_members'
   ];
   for (const table of tables) {

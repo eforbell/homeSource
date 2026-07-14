@@ -72,8 +72,9 @@ encryption_metadata
 ```
 
 The `documents.encryption_key_id` column is a compatibility pointer only.
-The `key_holders` table exists in schema but is unused by shipped PKI code —
-it is reserved as a forward placeholder for estate-planning relational model.
+The `key_holders` placeholder table was retired in migration 012; it was never
+read by shipped PKI code. Estate-planning phases will add a purpose-built
+`document_designations` projection instead.
 
 **Source**: `public/pki-crypto.js:296-344`, `lib/documents.js:226-248`
 
@@ -366,7 +367,6 @@ for the implementation history and open decisions.
 | No batch repair or document-list PKI health indicators | Operators must inspect documents individually | Optional dashboard/list health and batch repair backlog |
 | No derived PKI dependency index | Envelope scanning may be slow at large scale | H5 optional projection/index only if needed |
 | No audit on key material retrieval | Forensic gap | Add audit event if key-material access needs stronger traceability |
-| `key_holders` table exported in backups despite being reserved/empty | Restoration confusion | Decide whether to remove from backup export or keep with explicit reserved-schema note |
 | Unlock/decrypt is entirely client-side | Server cannot observe successful or failed decryption attempts | Architectural — by design for zero-knowledge model |
 
 ---
@@ -388,17 +388,18 @@ of truth for PKI authorization. This design:
 - Avoids relational sync issues between tables and envelope content
 - Is correct for the current use case (operator protecting own documents)
 
-A relational holder model (evolving `key_holders` or a new table) will be
-needed for estate-planning surfaces (permission matrix, beneficiary
-directory, sealed envelopes) that require cross-document queries. The JSONB
-envelope will remain canonical for crypto operations; the relational model
-will serve as a projection/index for UX. See the use case context section
-in the hardening plan.
+A relational holder model will be needed for estate-planning surfaces
+(permission matrix, beneficiary directory, sealed envelopes) that require
+cross-document queries. The JSONB envelope will remain canonical for crypto
+operations; the relational model will serve as a projection/index for UX.
+See the use case context section in the hardening plan.
 
-### Forward-reserved schema
+### Retired schema
 
-The `key_holders` table exists in schema with roles `owner, cosigner,
-recovery` and an `encrypted_key_share` column. It is intentionally unused
-by Phase 1/2A PKI code and reserved for estate-planning phases where
-relational holder tracking, polymorphic holder references, sealed state,
-and Shamir share storage will be needed.
+The original `key_holders` placeholder (roles `owner, cosigner, recovery`,
+plus an `encrypted_key_share` column) was dropped in migration 012. It had
+zero application reads and its roles did not match the shipped PKI roles
+(`owner, backup, beneficiary`), so leaving it in place risked future work
+mistaking it for authorization state. Estate-planning phases will introduce
+a purpose-built `document_designations` projection covering relational holder
+tracking, polymorphic holder references, sealed state, and Shamir shares.

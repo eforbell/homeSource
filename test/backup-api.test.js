@@ -32,6 +32,25 @@ after(async () => {
 });
 
 describe('backup export with encrypted documents', () => {
+  it('does not export the retired key_holders placeholder table', async () => {
+    const { rows } = await pool.query("SELECT to_regclass('public.key_holders') AS key_holders_table");
+    assert.equal(rows[0].key_holders_table, null, 'key_holders should be retired by migration 012');
+
+    const exportRes = await authedPost('api/backup/export', parentCookie, { encrypted: false });
+    assert.equal(exportRes.status, 200);
+    const payload = await exportRes.json();
+    const backupPath = path.join(process.cwd(), 'data', 'test', 'exports', payload.file);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-key-holders-test-'));
+    try {
+      execFileSync('tar', ['-xzf', backupPath, '-C', tmpDir], { stdio: 'pipe' });
+      const rootEntry = fs.readdirSync(tmpDir)[0];
+      const dbExport = JSON.parse(fs.readFileSync(path.join(tmpDir, rootEntry, 'database.json'), 'utf8'));
+      assert.equal(Object.hasOwn(dbExport, 'key_holders'), false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   async function createRealPkiFixture(title) {
     const plaintext = Buffer.from(`Highly sensitive content for ${title}`, 'utf8');
     const keypair = await PKICrypto.generateMemberKeypair();

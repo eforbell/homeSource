@@ -24,8 +24,9 @@ Feature-driven development tracking for Home Source, the sovereign family docume
 | 8 | Expiry Tracking + Alerts | future |
 | 9 | OCR (tesseract.js) | future |
 | 10 | MCP Server | future |
-| 11 | PKI vaulted document access (single-holder, 1-of-M, lifecycle hardening H1-H4.2) | shipped foundation; future threshold/estate phases |
-| 12 | PKI Key Posture and Readiness | planned |
+| 11 | PKI vaulted document access (single-holder, 1-of-M, lifecycle hardening H1-H4.2) | shipped foundation; threshold/estate phases moved to #13 |
+| 12 | PKI Key Posture and Readiness | shipped (Slice 4 deferred) |
+| 13 | Continuity & Inheritance (Use Case 2: trustees, sealed designations, deadman switch, quorum — Phases A-E) | planning — see features/feature-13-estate-continuity-phase-a.md |
 
 ## Open bugBase Tickets
 
@@ -39,5 +40,5 @@ mcp bugBase list_bug_tickets --app_slug home-source
 - **Local-first**: No cloud storage dependencies. All documents on local disk.
 - **Nginx subpath compatible**: All fetch() calls use relative paths. Never absolute `/api/...`.
 - **No build step**: Vanilla HTML/CSS/JS frontend. Libraries from CDN or vendored.
-- **PKI envelope-canonical**: shipped PKI authorization lives in `documents.encryption_metadata`; `key_holders` remains reserved for estate-planning projection work.
+- **PKI envelope-canonical**: shipped PKI authorization lives in `documents.encryption_metadata`; the unused `key_holders` placeholder was retired in migration 012, and a future `document_designations` projection must never become an authorization source of truth.
 - **Mobile-first**: All UI designed for touch and small screens first, desktop second.

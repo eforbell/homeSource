@@ -220,6 +220,16 @@ Notes:
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |
 | MAX_FILE_SIZE_MB | No | 50 | Upload size limit |
+| SMTP_HOST | No | -- | SMTP relay hostname; mail is disabled unless this and `SMTP_FROM` are set |
+| SMTP_PORT | No | 587 | SMTP relay port |
+| SMTP_SECURE | No | `yes` for port 465, otherwise `no` | Use immediate TLS for port 465; use STARTTLS for port 587/25 |
+| SMTP_REQUIRE_TLS | No | yes | Refuse relays that cannot upgrade to TLS |
+| SMTP_USER / SMTP_PASS | No | -- | Optional SMTP authentication; configure both or neither |
+| SMTP_FROM | No | -- | Sender applied to all Home Source notifications |
+| SMTP_REJECT_UNAUTHORIZED | No | yes | Set to `no` only for a deliberately trusted relay with a self-signed certificate |
+| NOTIFICATION_TO | No | -- | Comma-separated trusted household recipients for generic key-event alerts |
+| MAIL_TRANSPORT | No | smtp when `SMTP_HOST` is set; otherwise disabled | Explicitly set `console` or `file` only for local message inspection |
+| MAIL_OUTPUT_DIR | No | `./data/mail` | Private `.eml` output directory when `MAIL_TRANSPORT=file` |
 | MAGICINDEX_PROVIDER | No | off | `off`, `openai`, `openai_compatible`, or `ollama` |
 | MAGICINDEX_PROVIDER_PRIVATE | No | no | Set `yes` only for private/local providers; allows batch UI to default MagicIndex on |
 | MAGICINDEX_PROVIDER_DEFAULT | No | openai_compatible | Provider preselected by the batch UI |
@@ -234,6 +244,22 @@ Notes:
 | MAGICINDEX_OPENAI_MODEL | No | gpt-5.4-nano | OpenAI cloud model when `MAGICINDEX_PROVIDER=openai` |
 | MAGICINDEX_OPENAI_SEND_PDF | No | yes | Send PDFs directly as OpenAI Responses `input_file` content in cloud mode |
 | OPENAI_API_KEY | No | -- | Required only for OpenAI cloud MagicIndex |
+
+### Outbound mail
+
+Home Source uses an env-configured SMTP relay, so it can deliver through a
+family-operated Postfix server without coupling the vault to a mail API vendor.
+It requires TLS by default and does not make any network connection unless both
+`SMTP_HOST` and `SMTP_FROM` are configured. SMTP authentication is optional,
+but `SMTP_USER` and `SMTP_PASS` must be configured together.
+
+Set `NOTIFICATION_TO` to one or more trusted household addresses to receive
+generic notices for key registration, revocation, and holder changes. These
+messages contain no document contents; every dispatch outcome is audit-logged.
+
+For development and tests, set `MAIL_TRANSPORT=console` to emit the generated
+message to the process log, or `MAIL_TRANSPORT=file` to write owner-only `.eml`
+files to `MAIL_OUTPUT_DIR`. These transports never contact an SMTP relay.
 
 ## Host Runtime Dependencies (Production)
 
