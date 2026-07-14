@@ -458,6 +458,33 @@ app.get('/api/trustees', requireAuth, requireParent, async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, res) => {
+  try {
+    const { rows: members } = await pool.query(
+      `SELECT m.id, m.name, m.role, m.avatar_emoji,
+              COUNT(DISTINCT dd.id)::int AS designation_count,
+              COUNT(DISTINCT ek.id) FILTER (WHERE ek.revoked_at IS NULL)::int AS active_key_count
+       FROM family_members m
+       LEFT JOIN document_designations dd ON dd.member_id = m.id
+       LEFT JOIN encryption_keys ek ON ek.member_id = m.id AND ek.key_type = 'member'
+       GROUP BY m.id ORDER BY m.role, m.name`
+    );
+    const trusteeRows = await trustees.listTrustees();
+    const { rows: documents } = await pool.query(
+      `SELECT d.id, d.title, d.status,
+              COALESCE(json_agg(json_build_object(
+                'encryption_key_id', dd.encryption_key_id, 'member_id', dd.member_id,
+                'trustee_id', dd.trustee_id, 'role', dd.role, 'sealed', dd.sealed
+              ) ORDER BY dd.id) FILTER (WHERE dd.id IS NOT NULL), '[]') AS designations
+       FROM documents d
+       LEFT JOIN document_designations dd ON dd.document_id = d.id
+       WHERE d.status = 'active'
+       GROUP BY d.id ORDER BY d.title`
+    );
+    res.json({ members, trustees: trusteeRows, documents });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {
   try {
     const { name, relationship, email } = req.body || {};
@@ -833,6 +860,7 @@ app.get('/api/documents', requireAuth, async (req, res) => {
     };
     if (req.member.role === 'kid') {
       filters.owner_id = req.member.id;
+      filters.exclude_sealed_member_id = req.member.id;
     }
     res.json(await listDocuments(filters));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1085,6 +1113,130 @@ function choosePrimaryHolderKeyId(holders, previousPrimaryKeyId, keysById) {
   });
   return firstActive ? Number(firstActive.encryption_key_id) : null;
 }
+
+function pkiUploadHolders(metadata) {
+  return metadata?.files?.upload?.holders || [];
+}
+
+function holderHasSameIdentity(left, right) {
+  return Number(left?.member_id || 0) === Number(right?.member_id || 0)
+    && Number(left?.trustee_id || 0) === Number(right?.trustee_id || 0)
+    && Number(left?.encryption_key_id || 0) === Number(right?.encryption_key_id || 0)
+    && String(left?.role || '') === String(right?.role || '')
+    && String(left?.key_fingerprint || '') === String(right?.key_fingerprint || '')
+    && (left?.sealed === true) === (right?.sealed === true)
+    && String(left?.sealed_until || '') === String(right?.sealed_until || '')
+    && !wrappedDekChanged(left?.wrapped_dek, right?.wrapped_dek);
+}
+
+async function validateNewSealedHolder(holder, actorId) {
+  if (!holder || holder.sealed !== true || holder.sealed_until !== 'deadman_trigger') {
+    throw new Error('Sealed designations must set sealed=true and sealed_until=deadman_trigger');
+  }
+  if (!holder.wrapped_dek || holder.wrapped_dek.kind !== 'pki_x25519') {
+    throw new Error('Sealed designation requires holder-local wrapped_dek metadata');
+  }
+  const hasMember = Number(holder.member_id) > 0;
+  const hasTrustee = Number(holder.trustee_id) > 0;
+  if (hasMember === hasTrustee) throw new Error('Sealed designation requires exactly one recipient identity');
+  if ((holder.role === 'beneficiary') !== hasMember || (holder.role === 'trustee') !== hasTrustee) {
+    throw new Error('Sealed designation role must match its recipient identity');
+  }
+  const { rows } = await pool.query(
+    `SELECT id, key_type, member_id, trustee_id, key_fingerprint, revoked_at
+     FROM encryption_keys WHERE id = $1`,
+    [Number(holder.encryption_key_id)]
+  );
+  const key = rows[0];
+  if (!key || key.revoked_at) throw new Error('Sealed designation key is unavailable');
+  if (key.key_fingerprint !== holder.key_fingerprint) throw new Error('Sealed designation key fingerprint mismatch');
+  if (hasMember && (key.key_type !== 'member' || Number(key.member_id) !== Number(holder.member_id))) {
+    throw new Error('Sealed beneficiary key does not belong to the selected member');
+  }
+  if (hasMember && Number(holder.member_id) === Number(actorId)) {
+    throw new Error('A beneficiary designation must target a different household member');
+  }
+  if (hasTrustee && (key.key_type !== 'trustee' || Number(key.trustee_id) !== Number(holder.trustee_id))) {
+    throw new Error('Sealed trustee key does not belong to the selected trustee');
+  }
+}
+
+app.post('/api/documents/:id/designations/seal', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) return res.status(403).json({ error: 'Access denied' });
+    if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') return res.status(409).json({ error: 'Document is not PKI-encrypted' });
+    const encryptionMetadata = req.body?.encryption_metadata;
+    if (!encryptionMetadata || typeof encryptionMetadata !== 'object') return res.status(400).json({ error: 'encryption_metadata is required' });
+    const normalized = normalizeEncryptionInput({ encryption_mode: 'pki', encryption_metadata: encryptionMetadata });
+    if (Number(normalized.encryption_metadata.version) !== 2) return res.status(400).json({ error: 'Sealed designations require encryption_metadata.version = 2' });
+
+    const existingHolders = normalizeStoredPkiHolders(doc.encryption_metadata?.files?.upload || {});
+    const updatedHolders = pkiUploadHolders(normalized.encryption_metadata);
+    const existingByKeyId = new Map(existingHolders.map((holder) => [Number(holder.encryption_key_id), holder]));
+    for (const existing of existingHolders) {
+      const candidate = updatedHolders.find((holder) => Number(holder.encryption_key_id) === Number(existing.encryption_key_id));
+      if (!candidate || !holderHasSameIdentity(candidate, existing)) {
+        return res.status(400).json({ error: 'Existing holders cannot be modified while sealing a designation' });
+      }
+    }
+    const added = updatedHolders.filter((holder) => !existingByKeyId.has(Number(holder.encryption_key_id)));
+    if (added.length !== 1) return res.status(400).json({ error: 'This route seals exactly one new designation at a time' });
+    const sealedHolder = added[0];
+    await validateNewSealedHolder(sealedHolder, req.member.id);
+
+    const updated = await updatePkiDocumentAccess(doc.id, {
+      encryptionMetadata: normalized.encryption_metadata,
+      encryptionKeyId: doc.encryption_key_id,
+      validate: async (lockedDoc) => {
+        const lockedHolders = normalizeStoredPkiHolders(lockedDoc.encryption_metadata?.files?.upload || {});
+        if (lockedHolders.length !== existingHolders.length) throw new Error('Document holders changed while sealing this designation');
+      },
+      afterUpdate: async (client) => trustees.upsertDesignation(client, {
+        documentId: doc.id,
+        memberId: sealedHolder.member_id || null,
+        trusteeId: sealedHolder.trustee_id || null,
+        role: sealedHolder.role,
+        encryptionKeyId: sealedHolder.encryption_key_id,
+        sealed: true
+      })
+    });
+    if (!updated) return res.status(404).json({ error: 'Document not found' });
+    await audit.log('designation.sealed', 'document', doc.id, req.member.id, {
+      encryption_key_id: Number(sealedHolder.encryption_key_id), member_id: sealedHolder.member_id || null,
+      trustee_id: sealedHolder.trustee_id || null, role: sealedHolder.role
+    });
+    res.json({ ok: true, document: updated });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/documents/:id/designations/:keyId/unseal', requireAuth, requireParent, async (req, res) => {
+  try {
+    const doc = await getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await canMemberAccessDocument(doc.id, req.member))) return res.status(403).json({ error: 'Access denied' });
+    const keyId = Number(req.params.keyId);
+    const metadata = structuredClone(doc.encryption_metadata || {});
+    metadata.version = 2;
+    const holders = pkiUploadHolders(metadata);
+    const holder = holders.find((entry) => Number(entry.encryption_key_id) === keyId);
+    if (!holder?.sealed) return res.status(404).json({ error: 'Sealed designation not found' });
+    holder.sealed = false;
+    holder.sealed_until = 'unsealed';
+    const updated = await updatePkiDocumentAccess(doc.id, {
+      encryptionMetadata: metadata,
+      encryptionKeyId: doc.encryption_key_id,
+      afterUpdate: async (client) => trustees.upsertDesignation(client, {
+        documentId: doc.id, memberId: holder.member_id || null, trusteeId: holder.trustee_id || null,
+        role: holder.role, encryptionKeyId: keyId, sealed: false
+      })
+    });
+    if (!updated) return res.status(404).json({ error: 'Document not found' });
+    await audit.log('designation.unsealed', 'document', doc.id, req.member.id, { encryption_key_id: keyId });
+    res.json({ ok: true, document: updated });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 
 
 app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async (req, res) => {

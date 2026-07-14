@@ -34,10 +34,10 @@ describe('normalizeEncryptionInput', () => {
     );
   });
 
-  it('rejects encrypted mode without metadata version 1', () => {
+  it('rejects encrypted mode without a supported metadata version', () => {
     assert.throws(
       () => normalizeEncryptionInput({ encryption_mode: 'passphrase', encryption_metadata: { mode: 'passphrase' } }),
-      /version = 1 is required/
+      /version must be 1 or 2/
     );
   });
 

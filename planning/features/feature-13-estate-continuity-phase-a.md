@@ -491,6 +491,22 @@ Phase B/C planning, not Phase A.
   best-effort per Phase 0; its delivery result is captured in the invite audit
   record.
 
+### Implementation record — 2026-07-14: Phase A sealed designations + directory
+
+- Added additive envelope v2 support for sealed holder entries. A dedicated
+  parent-only seal route accepts exactly one new holder, verifies its identity,
+  active key, fingerprint, and client-produced DEK wrap, then writes the
+  envelope and relational designation projection in the same transaction.
+- Sealed holders remain visible to parents as labeled key-info entries but are
+  marked `unlock_eligible: false`. Sealed household beneficiaries are excluded
+  from document lists and all document-serving routes, even if they previously
+  had ownership metadata. An explicit parent unseal route reverses that gate
+  and records `designation.unsealed`.
+- Added the Continuity page: a responsive people directory with current key and
+  designation counts, plus a document × recipient matrix showing sealed state.
+  The live wrapping ceremony remains on the encrypted-document surface; Phase
+  C is the first phase that can turn a sealed cell into delivery authority.
+
 ### Implementation record — 2026-07-14: Phase 0 SMTP mailer
 
 - Added `lib/mailer.js` using Nodemailer SMTP, with relay settings read only
