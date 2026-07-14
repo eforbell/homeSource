@@ -285,7 +285,8 @@ served what, and a projection rebuild could silently unseal.
 
 1. `lib/mailer.js` + env config + dev/test transport (per D13-5)
 2. Minimal notification dispatch on key events (registration, revocation,
-   holder add) — retires the attested-but-unbuilt D6-B at basic level
+   holder add) — **complete 2026-07-14**; retires the attested-but-unbuilt D6-B
+   at basic level
 3. `key_holders` disposition migration (per D13-3) including backup-export
    cleanup — **complete 2026-07-14**; closes hardening backlog #15/#16
 4. Attest D13-1 through D13-6; record D13-4 supersession in the threat model
@@ -444,7 +445,7 @@ Phase B/C planning, not Phase A.
 
 1. **Complete (2026-07-14):** Eric attested D13-1 through D13-6 (this document).
 2. **Complete (2026-07-14):** Phase 0 SMTP mailer — `lib/mailer.js`, env-configured SMTP with TLS required by default, disabled fallback, and explicit console/file inspection transports.
-3. Phase 0 basic notification dispatch (registration, revocation, holder add).
+3. **Complete (2026-07-14):** Phase 0 basic notification dispatch (registration, revocation, holder add).
 4. **Complete (2026-07-14):** Phase 0 `key_holders` disposition migration and backup-export cleanup.
 5. `encryption_keys` member-assumption audit (A1 "needs deeper look").
 6. Phase A implementation per plan above.
@@ -473,3 +474,15 @@ Phase B/C planning, not Phase A.
   export. Existing PKI authorization remains envelope-canonical and unchanged.
 - Added regression coverage that verifies the table is absent and backup
   archives omit it.
+
+### Implementation record — 2026-07-14: Phase 0 key-event notifications
+
+- Added `lib/notifications.js`, which sends generic key-event transparency
+  notices to the trusted, comma-separated `NOTIFICATION_TO` recipients through
+  the Phase 0 mailer. Notices never include document contents.
+- Wired direct key registration, WebAuthn key finalization, revocation, and
+  holder addition. Every attempt is audit-logged; absent recipients or SMTP
+  configuration safely records a non-delivery result without interrupting the
+  underlying key operation.
+- This satisfies D6-B at the Phase 0 basic level. Phase A/C will add trustee
+  and recipient-specific invitations/delivery messages.

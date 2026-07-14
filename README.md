@@ -227,6 +227,7 @@ Notes:
 | SMTP_USER / SMTP_PASS | No | -- | Optional SMTP authentication; configure both or neither |
 | SMTP_FROM | No | -- | Sender applied to all Home Source notifications |
 | SMTP_REJECT_UNAUTHORIZED | No | yes | Set to `no` only for a deliberately trusted relay with a self-signed certificate |
+| NOTIFICATION_TO | No | -- | Comma-separated trusted household recipients for generic key-event alerts |
 | MAIL_TRANSPORT | No | smtp when `SMTP_HOST` is set; otherwise disabled | Explicitly set `console` or `file` only for local message inspection |
 | MAIL_OUTPUT_DIR | No | `./data/mail` | Private `.eml` output directory when `MAIL_TRANSPORT=file` |
 | MAGICINDEX_PROVIDER | No | off | `off`, `openai`, `openai_compatible`, or `ollama` |
@@ -251,6 +252,10 @@ family-operated Postfix server without coupling the vault to a mail API vendor.
 It requires TLS by default and does not make any network connection unless both
 `SMTP_HOST` and `SMTP_FROM` are configured. SMTP authentication is optional,
 but `SMTP_USER` and `SMTP_PASS` must be configured together.
+
+Set `NOTIFICATION_TO` to one or more trusted household addresses to receive
+generic notices for key registration, revocation, and holder changes. These
+messages contain no document contents; every dispatch outcome is audit-logged.
 
 For development and tests, set `MAIL_TRANSPORT=console` to emit the generated
 message to the process log, or `MAIL_TRANSPORT=file` to write owner-only `.eml`

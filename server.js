@@ -25,11 +25,34 @@ const { isEncryptedDocument, normalizeEncryptionInput } = require('./lib/encrypt
 const audit = require('./lib/audit');
 const pki = require('./lib/pki');
 const webauthn = require('./lib/webauthn');
+const { notifyKeyEvent } = require('./lib/notifications');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
 const DEFAULT_SOVEREIGN_FONT_SANS_CSS_URL = 'https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap';
 const DEFAULT_SOVEREIGN_FONT_MONO_CSS_URL = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap';
+
+async function dispatchKeyNotification({ event, memberId, memberName, actorId }) {
+  let result;
+  try {
+    result = await notifyKeyEvent({ event, memberName });
+  } catch (err) {
+    console.warn('Key notification dispatch failed:', err.message);
+    result = { delivered: false, reason: 'notification_failed' };
+  }
+
+  try {
+    await audit.log('notification.key_event', 'family_member', memberId, actorId, {
+      event,
+      delivered: result.delivered === true,
+      transport: result.transport || null,
+      reason: result.reason || null
+    });
+  } catch (err) {
+    console.error('Key notification audit log failed:', err.message);
+  }
+  return result;
+}
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
@@ -459,6 +482,12 @@ app.post('/api/members/:id/keys', requireAuth, async (req, res) => {
       prf_enabled: key.prf_enabled,
       label: key.label
     });
+    await dispatchKeyNotification({
+      event: 'key.registered',
+      memberId,
+      memberName: req.member.name,
+      actorId: req.member.id
+    });
     res.status(201).json(key);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -542,6 +571,12 @@ app.post('/api/members/:id/keys/webauthn/finalize', requireAuth, async (req, res
       prf_enabled: result.key.prf_enabled,
       label: result.key.label,
       verification_method: result.key.verification_method
+    });
+    await dispatchKeyNotification({
+      event: 'key.registered',
+      memberId,
+      memberName: req.member.name,
+      actorId: req.member.id
     });
     res.status(201).json(result);
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -651,6 +686,12 @@ app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
     }
     const revoked = await pki.revokeMemberKey(keyId, memberId, req.member.id);
     if (!revoked) return res.status(404).json({ error: 'Key not found or already revoked' });
+    await dispatchKeyNotification({
+      event: 'key.revoked',
+      memberId,
+      memberName: req.member.name,
+      actorId: req.member.id
+    });
     res.json({ ok: true, revoked });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1020,13 +1061,21 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
     if (!updated) return res.status(404).json({ error: 'Document not found' });
 
     const holderCountBefore = doc.encryption_metadata?.files?.upload?.holders?.length || 0;
+    const addedHolder = updatedHolders.find((holder) => !existingHolderKeyIds.includes(Number(holder.encryption_key_id)));
     await audit.log('document.pki_holder_added', 'document', doc.id, req.member.id, {
-      added_holder_member_id: Number(updatedHolders[updatedHolders.length - 1].member_id),
-      added_holder_key_id: Number(updatedHolders[updatedHolders.length - 1].encryption_key_id),
-      role: updatedHolders[updatedHolders.length - 1].role,
+      added_holder_member_id: Number(addedHolder.member_id),
+      added_holder_key_id: Number(addedHolder.encryption_key_id),
+      role: addedHolder.role,
       holder_count_before: holderCountBefore,
       holder_count_after: updatedHolders.length,
       encryption_key_id: primaryKeyId
+    });
+    const holderMember = await getMember(addedHolder.member_id);
+    await dispatchKeyNotification({
+      event: 'key.holder_added',
+      memberId: Number(addedHolder.member_id),
+      memberName: holderMember?.name,
+      actorId: req.member.id
     });
     res.json({ ok: true, document: updated });
   } catch (err) {

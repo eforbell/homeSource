@@ -145,7 +145,7 @@
 - SMTP requires TLS by default, supports optional paired authentication, and disables URL/file message-content access. Explicit `console` and owner-only `file` transports support offline local inspection.
 - Added `test/mailer.test.js` and documented the SMTP and local-transport environment variables.
 - Verification: targeted mailer suite passed (8 tests); full suite passed (307 tests); `git diff --check` passed.
-- **Remaining Phase 0:** basic notification dispatch.
+- Phase 0 mailer, holder cleanup, and basic notification dispatch are complete.
 
 ---
 
@@ -159,4 +159,17 @@
 - Added a backup regression test confirming the table is absent and omitted
   from archives.
 - Verification: `npm run test:prepare`; targeted backup suite passed (6 tests).
-- **Remaining Phase 0:** basic notification dispatch.
+- **Remaining Phase 0:** none; Phase A begins with trustee identity and sealed designation work.
+
+---
+
+## 2026-07-14 — Feature #13 Phase 0: key-event notifications
+
+- Added generic, privacy-safe key-event notifications for key registration,
+  WebAuthn key finalization, revocation, and holder addition. Recipients are
+  configured through `NOTIFICATION_TO`; no document contents are mailed.
+- Every dispatch outcome is audit-logged, and missing recipients or SMTP
+  configuration does not interrupt the key operation.
+- Added unit and API coverage for recipient parsing, header-injection rejection,
+  safe unconfigured fallback, SMTP handoff, and audit logging.
+- **Phase 0 complete.** Phase A is now the next implementation lane.
