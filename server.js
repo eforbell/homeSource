@@ -437,6 +437,10 @@ function trusteeInvitationUrl(token) {
   if (!['http:', 'https:'].includes(invitationUrl.protocol)) {
     throw new Error('APP_URL must be an absolute http(s) URL');
   }
+  const localHost = ['localhost', '127.0.0.1', '::1'].includes(invitationUrl.hostname);
+  if (invitationUrl.protocol !== 'https:' && !localHost) {
+    throw new Error('APP_URL must use HTTPS for trustee invitations (except localhost)');
+  }
   invitationUrl.searchParams.set('token', token);
   return invitationUrl.toString();
 }

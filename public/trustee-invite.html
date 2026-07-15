@@ -60,6 +60,12 @@
       status.style.color = isError ? 'var(--danger)' : '';
     }
 
+    function requireSecureCrypto() {
+      if (!window.isSecureContext || !globalThis.crypto?.subtle) {
+        throw new Error('This continuity-key ceremony requires a secure HTTPS connection. Open the HTTPS invitation link, then try again.');
+      }
+    }
+
     async function request(path, options) {
       const response = await fetch(path, options);
       const body = await response.json().catch(() => ({ error: response.statusText }));
@@ -95,6 +101,7 @@
       button.disabled = true;
       setStatus('Generating and wrapping your private key…');
       try {
+        requireSecureCrypto();
         const keypair = await PKICrypto.generateMemberKeypair();
         const { kek, salt } = await PKICrypto.deriveKekFromPassphrase(passphrase);
         const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
@@ -134,6 +141,7 @@
     });
 
     async function registerWebAuthn(requestedMethod) {
+      try { requireSecureCrypto(); } catch (error) { return setStatus(error.message, true); }
       if (!window.PublicKeyCredential || !navigator.credentials?.create) {
         return setStatus('This browser does not support WebAuthn. Use the passphrase option instead.', true);
       }

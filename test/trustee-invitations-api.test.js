@@ -80,6 +80,20 @@ describe('trustee invitation ceremony API', () => {
     assert.equal(response.status, 403);
   });
 
+  it('refuses to create an invitation URL over non-local HTTP', async () => {
+    const originalAppUrl = process.env.APP_URL;
+    process.env.APP_URL = 'http://vault.family.test';
+    try {
+      const response = await authedPost('api/trustees', parentCookie, {
+        name: 'HTTP Trustee', email: 'http@family.test'
+      });
+      assert.equal(response.status, 400);
+      assert.match((await response.json()).error, /must use HTTPS/i);
+    } finally {
+      process.env.APP_URL = originalAppUrl;
+    }
+  });
+
   it('replaces an outstanding invitation without exposing either token', async () => {
     const created = await authedPost('api/trustees', parentCookie, {
       name: 'Resend Trustee', email: 'resend@family.test'
