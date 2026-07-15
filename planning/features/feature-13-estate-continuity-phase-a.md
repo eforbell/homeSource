@@ -1,7 +1,7 @@
 # Feature #13: Continuity & Inheritance — Program Charter + Phase A Plan
 
 Date: 2026-07-07
-Status: Phase A core shipped 2026-07-14; matrix-focus follow-up in review
+Status: Phase A implementation complete 2026-07-14; full verification in progress
 Parent: Use Case 2 (estate planning / inheritance) — see design guide
 Depends on: Feature #11 PKI foundation + hardening H1-H4.2 (shipped), Feature #12 posture/readiness (shipped)
 Design guide: `design/homesource-treatment.md` ("a letter, not a vault", Phases A-E)
@@ -363,18 +363,21 @@ Holder entries gain optional `trustee_id` (instead of `member_id`),
 
 The parent-only seal API accepts one client-produced live DEK re-wrap at a
 time, validates the recipient key and envelope state under the document lock,
-and writes its designation projection in the same transaction. The API accepts
-beneficiary and trustee entries; the current browser ceremony is only wired for
-household-beneficiary wrapping. Trustee wrapping UI remains a follow-up.
+and writes its designation projection in the same transaction. The browser
+ceremony now supports both household-kid beneficiaries and registered trustees;
+the latter’s public key is parent-readable solely for local DEK wrapping.
 
-### A3. Trustee registration ceremony — **passphrase ceremony complete**
+### A3. Trustee registration ceremony — **complete**
 
 Invitation (operator side) → one-time emailed link (Phase 0 mailer; letter
 voice per design §3.3 — from the operator's name, never revealing vault
 contents) → ceremony landing page (no nav, no app session) → **passphrase**
-key registration reusing `public/pki-crypto.js`. WebAuthn trustee registration
-is deferred; it needs trustee-scoped ceremony storage rather than reuse of the
-member-only WebAuthn tables.
+key registration reusing `public/pki-crypto.js`. The same sessionless page
+also supports security-key and platform-passkey WebAuthn PRF registration with
+trustee-scoped challenge and credential rows; it wraps the private key locally
+from the assertion PRF result. The parent-facing Continuity page provides
+invite, resend/replacement, status, and revoke controls. Raw invitation tokens
+remain email-only and are never returned to the parent UI.
 Token semantics follow `lib/share.js` patterns (hashed at rest, single-use,
 7-day expiry).
 
@@ -385,15 +388,16 @@ Token semantics follow `lib/share.js` patterns (hashed at rest, single-use,
 listed in a separate section with status. Adding a person here grants
 nothing — it makes them addressable (design §3.1).
 
-### A5. Permission matrix (desktop-only by design) — **display complete**
+### A5. Permission matrix (desktop-only by design) — **complete**
 
 The current Continuity page shows **only documents with an existing
 designation**, avoiding a full-vault table of non-actionable empty cells. It
-displays none / sealed / unsealed state and links to the document. A matrix-cell
-action that launches the live wrapping ceremony remains follow-up work; quorum
-cells are Phase D.
+displays none / sealed / unsealed state and links to the document. Eligible
+empty kid/trustee cells expose a **Seal** action that opens the encrypted
+document’s local unwrap/re-wrap ceremony preselected for that recipient.
+Quorum cells are Phase D.
 
-### A6. Tests — **core coverage complete; named gaps remain**
+### A6. Tests — **complete**
 
 - Trustee invite/registration: token single-use, expiry, revoked-trustee
   rejection, no session issued
@@ -401,6 +405,10 @@ cells are Phase D.
   visible-labeled to parent; lock-state and projection rebuild regression tests
 - Designation projection: consistent with envelope after seal, rebuildable,
   count queries correct
+- Trustee ceremony: sessionless passphrase and WebAuthn registration starts,
+  including trustee-only challenge ownership
+- Backup fixture: v2 sealed trustee envelope, invitation, trustee principal,
+  key, and designation projection survive archive export and extraction
 - Regression: all Feature #11/#12 PKI suites stay green (envelope v1 docs
   untouched)
 
@@ -461,9 +469,17 @@ Phase B/C planning, not Phase A.
    sealed designation projection).
 6. **Complete (2026-07-14):** Phase A core — invitation ceremony, envelope v2
    sealed designations, route/key-info gates, directory, and matrix display.
-7. **Follow-up before declaring every planned Phase A interaction complete:**
-   matrix-cell live wrapping, trustee wrapping UI, trustee WebAuthn ceremony,
-   and an explicit backup/restore v2 regression fixture.
+7. **Complete (2026-07-14):** Parent trustee-management UI and safe
+   resend/replacement flow. The replacement token is email-only; no response
+   exposes either the old or new raw token.
+8. **Complete (2026-07-14):** Matrix-launched live wrapping and trustee key
+   selection in the parent’s local continuity ceremony.
+9. **Complete (2026-07-14):** Sessionless trustee WebAuthn PRF ceremony using
+   trustee-scoped challenge/credential records.
+10. **Complete (2026-07-14):** Sealed-envelope v2 backup archive regression
+    fixture. Home Source currently exports backups rather than providing a
+    destructive in-app database restore command; the fixture extracts and
+    verifies the complete restore payload.
 
 ### Implementation record — 2026-07-14: Phase A A1 data-model foundation
 
@@ -528,6 +544,28 @@ Phase B/C planning, not Phase A.
   parents intentionally retain household-wide app access, Phase A only permits
   sealed beneficiary designations to household kids; a parent beneficiary
   would otherwise be falsely shown as gated.
+
+### Implementation record — 2026-07-14: Phase A interaction completion
+
+- Added the parent-only Trustee card on **Continuity**: invite form, trustee
+  status/key/designation counts, revoke control, and resend control for an
+  outstanding invitation. Resend invalidates the prior unused invitation in a
+  transaction before issuing a fresh seven-day link; neither raw token is ever
+  exposed through the parent API or page.
+- Added a matrix **Seal** action for eligible empty kid/trustee cells. It opens
+  the encrypted-document local ceremony with that recipient preselected. The
+  ceremony uses an existing parent holder to unwrap the DEK locally and wraps
+  it to the selected beneficiary or registered trustee public key before
+  submitting the single-holder seal route.
+- Added trustee-key listing scoped to authenticated parents and trustee
+  WebAuthn storage in migration `014-trustee-webauthn-ceremony.sql`. The
+  sessionless invitation page now offers passphrase, security-key, and platform
+  passkey choices. WebAuthn registration and PRF assertion are bound to the
+  live invitation’s trustee; finalization consumes the invitation while
+  persisting the verified key metadata.
+- Backup export now includes trustee, invitation, and designation rows. The
+  v2 fixture verifies the sealed trustee holder entry and all relational
+  projection rows remain intact after archive export and extraction.
 
 ### Implementation record — 2026-07-14: Phase 0 SMTP mailer
 

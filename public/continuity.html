@@ -13,32 +13,99 @@
   <main class="page-content">
     <div class="page-header"><h1>Continuity</h1></div>
     <section class="card"><div class="card-header"><span class="card-title">People</span></div><p class="form-hint">Adding someone here does not grant document access. Sealed designations remain unavailable until a future continuity trigger.</p><div id="directory" class="mt-1"></div></section>
-    <section class="card mt-2"><div class="card-header"><span class="card-title">Designated documents</span></div><p class="form-hint">Only documents with a continuity designation appear here. Sealed cells remain unavailable until a future continuity trigger.</p><div id="matrix" class="table-wrap"></div></section>
+    <section class="card mt-2">
+      <div class="card-header"><span class="card-title">Trustees</span></div>
+      <p class="form-hint">Invite a trusted person to prepare a continuity key. An invitation never gives document access, and a trustee can only receive a document when you designate it.</p>
+      <form id="trustee-form" class="mt-1">
+        <div style="display:flex; gap:.75rem; flex-wrap:wrap;">
+          <div class="form-group" style="flex:1; min-width:12rem;"><label class="form-label" for="trustee-name">Name</label><input id="trustee-name" class="form-input" name="name" required autocomplete="name"></div>
+          <div class="form-group" style="flex:1; min-width:12rem;"><label class="form-label" for="trustee-email">Email</label><input id="trustee-email" class="form-input" name="email" type="email" required autocomplete="email"></div>
+          <div class="form-group" style="flex:1; min-width:10rem;"><label class="form-label" for="trustee-relationship">Relationship <span class="text-dim">(optional)</span></label><input id="trustee-relationship" class="form-input" name="relationship" autocomplete="off"></div>
+        </div>
+        <button class="btn btn-primary" type="submit">Send invitation</button><span id="trustee-status" class="text-sm text-dim" aria-live="polite" style="margin-left:.5rem;"></span>
+      </form>
+      <div id="trustees" class="mt-1"></div>
+    </section>
+    <section class="card mt-2"><div class="card-header"><span class="card-title">Designated documents</span></div><p class="form-hint">Only documents with a continuity designation appear here. Select <strong>Seal</strong> to open the local key-wrapping ceremony for another eligible beneficiary or trustee.</p><div id="matrix" class="table-wrap"></div></section>
   </main>
   <script src="api.js"></script><script src="nav.js"></script>
   <script>
     'use strict';
     const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
-    function personCard(person, kind) {
-      const status = kind === 'trustee' ? person.status : `${person.active_key_count} active key${person.active_key_count === 1 ? '' : 's'}`;
+    function personCard(person) {
+      const status = `${person.active_key_count} active key${person.active_key_count === 1 ? '' : 's'}`;
       const count = Number(person.designation_count || 0);
-      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(person.name)}</strong><div class="text-sm text-dim">${esc(kind === 'trustee' ? person.relationship || 'Trustee' : person.role)} · ${esc(status)}</div><div class="text-xs text-dim">${count} designated document${count === 1 ? '' : 's'}</div></div>`;
+      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(person.name)}</strong><div class="text-sm text-dim">${esc(person.role)} · ${esc(status)}</div><div class="text-xs text-dim">${count} designated document${count === 1 ? '' : 's'}</div></div>`;
+    }
+    function trusteeCard(trustee) {
+      const count = Number(trustee.designation_count || 0);
+      const keyCount = Number(trustee.active_key_count || 0);
+      const isInvited = trustee.status === 'invited';
+      const controls = trustee.status === 'revoked'
+        ? ''
+        : `<div class="btn-group" style="margin-top:.6rem;">${isInvited ? `<button class="btn btn-sm" type="button" data-resend="${Number(trustee.id)}">Resend invitation</button>` : ''}<button class="btn btn-sm btn-danger" type="button" data-revoke="${Number(trustee.id)}">Revoke trustee</button></div>`;
+      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(trustee.name)}</strong><div class="text-sm text-dim">${esc(trustee.relationship || 'Trustee')} · ${esc(trustee.status)}</div><div class="text-xs text-dim">${keyCount} active key${keyCount === 1 ? '' : 's'} · ${count} designated document${count === 1 ? '' : 's'}</div>${controls}</div>`;
     }
     function matrixCell(document, person, kind) {
       const match = (document.designations || []).find(d => kind === 'member' ? Number(d.member_id) === Number(person.id) : Number(d.trustee_id) === Number(person.id));
-      if (!match) return '<span class="badge badge-muted">None</span>';
+      if (!match) {
+        if (document.encryption_mode === 'pki' && (kind === 'trustee' || person.role === 'kid')) {
+          const query = kind === 'trustee' ? `seal_trustee=${encodeURIComponent(person.id)}` : `seal_member=${encodeURIComponent(person.id)}`;
+          return `<a class="btn btn-sm" href="document.html?id=${encodeURIComponent(document.id)}&${query}">Seal</a>`;
+        }
+        return '<span class="badge badge-muted">None</span>';
+      }
       return `<span class="badge ${match.sealed ? 'badge-warn' : 'badge-info'}">${match.sealed ? 'Sealed' : 'Unsealed'}</span>`;
     }
     async function load() {
       try {
         const data = await API.get('api/continuity/directory');
         const people = [...data.members.map(p => ({ ...p, kind: 'member' })), ...data.trustees.map(p => ({ ...p, kind: 'trustee' }))];
-        document.getElementById('directory').innerHTML = `${data.members.map(p => personCard(p, 'member')).join('')}${data.trustees.map(p => personCard(p, 'trustee')).join('') || '<div class="text-dim text-sm">No trustees invited yet.</div>'}`;
+        document.getElementById('directory').innerHTML = data.members.map(personCard).join('');
+        document.getElementById('trustees').innerHTML = data.trustees.map(trusteeCard).join('') || '<div class="text-dim text-sm">No trustees invited yet.</div>';
         document.getElementById('matrix').innerHTML = data.documents.length
           ? `<table><thead><tr><th>Document</th>${people.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${data.documents.map(d => `<tr><td><a href="document.html?id=${encodeURIComponent(d.id)}">${esc(d.title)}</a></td>${people.map(p => `<td>${matrixCell(d, p, p.kind)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
           : '<div class="empty-state" style="padding:1rem 0;"><div class="empty-state-title">No continuity designations yet</div><p class="text-dim">When a document is designated, it will appear here.</p></div>';
       } catch (error) { document.getElementById('directory').textContent = error.message; }
     }
+    function setTrusteeStatus(message, isError = false) {
+      const target = document.getElementById('trustee-status');
+      target.textContent = message;
+      target.className = `text-sm ${isError ? 'text-danger' : 'text-dim'}`;
+    }
+    document.getElementById('trustee-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      setTrusteeStatus('Sending invitation…');
+      try {
+        const values = Object.fromEntries(new FormData(form));
+        const result = await API.post('api/trustees', values);
+        form.reset();
+        setTrusteeStatus(result.invitation.delivered ? 'Invitation sent.' : 'Invitation created, but email delivery could not be confirmed. Resend it after checking SMTP.');
+        await load();
+      } catch (error) { setTrusteeStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('trustees').addEventListener('click', async event => {
+      const resend = event.target.closest('[data-resend]');
+      const revoke = event.target.closest('[data-revoke]');
+      if (!resend && !revoke) return;
+      const button = resend || revoke;
+      button.disabled = true;
+      try {
+        if (resend) {
+          const result = await API.post(`api/trustees/${encodeURIComponent(resend.dataset.resend)}/invitations/resend`, {});
+          setTrusteeStatus(result.invitation.delivered ? 'Replacement invitation sent.' : 'Replacement invitation created, but email delivery could not be confirmed.');
+        } else if (window.confirm('Revoke this trustee? Their keys and designations will no longer be eligible for future continuity use.')) {
+          await API.del(`api/trustees/${encodeURIComponent(revoke.dataset.revoke)}`);
+          setTrusteeStatus('Trustee revoked.');
+        } else { return; }
+        await load();
+      } catch (error) { setTrusteeStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
     load();
   </script>
 </body>

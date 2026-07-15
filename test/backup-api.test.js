@@ -11,6 +11,7 @@ const { startServer, stopServer, resetDatabase, createMember, loginAs, authedPos
 const { createDocument } = require('../lib/documents');
 const { storeFile, saveFileRecord } = require('../lib/files');
 const pki = require('../lib/pki');
+const trustees = require('../lib/trustees');
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 const PKICrypto = require('../public/pki-crypto');
 
@@ -49,6 +50,53 @@ describe('backup export with encrypted documents', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('preserves a v2 sealed trustee envelope and its relational continuity projection', async () => {
+    const ownerKey = await pki.registerMemberKey({
+      memberId: parent.id, publicKey: Buffer.from('backup-v2-owner').toString('base64'),
+      encryptedPrivateKey: 'owner-private', algorithm: 'x25519', prfEnabled: false, protectionTier: 'passphrase', label: 'Backup v2 owner'
+    });
+    const trustee = await trustees.createTrustee({ name: 'Backup V2 Trustee', email: 'backup-v2@family.test', createdBy: parent.id });
+    const invitation = await trustees.createTrusteeInvitation({ trusteeId: trustee.id });
+    const trusteeRegistration = await trustees.registerTrusteeFromInvitation({
+      token: invitation.token, publicKey: Buffer.from('backup-v2-trustee').toString('base64'),
+      encryptedPrivateKey: 'trustee-private', label: 'Backup v2 trustee'
+    });
+    const trusteeKey = trusteeRegistration.key;
+    const doc = await createDocument({
+      title: 'PKI v2 sealed continuity backup fixture', document_type: 'legal', source_type: 'upload',
+      is_encrypted: true, encryption_mode: 'pki', encryption_key_id: ownerKey.id,
+      encryption_metadata: { version: 2, mode: 'pki', files: { upload: {
+        cipher: 'aes-256-gcm', iv_b64: Buffer.from('iv-123456789012').toString('base64'), holders: [
+          { member_id: parent.id, encryption_key_id: ownerKey.id, key_fingerprint: ownerKey.key_fingerprint, role: 'owner', wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'owner-eph', hkdf_salt_b64: 'owner-salt', wrapped_dek_b64: 'owner-dek' } },
+          { trustee_id: trustee.id, encryption_key_id: trusteeKey.id, key_fingerprint: trusteeKey.key_fingerprint, role: 'trustee', sealed: true, sealed_until: 'deadman_trigger', wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'trustee-eph', hkdf_salt_b64: 'trustee-salt', wrapped_dek_b64: 'trustee-dek' } }
+        ]
+      } } }, created_by: parent.id
+    }, [parent.id]);
+    await trustees.upsertDesignation(pool, { documentId: doc.id, trusteeId: trustee.id, role: 'trustee', encryptionKeyId: trusteeKey.id, sealed: true });
+
+    const exportRes = await authedPost('api/backup/export', parentCookie, { encrypted: false });
+    assert.equal(exportRes.status, 200);
+    const { file } = await exportRes.json();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-v2-test-'));
+    try {
+      execFileSync('tar', ['-xzf', path.join(process.cwd(), 'data', 'test', 'exports', file), '-C', tmpDir], { stdio: 'pipe' });
+      const root = fs.readdirSync(tmpDir)[0];
+      const exported = JSON.parse(fs.readFileSync(path.join(tmpDir, root, 'database.json'), 'utf8'));
+      const exportedDoc = exported.documents.find((row) => Number(row.id) === Number(doc.id));
+      assert.equal(exportedDoc.encryption_metadata.version, 2);
+      assert.deepEqual(exportedDoc.encryption_metadata.files.upload.holders.find((holder) => Number(holder.encryption_key_id) === Number(trusteeKey.id)), {
+        trustee_id: trustee.id, encryption_key_id: trusteeKey.id, key_fingerprint: trusteeKey.key_fingerprint,
+        role: 'trustee', sealed: true, sealed_until: 'deadman_trigger',
+        wrapped_dek: { kind: 'pki_x25519', ephemeral_public_key_b64: 'trustee-eph', hkdf_salt_b64: 'trustee-salt', wrapped_dek_b64: 'trustee-dek' }
+      });
+      assert.ok(exported.vault_trustees.find((row) => Number(row.id) === Number(trustee.id)));
+      assert.ok(exported.trustee_invitations.find((row) => Number(row.id) === Number(invitation.id)));
+      const designation = exported.document_designations.find((row) => Number(row.document_id) === Number(doc.id) && Number(row.trustee_id) === Number(trustee.id));
+      assert.equal(designation.sealed, true);
+      assert.equal(designation.sealed_until, 'deadman_trigger');
+    } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
   });
 
   async function createRealPkiFixture(title) {

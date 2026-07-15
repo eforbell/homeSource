@@ -36,6 +36,8 @@
           <input id="passphrase-confirm" class="form-input" type="password" minlength="8" autocomplete="new-password" required>
         </div>
         <button id="register-button" class="btn btn-primary" type="submit" style="width:100%;">Create continuity key</button>
+        <div class="form-hint" style="margin-top:1rem;">Or protect the private key with a security key or device passkey instead of a passphrase.</div>
+        <div class="btn-group" style="margin-top:.5rem;"><button id="security-key-button" class="btn btn-sm" type="button">Use security key</button><button id="passkey-button" class="btn btn-sm" type="button">Use this device</button></div>
       </form>
       <p id="status" class="form-hint" role="status" aria-live="polite" style="margin-top:1rem;"></p>
     </section>
@@ -50,10 +52,18 @@
     const form = document.getElementById('registration-form');
     const status = document.getElementById('status');
     const button = document.getElementById('register-button');
+    const securityKeyButton = document.getElementById('security-key-button');
+    const passkeyButton = document.getElementById('passkey-button');
 
     function setStatus(message, isError) {
       status.textContent = message;
       status.style.color = isError ? 'var(--danger)' : '';
+    }
+
+    function requireSecureCrypto() {
+      if (!window.isSecureContext || !globalThis.crypto?.subtle) {
+        throw new Error('This continuity-key ceremony requires a secure HTTPS connection. Open the HTTPS invitation link, then try again.');
+      }
     }
 
     async function request(path, options) {
@@ -91,6 +101,7 @@
       button.disabled = true;
       setStatus('Generating and wrapping your private key…');
       try {
+        requireSecureCrypto();
         const keypair = await PKICrypto.generateMemberKeypair();
         const { kek, salt } = await PKICrypto.deriveKekFromPassphrase(passphrase);
         const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
@@ -128,6 +139,79 @@
         button.disabled = false;
       }
     });
+
+    async function registerWebAuthn(requestedMethod) {
+      try { requireSecureCrypto(); } catch (error) { return setStatus(error.message, true); }
+      if (!window.PublicKeyCredential || !navigator.credentials?.create) {
+        return setStatus('This browser does not support WebAuthn. Use the passphrase option instead.', true);
+      }
+      button.disabled = true;
+      securityKeyButton.disabled = true;
+      passkeyButton.disabled = true;
+      setStatus(requestedMethod === 'security_key' ? 'Follow your browser prompt to register the security key…' : 'Follow your browser prompt to register this device…');
+      try {
+        const options = await request(`api/trustee-invitations/${encodeURIComponent(token)}/webauthn/options`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requested_method: requestedMethod })
+        });
+        const credential = await navigator.credentials.create({ publicKey: toPublicKeyCreationOptions(options.options) });
+        if (!credential) throw new Error('WebAuthn ceremony was cancelled');
+        const completed = await request(`api/trustee-invitations/${encodeURIComponent(token)}/webauthn/complete`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ registration_response: credentialToJSON(credential), client_authenticator_attachment: credential.authenticatorAttachment || null, transports: typeof credential.response?.getTransports === 'function' ? credential.response.getTransports() : [] })
+        });
+        setStatus('Credential registered. Confirm once more to derive the private-key wrapping key…');
+        const assertionOptions = await request(`api/trustee-invitations/${encodeURIComponent(token)}/webauthn/assertion-options`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential_id: completed.verification.credential_id })
+        });
+        const assertion = await navigator.credentials.get({ publicKey: PKICrypto.toPublicKeyRequestOptions(assertionOptions.options) });
+        if (!assertion) throw new Error('WebAuthn assertion was cancelled');
+        const prfResult = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+        if (!prfResult) throw new Error('This authenticator did not provide the PRF extension. Use the passphrase option or a different authenticator.');
+        const keypair = await PKICrypto.generateMemberKeypair();
+        const kek = await PKICrypto.deriveKekFromPrf(prfResult);
+        const wrappedPrivateKey = await PKICrypto.wrapPrivateKey(keypair.privateKey, kek);
+        const fingerprint = await PKICrypto.computeKeyFingerprint(keypair.publicKeyRaw);
+        const label = document.getElementById('key-label').value.trim() || 'Continuity key';
+        const registered = await request(`api/trustee-invitations/${encodeURIComponent(token)}/webauthn/finalize`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assertion_response: credentialToJSON(assertion), public_key: PKICrypto.toBase64(keypair.publicKeyRaw), encrypted_private_key: JSON.stringify({ kind: 'webauthn_prf_v1', prf_salt_b64: assertionOptions.prf_salt, wrapped_private_key_b64: PKICrypto.toBase64(wrappedPrivateKey) }), algorithm: 'x25519', label })
+        });
+        if (registered.key.key_fingerprint !== fingerprint) throw new Error('The stored key fingerprint did not match this device. Do not retry; contact the person who invited you.');
+        form.hidden = true;
+        summary.textContent = 'Your continuity key is registered.';
+        setStatus('Keep access to this authenticator. This invitation link cannot be used again.');
+      } catch (error) {
+        setStatus(error.message || 'Unable to register your key.', true);
+        button.disabled = false;
+        securityKeyButton.disabled = false;
+        passkeyButton.disabled = false;
+      }
+    }
+
+    function toPublicKeyCreationOptions(optionsJSON) {
+      const options = JSON.parse(JSON.stringify(optionsJSON));
+      options.challenge = PKICrypto.base64urlToBuffer(options.challenge);
+      options.user.id = PKICrypto.base64urlToBuffer(options.user.id);
+      options.excludeCredentials = (options.excludeCredentials || []).map((credential) => ({ ...credential, id: PKICrypto.base64urlToBuffer(credential.id) }));
+      if (options.extensions?.prf?.eval?.first) options.extensions.prf.eval.first = PKICrypto.base64urlToBuffer(options.extensions.prf.eval.first);
+      return options;
+    }
+
+    function bufferToBase64url(buffer) {
+      const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+      let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    function credentialToJSON(credential) {
+      const response = { clientDataJSON: bufferToBase64url(credential.response.clientDataJSON) };
+      if ('attestationObject' in credential.response) { response.attestationObject = bufferToBase64url(credential.response.attestationObject); response.transports = typeof credential.response.getTransports === 'function' ? credential.response.getTransports() : []; }
+      if ('authenticatorData' in credential.response) { response.authenticatorData = bufferToBase64url(credential.response.authenticatorData); response.signature = bufferToBase64url(credential.response.signature); response.userHandle = credential.response.userHandle ? bufferToBase64url(credential.response.userHandle) : null; }
+      return { id: credential.id, rawId: bufferToBase64url(credential.rawId), type: credential.type, authenticatorAttachment: credential.authenticatorAttachment || null, clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}, response };
+    }
+
+    securityKeyButton.addEventListener('click', () => registerWebAuthn('security_key'));
+    passkeyButton.addEventListener('click', () => registerWebAuthn('passkey'));
 
     loadInvitation();
   </script>

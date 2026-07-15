@@ -11,6 +11,8 @@ it('trustee invitation page is sessionless and registers a client-wrapped key', 
   assert.match(source, /api\/trustee-invitations/);
   assert.match(source, /PKICrypto\.generateMemberKeypair/);
   assert.match(source, /PKICrypto\.deriveKekFromPassphrase/);
+  assert.match(source, /requireSecureCrypto/);
+  assert.match(source, /secure HTTPS connection/);
   assert.match(source, /wrapped_private_key_b64/);
   assert.match(source, /key_fingerprint !== fingerprint/);
 });

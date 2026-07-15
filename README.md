@@ -181,6 +181,7 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 For the full break-glass operator workflow, see:
 
 - [docs/recovery-runbook.md](docs/recovery-runbook.md)
+- [docs/trustee-invitation-runbook.md](docs/trustee-invitation-runbook.md)
 
 ### Manual Decryption of Encrypted Document Files from Backup
 
@@ -216,7 +217,7 @@ Notes:
 | Variable | Required | Default | Notes |
 |---|---|---|---|
 | DATABASE_URL | Yes | -- | PostgreSQL connection |
-| APP_URL | Trustee invitations | -- | Canonical `http(s)` URL used in one-time trustee ceremony links |
+| APP_URL | Trustee invitations | -- | Canonical HTTPS URL used in one-time trustee ceremony links (`localhost` may use HTTP for local development) |
 | PORT | No | 3008 | HTTP port |
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |
