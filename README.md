@@ -181,6 +181,7 @@ Encrypted exports use Argon2id KDF + AES-256-GCM. Dashboard widget shows backup 
 For the full break-glass operator workflow, see:
 
 - [docs/recovery-runbook.md](docs/recovery-runbook.md)
+- [docs/trustee-invitation-runbook.md](docs/trustee-invitation-runbook.md)
 
 ### Manual Decryption of Encrypted Document Files from Backup
 
