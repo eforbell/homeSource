@@ -1723,10 +1723,11 @@
       const currentMemberHolders = holders.filter((holder) => currentMember && Number(holder.member_id) === Number(currentMember.id));
       const currentMemberRevokedOnly = currentMemberHolders.length > 0 && currentMemberHolders.every((holder) => !!holder.revoked_at);
       const holderDisplayName = (holder) => holder
-        ? (holder.member_name
+        ? (holder.trustee_name
+          || holder.member_name
           || (doc.owners || []).find((owner) => Number(owner.id) === Number(holder.member_id))?.name
           || availableMembers.find((m) => Number(m.id) === Number(holder.member_id))?.name
-          || (holder.member_id === currentMember?.id ? currentMember.name : `Member #${holder.member_id}`))
+          || (holder.member_id === currentMember?.id ? currentMember.name : (holder.trustee_id ? `Trustee #${holder.trustee_id}` : `Member #${holder.member_id}`)))
         : null;
       const selectedRequiresKeyPassphrase = !!(selectedHolder && (selectedHolder.protection_tier === 'passphrase' || selectedHolder.verification_method === 'passphrase'));
       preview.innerHTML = isPki ? `
@@ -1734,7 +1735,7 @@
           <div style="font-size:2rem; margin-bottom:0.5rem;">🔐</div>
           <div style="font-weight:600; margin-bottom:0.5rem;">Encrypted Document</div>
           <div class="text-dim text-sm mb-1">Mode: <strong>pki</strong></div>
-          <div class="text-dim text-sm mb-1">This document is encrypted to registered member keys. It will be unlocked locally in your browser.</div>
+          <div class="text-dim text-sm mb-1">This document is encrypted to registered holder keys. It will be unlocked locally in your browser.</div>
           <div class="text-dim text-sm mb-1"><strong>Access model:</strong> 1-of-M (any one selected key can unlock)</div>
           ${holders.length ? `
             <div class="text-dim text-sm mb-1">
@@ -1743,7 +1744,7 @@
             </div>` : ''}
           ${holders.length ? `<div class="text-dim text-sm mb-1"><strong>Authorized holders:</strong><div style="margin-top:0.35rem; display:flex; flex-direction:column; gap:0.45rem;">${holders.map((holder) => `
             <div style="padding:0.55rem 0.65rem; border:1px solid var(--border); border-radius:0.65rem;">
-              <div style="font-weight:600;">${esc(holderDisplayName(holder) || 'Unknown member')}</div>
+              <div style="font-weight:600;">${esc(holderDisplayName(holder) || 'Unknown holder')}</div>
               <div style="margin-top:0.15rem;">${esc(formatUnlockHolderLabel(holder))}</div>
               ${holder.key_fingerprint ? `<div class="text-xs text-dim" style="margin-top:0.2rem; overflow-wrap:anywhere; word-break:break-word;">${esc(holder.key_fingerprint)}</div>` : ''}
               <div style="margin-top:0.45rem; display:flex; gap:0.35rem; flex-wrap:wrap;">${renderPkiHolderStatusBadges(holder, primaryKeyId)}</div>
