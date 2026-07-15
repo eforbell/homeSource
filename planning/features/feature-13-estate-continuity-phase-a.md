@@ -374,7 +374,9 @@ voice per design §3.3 — from the operator's name, never revealing vault
 contents) → ceremony landing page (no nav, no app session) → **passphrase**
 key registration reusing `public/pki-crypto.js`. WebAuthn trustee registration
 is deferred; it needs trustee-scoped ceremony storage rather than reuse of the
-member-only WebAuthn tables.
+member-only WebAuthn tables. The parent-facing Continuity page currently shows
+trustee status but does **not** yet provide invite, resend, or revoke controls;
+those operations are API-only until the remaining Phase A UI work lands.
 Token semantics follow `lib/share.js` patterns (hashed at rest, single-use,
 7-day expiry).
 
@@ -462,8 +464,20 @@ Phase B/C planning, not Phase A.
 6. **Complete (2026-07-14):** Phase A core — invitation ceremony, envelope v2
    sealed designations, route/key-info gates, directory, and matrix display.
 7. **Follow-up before declaring every planned Phase A interaction complete:**
-   matrix-cell live wrapping, trustee wrapping UI, trustee WebAuthn ceremony,
-   and an explicit backup/restore v2 regression fixture.
+   - **Parent trustee-management UI:** add an invite card/form to Continuity,
+     trustee status and revoke controls, and a safe resend/replacement flow for
+     undelivered or expired invitations. Today these operations are API-only;
+     the current one-time token is intentionally never returned to the parent.
+   - **Matrix-cell live wrapping:** let a parent initiate the existing
+     client-side unwrap/re-wrap ceremony from a designated-document cell,
+     instead of navigating to a separate document surface.
+   - **Trustee wrapping UI:** expose registered trustee public keys to the
+     parent ceremony so a trustee sealed designation can be created without
+     manually constructing an envelope.
+   - **Trustee WebAuthn ceremony:** add trustee-scoped challenge/credential
+     storage and a sessionless passkey/security-key registration path.
+   - **Backup/restore v2 regression fixture:** explicitly round-trip a sealed
+     envelope through backup export and restore.
 
 ### Implementation record — 2026-07-14: Phase A A1 data-model foundation
 
