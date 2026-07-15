@@ -13,7 +13,7 @@
   <main class="page-content">
     <div class="page-header"><h1>Continuity</h1></div>
     <section class="card"><div class="card-header"><span class="card-title">People</span></div><p class="form-hint">Adding someone here does not grant document access. Sealed designations remain unavailable until a future continuity trigger.</p><div id="directory" class="mt-1"></div></section>
-    <section class="card mt-2"><div class="card-header"><span class="card-title">Permission matrix</span></div><p class="form-hint">Sealed cells are recorded continuity designations. To add one, open the encrypted document and complete the live key-wrapping ceremony.</p><div id="matrix" class="table-wrap"></div></section>
+    <section class="card mt-2"><div class="card-header"><span class="card-title">Designated documents</span></div><p class="form-hint">Only documents with a continuity designation appear here. Sealed cells remain unavailable until a future continuity trigger.</p><div id="matrix" class="table-wrap"></div></section>
   </main>
   <script src="api.js"></script><script src="nav.js"></script>
   <script>
@@ -34,7 +34,9 @@
         const data = await API.get('api/continuity/directory');
         const people = [...data.members.map(p => ({ ...p, kind: 'member' })), ...data.trustees.map(p => ({ ...p, kind: 'trustee' }))];
         document.getElementById('directory').innerHTML = `${data.members.map(p => personCard(p, 'member')).join('')}${data.trustees.map(p => personCard(p, 'trustee')).join('') || '<div class="text-dim text-sm">No trustees invited yet.</div>'}`;
-        document.getElementById('matrix').innerHTML = `<table><thead><tr><th>Document</th>${people.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${data.documents.map(d => `<tr><td><a href="document.html?id=${encodeURIComponent(d.id)}">${esc(d.title)}</a></td>${people.map(p => `<td>${matrixCell(d, p, p.kind)}</td>`).join('')}</tr>`).join('') || '<tr><td>No active documents.</td></tr>'}</tbody></table>`;
+        document.getElementById('matrix').innerHTML = data.documents.length
+          ? `<table><thead><tr><th>Document</th>${people.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${data.documents.map(d => `<tr><td><a href="document.html?id=${encodeURIComponent(d.id)}">${esc(d.title)}</a></td>${people.map(p => `<td>${matrixCell(d, p, p.kind)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+          : '<div class="empty-state" style="padding:1rem 0;"><div class="empty-state-title">No continuity designations yet</div><p class="text-dim">When a document is designated, it will appear here.</p></div>';
       } catch (error) { document.getElementById('directory').textContent = error.message; }
     }
     load();

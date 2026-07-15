@@ -477,7 +477,7 @@ app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, re
                 'trustee_id', dd.trustee_id, 'role', dd.role, 'sealed', dd.sealed
               ) ORDER BY dd.id) FILTER (WHERE dd.id IS NOT NULL), '[]') AS designations
        FROM documents d
-       LEFT JOIN document_designations dd ON dd.document_id = d.id
+       JOIN document_designations dd ON dd.document_id = d.id
        WHERE d.status = 'active'
        GROUP BY d.id ORDER BY d.title`
     );

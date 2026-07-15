@@ -60,6 +60,10 @@ describe('sealed designation API', () => {
     assert.equal(directoryData.documents.find((entry) => entry.id === document.id).designations[0].sealed, true);
     assert.equal((await authedGet('api/continuity/directory', kidCookie)).status, 403);
 
+    const undesignated = await createTestDocument(parent.id, { title: 'Undesignated document' });
+    const refreshedDirectory = await authedGet('api/continuity/directory', parentCookie);
+    assert.equal((await refreshedDirectory.json()).documents.some((entry) => entry.id === undesignated.id), false);
+
     assert.equal((await authedGet(`api/documents/${document.id}`, kidCookie)).status, 403);
     const kidDocs = await authedGet('api/documents', kidCookie);
     assert.equal((await kidDocs.json()).documents.some((entry) => entry.id === document.id), false);
