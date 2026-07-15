@@ -33,6 +33,7 @@
     { id: 'search',     label: 'Search',     icon: 'search', href: 'search.html' },
     { id: 'import',     label: 'Import',     icon: 'upload', href: 'import.html' },
     { id: 'backup',     label: 'Backup',     icon: 'shield', href: 'backup.html' },
+    { id: 'continuity', label: 'Continuity', icon: 'shield', href: 'continuity.html' },
     { id: 'tags',       label: 'Tags',       icon: 'tag',    href: 'tags.html' },
     { id: 'settings',   label: 'Settings',   icon: 'gear',   href: 'settings.html' }
   ];

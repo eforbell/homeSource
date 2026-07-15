@@ -590,6 +590,8 @@
           credential_verified: infoHolder?.credential_verified || false,
           credential_id: infoHolder?.credential_id || null,
           revoked_at: infoHolder?.revoked_at || null,
+          sealed: holder.sealed === true,
+          sealed_until: holder.sealed_until || null,
           wrapped_dek: getHolderWrappedDek(env, holder)
         };
       });
@@ -601,6 +603,7 @@
       return holders
         .filter((holder) => currentMember && Number(holder.member_id) === Number(currentMember.id))
         .filter((holder) => !holder.revoked_at)
+        .filter((holder) => !holder.sealed)
         .sort((a, b) => {
           const aPrimary = String(a.encryption_key_id) === String(primaryKeyId) ? 1 : 0;
           const bPrimary = String(b.encryption_key_id) === String(primaryKeyId) ? 1 : 0;
@@ -683,9 +686,11 @@
       const env = getPkiFileEntry(doc);
       const holders = getPkiHoldersFromDoc(doc, keyInfo).map((holder) => ({
         member_id: holder.member_id,
+        ...(holder.trustee_id ? { trustee_id: holder.trustee_id } : {}),
         encryption_key_id: holder.encryption_key_id,
         key_fingerprint: holder.key_fingerprint,
         role: holder.role,
+        ...(holder.sealed === true ? { sealed: true, sealed_until: holder.sealed_until || 'deadman_trigger' } : {}),
         wrapped_dek: holder.wrapped_dek
       }));
       return {

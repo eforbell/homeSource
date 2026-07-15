@@ -216,6 +216,7 @@ Notes:
 | Variable | Required | Default | Notes |
 |---|---|---|---|
 | DATABASE_URL | Yes | -- | PostgreSQL connection |
+| APP_URL | Trustee invitations | -- | Canonical `http(s)` URL used in one-time trustee ceremony links |
 | PORT | No | 3008 | HTTP port |
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |

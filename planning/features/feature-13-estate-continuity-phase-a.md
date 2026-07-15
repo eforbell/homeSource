@@ -1,7 +1,7 @@
 # Feature #13: Continuity & Inheritance — Program Charter + Phase A Plan
 
 Date: 2026-07-07
-Status: Draft planning — repo survey complete; decision points pending attestation
+Status: Phase A implementation in progress — A1 data-model foundation complete
 Parent: Use Case 2 (estate planning / inheritance) — see design guide
 Depends on: Feature #11 PKI foundation + hardening H1-H4.2 (shipped), Feature #12 posture/readiness (shipped)
 Design guide: `design/homesource-treatment.md` ("a letter, not a vault", Phases A-E)
@@ -447,8 +447,73 @@ Phase B/C planning, not Phase A.
 2. **Complete (2026-07-14):** Phase 0 SMTP mailer — `lib/mailer.js`, env-configured SMTP with TLS required by default, disabled fallback, and explicit console/file inspection transports.
 3. **Complete (2026-07-14):** Phase 0 basic notification dispatch (registration, revocation, holder add).
 4. **Complete (2026-07-14):** Phase 0 `key_holders` disposition migration and backup-export cleanup.
-5. `encryption_keys` member-assumption audit (A1 "needs deeper look").
-6. Phase A implementation per plan above.
+5. **Complete (2026-07-14):** `encryption_keys` member-assumption audit and
+   A1 data-model foundation (trustees, invitations, trustee key ownership, and
+   sealed designation projection).
+6. Continue Phase A implementation per plan: invitation ceremony, sealed
+   envelope v2, directory, and permission matrix.
+
+### Implementation record — 2026-07-14: Phase A A1 data-model foundation
+
+- Audited every current `encryption_keys.member_id` use. The established PKI
+  registration, key-material, WebAuthn, and holder-management paths are
+  intentionally household-member scoped; this work leaves them unchanged.
+  Trustee-specific ceremony and key-serving paths will be additive and scoped
+  to a one-time invitation token rather than weakening those routes.
+- Added migration `013-phase-a-trustee-designations.sql`: external
+  `vault_trustees`, hashed-token `trustee_invitations`, trustee-owned
+  `encryption_keys`, and envelope-projection `document_designations` with real
+  foreign keys and principal/role XOR constraints.
+- `document_designations` defaults to `sealed = true` and
+  `sealed_until = deadman_trigger`; it remains a rebuildable projection, not
+  the source of cryptographic authorization. Envelope v2 writing is deferred
+  to A2 so existing version-1 PKI behavior remains untouched.
+- Added a small trustee repository and regression coverage for external
+  principals, trustee key ownership, sealed beneficiary projection, and
+  invalid mixed-principal rows. The full suite passed (319 tests).
+
+### Implementation record — 2026-07-14: Phase A trustee invitation ceremony
+
+- Added parent-only trustee creation, listing, and revocation APIs. Inviting a
+  trustee creates a random 256-bit token, stores only its SHA-256 hash, and
+  expires it after seven days. The email link is built from the required
+  canonical `APP_URL`; the response never exposes the raw token.
+- Added an intentionally sessionless `trustee-invite.html` landing page. It
+  generates an X25519 keypair and passphrase-wraps the private key locally,
+  then uses the one-time invitation only to register the public key and wrapped
+  private material. No app session or document access is granted.
+- Registration locks and consumes the token in the same transaction that
+  creates the trustee-owned key and changes trustee status to `registered`.
+  Expired, used, and revoked invitations are uniformly rejected. Invite,
+  registration, and revocation events are audit-logged.
+- The invitation email is deliberately content-free: it says only that the
+  operator asked the recipient to prepare a continuity key. SMTP remains
+  best-effort per Phase 0; its delivery result is captured in the invite audit
+  record.
+
+### Implementation record — 2026-07-14: Phase A sealed designations + directory
+
+- Added additive envelope v2 support for sealed holder entries. A dedicated
+  parent-only seal route accepts exactly one new holder, verifies its identity,
+  active key, fingerprint, and client-produced DEK wrap, then writes the
+  envelope and relational designation projection in the same transaction.
+- Sealed holders remain visible to parents as labeled key-info entries but are
+  marked `unlock_eligible: false`. Sealed household beneficiaries are excluded
+  from document lists and all document-serving routes, even if they previously
+  had ownership metadata. An explicit parent unseal route reverses that gate
+  and records `designation.unsealed`.
+- Added the Continuity page: a responsive people directory with current key and
+  designation counts, plus a document × recipient matrix showing sealed state.
+  The live wrapping ceremony remains on the encrypted-document surface; Phase
+  C is the first phase that can turn a sealed cell into delivery authority.
+- **Threat boundary:** sealing is an application access-control gate, not a
+  new encryption primitive. The recipient's DEK wrap is stored now so no
+  post-trigger re-wrap is needed; therefore a database backup plus that
+  recipient's private key can decrypt it outside Home Source. Phase A protects
+  normal product routes, while Phase C defines delivery authority. Because
+  parents intentionally retain household-wide app access, Phase A only permits
+  sealed beneficiary designations to household kids; a parent beneficiary
+  would otherwise be falsely shown as gated.
 
 ### Implementation record — 2026-07-14: Phase 0 SMTP mailer
 

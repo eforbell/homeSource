@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Continuity</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="sovereign-fonts.css"><link rel="stylesheet" href="sovereign-chassis.css"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="source-skin.css"><link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body data-nav-page="continuity">
+  <main class="page-content">
+    <div class="page-header"><h1>Continuity</h1></div>
+    <section class="card"><div class="card-header"><span class="card-title">People</span></div><p class="form-hint">Adding someone here does not grant document access. Sealed designations remain unavailable until a future continuity trigger.</p><div id="directory" class="mt-1"></div></section>
+    <section class="card mt-2"><div class="card-header"><span class="card-title">Permission matrix</span></div><p class="form-hint">Sealed cells are recorded continuity designations. To add one, open the encrypted document and complete the live key-wrapping ceremony.</p><div id="matrix" class="table-wrap"></div></section>
+  </main>
+  <script src="api.js"></script><script src="nav.js"></script>
+  <script>
+    'use strict';
+    const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
+    function personCard(person, kind) {
+      const status = kind === 'trustee' ? person.status : `${person.active_key_count} active key${person.active_key_count === 1 ? '' : 's'}`;
+      const count = Number(person.designation_count || 0);
+      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(person.name)}</strong><div class="text-sm text-dim">${esc(kind === 'trustee' ? person.relationship || 'Trustee' : person.role)} · ${esc(status)}</div><div class="text-xs text-dim">${count} designated document${count === 1 ? '' : 's'}</div></div>`;
+    }
+    function matrixCell(document, person, kind) {
+      const match = (document.designations || []).find(d => kind === 'member' ? Number(d.member_id) === Number(person.id) : Number(d.trustee_id) === Number(person.id));
+      if (!match) return '<span class="badge badge-muted">None</span>';
+      return `<span class="badge ${match.sealed ? 'badge-warn' : 'badge-info'}">${match.sealed ? 'Sealed' : 'Unsealed'}</span>`;
+    }
+    async function load() {
+      try {
+        const data = await API.get('api/continuity/directory');
+        const people = [...data.members.map(p => ({ ...p, kind: 'member' })), ...data.trustees.map(p => ({ ...p, kind: 'trustee' }))];
+        document.getElementById('directory').innerHTML = `${data.members.map(p => personCard(p, 'member')).join('')}${data.trustees.map(p => personCard(p, 'trustee')).join('') || '<div class="text-dim text-sm">No trustees invited yet.</div>'}`;
+        document.getElementById('matrix').innerHTML = `<table><thead><tr><th>Document</th>${people.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${data.documents.map(d => `<tr><td><a href="document.html?id=${encodeURIComponent(d.id)}">${esc(d.title)}</a></td>${people.map(p => `<td>${matrixCell(d, p, p.kind)}</td>`).join('')}</tr>`).join('') || '<tr><td>No active documents.</td></tr>'}</tbody></table>`;
+      } catch (error) { document.getElementById('directory').textContent = error.message; }
+    }
+    load();
+  </script>
+</body>
+</html>
