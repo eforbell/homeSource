@@ -1,7 +1,7 @@
 # Feature #13: Continuity & Inheritance — Program Charter + Phase A Plan
 
 Date: 2026-07-07
-Status: Phase A implementation in progress — A1 data-model foundation complete
+Status: Phase A core shipped 2026-07-14; matrix-focus follow-up in review
 Parent: Use Case 2 (estate planning / inheritance) — see design guide
 Depends on: Feature #11 PKI foundation + hardening H1-H4.2 (shipped), Feature #12 posture/readiness (shipped)
 Design guide: `design/homesource-treatment.md` ("a letter, not a vault", Phases A-E)
@@ -302,7 +302,7 @@ Design treatment §7 Phase A, adapted to the survey findings. **Ships on its
 own**: households see designated-document counts and registered
 trustee/beneficiary keys before any switch exists.
 
-### A1. Data model
+### A1. Data model — **complete**
 
 New (names final after D13-2/D13-3 attestation):
 
@@ -344,12 +344,12 @@ CREATE TABLE document_designations (  -- projection; envelope stays canonical
 );
 ```
 
-Trustee keys: reuse `encryption_keys` with nullable `trustee_id` column added
-(same registration crypto as members; `member_id` becomes nullable with an
-XOR CHECK). **Needs deeper look**: every `encryption_keys` query in `lib/pki.js`
-assumes `member_id` — audit before writing the migration.
+Trustee keys reuse `encryption_keys` with nullable `trustee_id`; principal
+ownership is enforced by a member/trustee XOR CHECK. The `member_id` audit is
+complete: shipped member PKI/WebAuthn/material routes remain member-scoped and
+the trustee ceremony is additive.
 
-### A2. Envelope additions (version 2, additive)
+### A2. Envelope additions (version 2, additive) — **core complete**
 
 Holder entries gain optional `trustee_id` (instead of `member_id`),
 `sealed: true`, `sealed_until: "deadman_trigger"`. Gates to add:
@@ -361,53 +361,62 @@ Holder entries gain optional `trustee_id` (instead of `member_id`),
 - Sealing/unsealing writes audit events (`designation.sealed`,
   `designation.unsealed`, `trustee.invited`, `trustee.registered`)
 
-The sealing ceremony itself is the **existing** add-holder flow (live DEK
-proof, re-wrap) with `sealed: true` on the new entry — parent-only, per
-shipped authorization rules.
+The parent-only seal API accepts one client-produced live DEK re-wrap at a
+time, validates the recipient key and envelope state under the document lock,
+and writes its designation projection in the same transaction. The API accepts
+beneficiary and trustee entries; the current browser ceremony is only wired for
+household-beneficiary wrapping. Trustee wrapping UI remains a follow-up.
 
-### A3. Trustee registration ceremony
+### A3. Trustee registration ceremony — **passphrase ceremony complete**
 
 Invitation (operator side) → one-time emailed link (Phase 0 mailer; letter
 voice per design §3.3 — from the operator's name, never revealing vault
-contents) → ceremony landing page (no nav, no app session) → WebAuthn/passphrase
-key registration reusing `public/pki-crypto.js` → confirmation to operator.
+contents) → ceremony landing page (no nav, no app session) → **passphrase**
+key registration reusing `public/pki-crypto.js`. WebAuthn trustee registration
+is deferred; it needs trustee-scoped ceremony storage rather than reuse of the
+member-only WebAuthn tables.
 Token semantics follow `lib/share.js` patterns (hashed at rest, single-use,
 7-day expiry).
 
-### A4. Beneficiary directory (mobile-responsive)
+### A4. Beneficiary directory (mobile-responsive) — **basic complete**
 
-`family_members` + key posture (reuse Feature #12 posture data) + designated
-count per person computed from `document_designations`. Registered trustees
+`family_members` + active-key count + designated count per person computed from
+`document_designations`. Registered trustees
 listed in a separate section with status. Adding a person here grants
 nothing — it makes them addressable (design §3.1).
 
-### A5. Permission matrix (desktop-only by design)
+### A5. Permission matrix (desktop-only by design) — **display complete**
 
-Documents × recipients grid; tapping a cell runs the sealing ceremony (A2)
-and writes both the envelope holder entry and the projection row. Cell
-states: none / sealed-designated / (Phase D: quorum participant). Quorum
-cells render but stay disabled until Phase D.
+The current Continuity page shows **only documents with an existing
+designation**, avoiding a full-vault table of non-actionable empty cells. It
+displays none / sealed / unsealed state and links to the document. A matrix-cell
+action that launches the live wrapping ceremony remains follow-up work; quorum
+cells are Phase D.
 
-### A6. Tests
+### A6. Tests — **core coverage complete; named gaps remain**
 
 - Trustee invite/registration: token single-use, expiry, revoked-trustee
   rejection, no session issued
-- Sealed holder: excluded from unlock eligibility and key-material serving;
-  visible-labeled to parent; envelope v2 round-trips through backup/restore
+- Sealed holder: excluded from unlock eligibility and document-serving routes;
+  visible-labeled to parent; lock-state and projection rebuild regression tests
 - Designation projection: consistent with envelope after seal, rebuildable,
   count queries correct
 - Regression: all Feature #11/#12 PKI suites stay green (envelope v1 docs
   untouched)
 
-### Acceptance criteria
+### Acceptance criteria — current state
 
-1. Operator can invite a trustee, who registers a key via one-time ceremony
-   without ever holding an app session
-2. Operator can seal a document to a beneficiary or trustee; the recipient
-   cannot access it through any route
-3. Beneficiary directory shows accurate designated counts and key posture
-4. All seal/invite/register events are audit-logged
-5. Existing PKI behavior is unchanged (full suite green)
+1. **Met:** Operator can invite a trustee, who registers a passphrase-wrapped
+   key via one-time ceremony without ever holding an app session.
+2. **Met for household-kid beneficiaries:** a sealed designation is excluded
+   from document lists, key-info eligibility, and document-serving routes. To
+   keep the claim true, Phase A rejects parent beneficiaries because parents
+   retain household-wide access. Trustee delivery is intentionally Phase C.
+3. **Met at basic level:** directory shows designated counts and active-key
+   counts; full Feature #12 posture detail is not duplicated there.
+4. **Met:** seal, unseal, invite, registration, and revocation are audit-logged.
+5. **Met:** Feature #11/#12 regression suite remains green (325 tests at the
+   latest Phase A core validation).
 
 ### Non-goals for Phase A
 
@@ -450,8 +459,11 @@ Phase B/C planning, not Phase A.
 5. **Complete (2026-07-14):** `encryption_keys` member-assumption audit and
    A1 data-model foundation (trustees, invitations, trustee key ownership, and
    sealed designation projection).
-6. Continue Phase A implementation per plan: invitation ceremony, sealed
-   envelope v2, directory, and permission matrix.
+6. **Complete (2026-07-14):** Phase A core — invitation ceremony, envelope v2
+   sealed designations, route/key-info gates, directory, and matrix display.
+7. **Follow-up before declaring every planned Phase A interaction complete:**
+   matrix-cell live wrapping, trustee wrapping UI, trustee WebAuthn ceremony,
+   and an explicit backup/restore v2 regression fixture.
 
 ### Implementation record — 2026-07-14: Phase A A1 data-model foundation
 
@@ -504,6 +516,8 @@ Phase B/C planning, not Phase A.
   and records `designation.unsealed`.
 - Added the Continuity page: a responsive people directory with current key and
   designation counts, plus a document × recipient matrix showing sealed state.
+  It lists only already-designated documents; this keeps the present read-only
+  matrix focused until a future cell action can launch the wrapping ceremony.
   The live wrapping ceremony remains on the encrypted-document surface; Phase
   C is the first phase that can turn a sealed cell into delivery authority.
 - **Threat boundary:** sealing is an application access-control gate, not a
