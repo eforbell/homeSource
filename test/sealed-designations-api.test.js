@@ -64,8 +64,12 @@ describe('sealed designation API', () => {
     const kidDocs = await authedGet('api/documents', kidCookie);
     assert.equal((await kidDocs.json()).documents.some((entry) => entry.id === document.id), false);
 
+    // The projection is deliberately rebuildable; unseal must recreate it with coherent state.
+    await pool.query('DELETE FROM document_designations WHERE document_id = $1', [document.id]);
     const unseal = await authedPost(`api/documents/${document.id}/designations/${beneficiaryKey.id}/unseal`, parentCookie, {});
     assert.equal(unseal.status, 200);
+    const { rows: rebuilt } = await pool.query('SELECT sealed, sealed_until FROM document_designations WHERE document_id = $1', [document.id]);
+    assert.deepEqual(rebuilt, [{ sealed: false, sealed_until: 'unsealed' }]);
     assert.equal((await authedGet(`api/documents/${document.id}`, kidCookie)).status, 200);
   });
 });

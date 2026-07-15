@@ -1143,8 +1143,11 @@ async function validateNewSealedHolder(holder, actorId) {
     throw new Error('Sealed designation role must match its recipient identity');
   }
   const { rows } = await pool.query(
-    `SELECT id, key_type, member_id, trustee_id, key_fingerprint, revoked_at
-     FROM encryption_keys WHERE id = $1`,
+    `SELECT ek.id, ek.key_type, ek.member_id, ek.trustee_id, ek.key_fingerprint, ek.revoked_at,
+            member.role AS member_role
+     FROM encryption_keys ek
+     LEFT JOIN family_members member ON member.id = ek.member_id
+     WHERE ek.id = $1`,
     [Number(holder.encryption_key_id)]
   );
   const key = rows[0];
@@ -1155,6 +1158,9 @@ async function validateNewSealedHolder(holder, actorId) {
   }
   if (hasMember && Number(holder.member_id) === Number(actorId)) {
     throw new Error('A beneficiary designation must target a different household member');
+  }
+  if (hasMember && key.member_role !== 'kid') {
+    throw new Error('Phase A beneficiary designations must target a household kid');
   }
   if (hasTrustee && (key.key_type !== 'trustee' || Number(key.trustee_id) !== Number(holder.trustee_id))) {
     throw new Error('Sealed trustee key does not belong to the selected trustee');
@@ -1191,7 +1197,12 @@ app.post('/api/documents/:id/designations/seal', requireAuth, requireParent, asy
       encryptionKeyId: doc.encryption_key_id,
       validate: async (lockedDoc) => {
         const lockedHolders = normalizeStoredPkiHolders(lockedDoc.encryption_metadata?.files?.upload || {});
-        if (lockedHolders.length !== existingHolders.length) throw new Error('Document holders changed while sealing this designation');
+        if (lockedHolders.length !== existingHolders.length || lockedHolders.some((holder) => {
+          const expected = existingHolders.find((entry) => Number(entry.encryption_key_id) === Number(holder.encryption_key_id));
+          return !expected || !holderHasSameIdentity(holder, expected);
+        })) {
+          throw new Error('Document holders changed while sealing this designation');
+        }
       },
       afterUpdate: async (client) => trustees.upsertDesignation(client, {
         documentId: doc.id,

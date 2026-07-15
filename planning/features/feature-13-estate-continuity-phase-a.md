@@ -506,6 +506,14 @@ Phase B/C planning, not Phase A.
   designation counts, plus a document × recipient matrix showing sealed state.
   The live wrapping ceremony remains on the encrypted-document surface; Phase
   C is the first phase that can turn a sealed cell into delivery authority.
+- **Threat boundary:** sealing is an application access-control gate, not a
+  new encryption primitive. The recipient's DEK wrap is stored now so no
+  post-trigger re-wrap is needed; therefore a database backup plus that
+  recipient's private key can decrypt it outside Home Source. Phase A protects
+  normal product routes, while Phase C defines delivery authority. Because
+  parents intentionally retain household-wide app access, Phase A only permits
+  sealed beneficiary designations to household kids; a parent beneficiary
+  would otherwise be falsely shown as gated.
 
 ### Implementation record — 2026-07-14: Phase 0 SMTP mailer
 
