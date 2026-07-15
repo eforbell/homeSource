@@ -80,6 +80,25 @@ describe('trustee invitation ceremony API', () => {
     assert.equal(response.status, 403);
   });
 
+  it('replaces an outstanding invitation without exposing either token', async () => {
+    const created = await authedPost('api/trustees', parentCookie, {
+      name: 'Resend Trustee', email: 'resend@family.test'
+    });
+    const { trustee } = await created.json();
+    const resent = await authedPost(`api/trustees/${trustee.id}/invitations/resend`, parentCookie, {});
+    assert.equal(resent.status, 200);
+    assert.equal((await resent.json()).invitation.delivered, false);
+    const { rows: invitations } = await pool.query(
+      'SELECT id, used_at, token_hash FROM trustee_invitations WHERE trustee_id = $1 ORDER BY id', [trustee.id]
+    );
+    assert.equal(invitations.length, 2);
+    assert.ok(invitations[0].used_at);
+    assert.equal(invitations[1].used_at, null);
+    assert.notEqual(invitations[0].token_hash, invitations[1].token_hash);
+    const { rows: audits } = await pool.query("SELECT action FROM audit_log WHERE action = 'trustee.invitation_resent'");
+    assert.equal(audits.length, 1);
+  });
+
   it('registers a trustee key once without issuing an app session', async () => {
     const trustee = await trustees.createTrustee({
       name: 'Morgan Trustee', email: 'morgan@family.test', createdBy: parent.id
@@ -112,6 +131,16 @@ describe('trustee invitation ceremony API', () => {
     assert.equal(registered.key.member_id, undefined);
     assert.equal(registered.key.encrypted_private_key, undefined);
 
+    const listedKeys = await authedGet(`api/trustees/${trustee.id}/keys`, parentCookie);
+    assert.equal(listedKeys.status, 200);
+    const keys = await listedKeys.json();
+    assert.equal(keys.length, 1);
+    assert.equal(keys[0].id, registered.key.id);
+    assert.equal(keys[0].public_key, publicKey('trustee-public-key'));
+    assert.equal(keys[0].encrypted_private_key, undefined);
+    const kidListedKeys = await authedGet(`api/trustees/${trustee.id}/keys`, kidCookie);
+    assert.equal(kidListedKeys.status, 403);
+
     const { rows: storedInvitation } = await pool.query('SELECT used_at FROM trustee_invitations WHERE id = $1', [invitation.id]);
     assert.ok(storedInvitation[0].used_at);
     const repeated = await fetch(url(`api/trustee-invitations/${invitation.token}/register`), {
@@ -124,6 +153,30 @@ describe('trustee invitation ceremony API', () => {
     const { rows: audits } = await pool.query("SELECT * FROM audit_log WHERE action = 'trustee.registered'");
     assert.equal(audits.length, 1);
     assert.equal(audits[0].actor_id, null);
+  });
+
+  it('starts a sessionless trustee WebAuthn ceremony bound to the invitation', async () => {
+    const trustee = await trustees.createTrustee({
+      name: 'Hardware Trustee', email: 'hardware@family.test', createdBy: parent.id
+    });
+    const invitation = await trustees.createTrusteeInvitation({ trusteeId: trustee.id });
+    const options = await fetch(url(`api/trustee-invitations/${invitation.token}/webauthn/options`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requested_method: 'security_key' })
+    });
+    assert.equal(options.status, 200);
+    assert.equal(options.headers.get('set-cookie'), null);
+    const payload = await options.json();
+    assert.ok(payload.options.challenge);
+    assert.equal(payload.options.authenticatorSelection.authenticatorAttachment, 'cross-platform');
+    const { rows } = await pool.query(
+      `SELECT trustee_id, member_id, purpose, challenge FROM webauthn_challenges
+       WHERE trustee_id = $1 ORDER BY created_at DESC LIMIT 1`, [trustee.id]
+    );
+    assert.deepEqual(rows[0], {
+      trustee_id: trustee.id, member_id: null,
+      purpose: 'trustee_key_registration', challenge: payload.options.challenge
+    });
   });
 
   it('rejects expired and revoked trustee invitations', async () => {

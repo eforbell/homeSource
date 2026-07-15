@@ -452,9 +452,29 @@ function trusteeInvitationMessage({ trustee, operatorName, invitationUrl, expire
   };
 }
 
+async function deliverTrusteeInvitation({ trustee, invitation, operator }) {
+  const delivery = await sendMail(trusteeInvitationMessage({
+    trustee,
+    operatorName: operator.name,
+    invitationUrl: trusteeInvitationUrl(invitation.token),
+    expiresAt: invitation.expires_at
+  }));
+  return {
+    delivered: delivery.delivered === true,
+    transport: delivery.transport || null,
+    reason: delivery.reason || null
+  };
+}
+
 app.get('/api/trustees', requireAuth, requireParent, async (_req, res) => {
   try {
     res.json(await trustees.listTrustees());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/trustees/:id/keys', requireAuth, requireParent, async (req, res) => {
+  try {
+    res.json(await trustees.listTrusteeKeys(req.params.id));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -471,7 +491,7 @@ app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, re
     );
     const trusteeRows = await trustees.listTrustees();
     const { rows: documents } = await pool.query(
-      `SELECT d.id, d.title, d.status,
+      `SELECT d.id, d.title, d.status, d.encryption_mode,
               COALESCE(json_agg(json_build_object(
                 'encryption_key_id', dd.encryption_key_id, 'member_id', dd.member_id,
                 'trustee_id', dd.trustee_id, 'role', dd.role, 'sealed', dd.sealed
@@ -497,29 +517,40 @@ app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {
       createdBy: req.member.id
     });
     const invitation = await trustees.createTrusteeInvitation({ trusteeId: trustee.id });
-    const invitationUrl = trusteeInvitationUrl(invitation.token);
-    const delivery = await sendMail(trusteeInvitationMessage({
-      trustee,
-      operatorName: req.member.name,
-      invitationUrl,
-      expiresAt: invitation.expires_at
-    }));
+    const delivery = await deliverTrusteeInvitation({ trustee, invitation, operator: req.member });
     await audit.log('trustee.invited', 'vault_trustee', trustee.id, req.member.id, {
       invitation_id: invitation.id,
       expires_at: invitation.expires_at,
       email_delivery: {
-        delivered: delivery.delivered === true,
-        transport: delivery.transport || null,
-        reason: delivery.reason || null
+        ...delivery
       }
     });
     res.status(201).json({
       trustee,
       invitation: {
         expires_at: invitation.expires_at,
-        delivered: delivery.delivered === true
+        delivered: delivery.delivered
       }
     });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/trustees/:id/invitations/resend', requireAuth, requireParent, async (req, res) => {
+  try {
+    trusteeInvitationUrl('placeholder');
+    const replacement = await trustees.replaceTrusteeInvitation(req.params.id);
+    if (!replacement) return res.status(404).json({ error: 'Trustee is not available for invitation' });
+    const delivery = await deliverTrusteeInvitation({
+      trustee: replacement.trustee,
+      invitation: replacement.invitation,
+      operator: req.member
+    });
+    await audit.log('trustee.invitation_resent', 'vault_trustee', replacement.trustee.id, req.member.id, {
+      invitation_id: replacement.invitation.id,
+      expires_at: replacement.invitation.expires_at,
+      email_delivery: delivery
+    });
+    res.json({ invitation: { expires_at: replacement.invitation.expires_at, delivered: delivery.delivered } });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
@@ -544,6 +575,44 @@ app.get('/api/trustee-invitations/:token', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+async function getTrusteeInvitationForWebAuthn(token) {
+  const invitation = await trustees.getValidTrusteeInvitation(token);
+  if (!invitation) return null;
+  return { id: invitation.trustee_id, name: invitation.name, relationship: invitation.relationship };
+}
+
+app.post('/api/trustee-invitations/:token/webauthn/options', async (req, res) => {
+  try {
+    if (!webauthn.isSecureWebAuthnContext(req)) return res.status(400).json({ error: 'WebAuthn requires HTTPS or localhost' });
+    const trustee = await getTrusteeInvitationForWebAuthn(req.params.token);
+    if (!trustee) return res.status(404).json({ error: 'Invitation not found or expired' });
+    const requestedMethod = req.body?.requested_method;
+    if (!['security_key', 'passkey'].includes(requestedMethod)) return res.status(400).json({ error: 'requested_method must be "security_key" or "passkey"' });
+    const { rows } = await pool.query('SELECT credential_id FROM webauthn_credentials WHERE trustee_id = $1', [trustee.id]);
+    res.json(await webauthn.createTrusteeKeyRegistrationOptions(req, trustee, rows.map((row) => row.credential_id), requestedMethod));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/trustee-invitations/:token/webauthn/complete', async (req, res) => {
+  try {
+    const trustee = await getTrusteeInvitationForWebAuthn(req.params.token);
+    if (!trustee) return res.status(404).json({ error: 'Invitation not found or expired' });
+    const result = await webauthn.completeTrusteeKeyRegistration(req, trustee, req.body || {});
+    res.status(201).json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/trustee-invitations/:token/webauthn/assertion-options', async (req, res) => {
+  try {
+    if (!webauthn.isSecureWebAuthnContext(req)) return res.status(400).json({ error: 'WebAuthn requires HTTPS or localhost' });
+    const trustee = await getTrusteeInvitationForWebAuthn(req.params.token);
+    if (!trustee) return res.status(404).json({ error: 'Invitation not found or expired' });
+    const credentialId = String(req.body?.credential_id || '').trim();
+    if (!credentialId) return res.status(400).json({ error: 'credential_id is required' });
+    res.json(await webauthn.createTrusteeKeyAssertionOptions(req, trustee, credentialId));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 app.post('/api/trustee-invitations/:token/register', async (req, res) => {
   try {
     const body = req.body || {};
@@ -560,6 +629,38 @@ app.post('/api/trustee-invitations/:token/register', async (req, res) => {
       invitation_id: registered.invitation.id,
       encryption_key_id: registered.key.id,
       protection_tier: registered.key.protection_tier
+    });
+    res.status(201).json({ trustee: registered.trustee, key: registered.key });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/trustee-invitations/:token/webauthn/finalize', async (req, res) => {
+  try {
+    const trustee = await getTrusteeInvitationForWebAuthn(req.params.token);
+    if (!trustee) return res.status(404).json({ error: 'Invitation not found or expired' });
+    const finalized = await webauthn.finalizeTrusteeKeyRegistration(req, trustee, req.body || {});
+    const registered = await trustees.registerTrusteeFromInvitation({
+      token: req.params.token,
+      publicKey: req.body?.public_key,
+      encryptedPrivateKey: req.body?.encrypted_private_key,
+      algorithm: req.body?.algorithm || 'x25519',
+      protectionTier: finalized.verification.protectionTier,
+      label: req.body?.label || null,
+      credentialId: finalized.credential.credential_id,
+      prfEnabled: true,
+      credentialVerified: true,
+      verificationMethod: 'webauthn',
+      credentialTransports: finalized.credential.credential_transports,
+      credentialDeviceType: finalized.verification.credentialDeviceType,
+      credentialBackedUp: finalized.verification.credentialBackedUp,
+      credentialAttachment: finalized.credential.credential_attachment,
+      verifiedAt: new Date()
+    });
+    if (!registered) return res.status(404).json({ error: 'Invitation not found or expired' });
+    await webauthn.markTrusteeKeyFinalized(finalized);
+    await audit.log('trustee.registered', 'vault_trustee', registered.trustee.id, null, {
+      invitation_id: registered.invitation.id, encryption_key_id: registered.key.id,
+      protection_tier: registered.key.protection_tier, verification_method: 'webauthn'
     });
     res.status(201).json({ trustee: registered.trustee, key: registered.key });
   } catch (err) { res.status(400).json({ error: err.message }); }

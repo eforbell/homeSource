@@ -106,8 +106,9 @@ CREATE UNIQUE INDEX idx_encryption_keys_trustee_fingerprint
 
 CREATE TABLE webauthn_challenges (
   id SERIAL PRIMARY KEY,
-  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
-  purpose TEXT NOT NULL CHECK (purpose IN ('member_key_registration', 'member_key_assertion')),
+  member_id INT REFERENCES family_members(id) ON DELETE CASCADE,
+  trustee_id INT REFERENCES vault_trustees(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL CHECK (purpose IN ('member_key_registration', 'member_key_assertion', 'trustee_key_registration', 'trustee_key_assertion')),
   challenge TEXT NOT NULL,
   rp_id TEXT NOT NULL,
   expected_origin TEXT NOT NULL,
@@ -115,7 +116,8 @@ CREATE TABLE webauthn_challenges (
   requested_method TEXT CHECK (requested_method IN ('security_key', 'passkey')),
   expires_at TIMESTAMPTZ NOT NULL,
   used_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((member_id IS NOT NULL AND trustee_id IS NULL) OR (member_id IS NULL AND trustee_id IS NOT NULL))
 );
 
 CREATE INDEX idx_webauthn_challenges_member_purpose
@@ -124,9 +126,14 @@ CREATE INDEX idx_webauthn_challenges_member_purpose
 CREATE INDEX idx_webauthn_challenges_expires
   ON webauthn_challenges (expires_at);
 
+CREATE INDEX idx_webauthn_challenges_trustee_purpose
+  ON webauthn_challenges (trustee_id, purpose, created_at DESC)
+  WHERE trustee_id IS NOT NULL;
+
 CREATE TABLE webauthn_credentials (
   id SERIAL PRIMARY KEY,
-  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+  member_id INT REFERENCES family_members(id) ON DELETE CASCADE,
+  trustee_id INT REFERENCES vault_trustees(id) ON DELETE CASCADE,
   credential_id TEXT NOT NULL UNIQUE,
   credential_public_key TEXT NOT NULL,
   registration_prf_salt TEXT,
@@ -137,11 +144,16 @@ CREATE TABLE webauthn_credentials (
   credential_transports JSONB NOT NULL DEFAULT '[]'::jsonb,
   requested_method TEXT CHECK (requested_method IN ('security_key', 'passkey')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_used_at TIMESTAMPTZ
+  last_used_at TIMESTAMPTZ,
+  CHECK ((member_id IS NOT NULL AND trustee_id IS NULL) OR (member_id IS NULL AND trustee_id IS NOT NULL))
 );
 
 CREATE INDEX idx_webauthn_credentials_member
   ON webauthn_credentials (member_id, created_at DESC);
+
+CREATE INDEX idx_webauthn_credentials_trustee
+  ON webauthn_credentials (trustee_id, created_at DESC)
+  WHERE trustee_id IS NOT NULL;
 
 -- ── Documents ───────────────────────────────────────────────────────────────
 

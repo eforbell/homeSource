@@ -237,6 +237,39 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="seal-designation-modal">
+    <div class="modal">
+      <div class="modal-title">Seal Continuity Designation</div>
+      <div class="text-dim text-sm mb-1">This wraps the existing document key to a beneficiary or trustee now, but keeps the designation unavailable until a future continuity trigger. It does not re-encrypt the file.</div>
+      <div class="form-group">
+        <label class="form-label">Current Authorized Key</label>
+        <select id="seal-designation-current-key" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Recipient Type</label>
+        <select id="seal-designation-type" class="form-select"><option value="beneficiary">Household beneficiary</option><option value="trustee">Trustee</option></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" id="seal-designation-recipient-label">Beneficiary</label>
+        <select id="seal-designation-recipient" class="form-select"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Recipient Key</label>
+        <select id="seal-designation-key" class="form-select"></select>
+        <div id="seal-designation-key-hint" class="form-hint"></div>
+      </div>
+      <div class="form-group" id="seal-designation-passphrase-wrap" style="display:none;">
+        <label class="form-label">Your Key Passphrase</label>
+        <input type="password" id="seal-designation-passphrase" class="form-input" placeholder="Enter the passphrase for your currently authorized key">
+      </div>
+      <div id="seal-designation-status" class="text-sm text-dim" style="min-height:1.25rem;"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeSealDesignationModal()">Cancel</button>
+        <button class="btn btn-primary" id="confirm-seal-designation-btn">Seal designation</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="replace-revoked-holder-modal">
     <div class="modal">
       <div class="modal-title">Replace Revoked Holder</div>
@@ -455,6 +488,8 @@
     let memberKeys = [];
     let availableMembers = [];
     let memberKeyCache = new Map();
+    let availableTrustees = [];
+    let trusteeKeyCache = new Map();
     let unlockedFiles = new Map();
 
     function isEncryptedDoc(doc) {
@@ -714,7 +749,7 @@
       };
     }
 
-    async function buildExtendedEnvelopeWithHolder(doc, keyInfo, currentHolder, newKey, { memberId, role, passphrase, statusEl }) {
+    async function buildExtendedEnvelopeWithHolder(doc, keyInfo, currentHolder, newKey, { memberId = null, trusteeId = null, role, passphrase, statusEl, sealed = false }) {
       const env = getPkiFileEntry(doc);
       const holderWrappedDek = getHolderWrappedDek(env, currentHolder);
       if (!holderWrappedDek) throw new Error('Current holder metadata is incomplete');
@@ -740,11 +775,14 @@
       const publicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(newKey.public_key));
       const wrappedDek = await PKICrypto.wrapDekForOwner(dek, publicKey);
       const updated = buildNormalizedPkiEnvelope(doc, keyInfo);
+      if (sealed) updated.version = 2;
       updated.files.upload.holders.push({
-        member_id: memberId,
+        ...(memberId ? { member_id: memberId } : {}),
+        ...(trusteeId ? { trustee_id: trusteeId } : {}),
         encryption_key_id: newKey.id,
         key_fingerprint: newKey.key_fingerprint,
         role,
+        ...(sealed ? { sealed: true, sealed_until: 'deadman_trigger' } : {}),
         wrapped_dek: {
           kind: 'pki_x25519',
           ephemeral_public_key_b64: PKICrypto.toBase64(wrappedDek.ephemeralPublicKey),
@@ -1023,6 +1061,13 @@
       const keys = (await API.get(`api/members/${memberId}/keys`))
         .filter((key) => key.key_type === 'member' && !key.revoked_at);
       memberKeyCache.set(String(memberId), keys);
+      return keys;
+    }
+
+    async function loadTrusteeKeysForTrustee(trusteeId) {
+      const keys = (await API.get(`api/trustees/${trusteeId}/keys`))
+        .filter((key) => key.key_type === 'trustee' && !key.revoked_at);
+      trusteeKeyCache.set(String(trusteeId), keys);
       return keys;
     }
 
@@ -1469,6 +1514,117 @@
       }
     }
 
+    async function refreshSealDesignationModal() {
+      const holderSelect = document.getElementById('seal-designation-current-key');
+      const typeSelect = document.getElementById('seal-designation-type');
+      const recipientSelect = document.getElementById('seal-designation-recipient');
+      const keySelect = document.getElementById('seal-designation-key');
+      const passWrap = document.getElementById('seal-designation-passphrase-wrap');
+      const statusEl = document.getElementById('seal-designation-status');
+      if (!currentDoc || currentDoc.encryption_mode !== 'pki') throw new Error('Document is not PKI-encrypted');
+      if (!memberKeys.length) await loadMemberKeysForEncryptExisting();
+      const keyInfo = await API.get(`api/documents/${docId}/key-info`);
+      const eligibleHolders = getEligiblePkiHolders(currentDoc, keyInfo);
+      if (!eligibleHolders.length) throw new Error('None of your current keys can unlock this document');
+      holderSelect.innerHTML = eligibleHolders.map((holder) => `<option value="${esc(String(holder.encryption_key_id))}">${esc(formatUnlockHolderLabel(holder))}</option>`).join('');
+      const existingKeyIds = new Set(getPkiHoldersFromDoc(currentDoc, keyInfo).map((holder) => String(holder.encryption_key_id)));
+      if (!availableMembers.length) availableMembers = await API.get('api/members');
+      if (!availableTrustees.length) availableTrustees = await API.get('api/trustees');
+      const params = new URLSearchParams(location.search);
+      const preferredType = params.get('seal_trustee') ? 'trustee' : 'beneficiary';
+      typeSelect.value = preferredType;
+      const refreshRecipients = async () => {
+        const isTrustee = typeSelect.value === 'trustee';
+        const recipients = isTrustee
+          ? availableTrustees.filter((trustee) => trustee.status === 'registered' && Number(trustee.active_key_count) > 0)
+          : availableMembers.filter((member) => member.role === 'kid');
+        document.getElementById('seal-designation-recipient-label').textContent = isTrustee ? 'Trustee' : 'Beneficiary';
+        if (!recipients.length) throw new Error(isTrustee ? 'No registered trustee with an active key is available' : 'No household beneficiary with an active key is available');
+        recipientSelect.innerHTML = recipients.map((person) => `<option value="${person.id}">${esc(person.name)}</option>`).join('');
+        const preferredId = isTrustee ? params.get('seal_trustee') : params.get('seal_member');
+        if (preferredId && recipients.some((person) => String(person.id) === String(preferredId))) recipientSelect.value = preferredId;
+        await refreshRecipientKeys();
+      };
+      const refreshRecipientKeys = async () => {
+        const isTrustee = typeSelect.value === 'trustee';
+        const recipientId = recipientSelect.value;
+        const keys = isTrustee
+          ? (trusteeKeyCache.get(String(recipientId)) || await loadTrusteeKeysForTrustee(Number(recipientId)))
+          : (memberKeyCache.get(String(recipientId)) || await loadMemberKeysForMember(Number(recipientId)));
+        const candidates = keys.filter((key) => !existingKeyIds.has(String(key.id)));
+        if (!candidates.length) {
+          keySelect.innerHTML = '<option value="">No available keys</option>';
+          document.getElementById('seal-designation-key-hint').textContent = 'Every active key for this recipient is already on this document.';
+          return;
+        }
+        keySelect.innerHTML = candidates.map((key) => `<option value="${key.id}">${esc(formatPkiKeyOption(key))}</option>`).join('');
+        document.getElementById('seal-designation-key-hint').textContent = 'The document key will be wrapped locally to this key, then kept sealed.';
+      };
+      const refreshProofPrompt = () => {
+        const holder = eligibleHolders.find((candidate) => String(candidate.encryption_key_id) === String(holderSelect.value)) || eligibleHolders[0];
+        const needsPassphrase = !!(holder && (holder.protection_tier === 'passphrase' || holder.verification_method === 'passphrase'));
+        passWrap.style.display = needsPassphrase ? 'block' : 'none';
+        if (!needsPassphrase) document.getElementById('seal-designation-passphrase').value = '';
+      };
+      typeSelect.onchange = () => { refreshRecipients().catch((error) => { statusEl.textContent = error.message; }); };
+      recipientSelect.onchange = () => { refreshRecipientKeys().catch((error) => { statusEl.textContent = error.message; }); };
+      holderSelect.onchange = refreshProofPrompt;
+      await refreshRecipients();
+      refreshProofPrompt();
+      statusEl.textContent = '';
+    }
+
+    async function openSealDesignationModal() {
+      try {
+        document.getElementById('seal-designation-passphrase').value = '';
+        await refreshSealDesignationModal();
+        document.getElementById('seal-designation-modal').classList.remove('hidden');
+      } catch (err) {
+        toast(err.message || 'Unable to prepare sealed designation', 'error');
+      }
+    }
+
+    function closeSealDesignationModal() {
+      document.getElementById('seal-designation-modal').classList.add('hidden');
+    }
+
+    async function submitSealDesignation() {
+      const button = document.getElementById('confirm-seal-designation-btn');
+      const statusEl = document.getElementById('seal-designation-status');
+      const currentKeyId = document.getElementById('seal-designation-current-key').value;
+      const role = document.getElementById('seal-designation-type').value === 'trustee' ? 'trustee' : 'beneficiary';
+      const recipientId = document.getElementById('seal-designation-recipient').value;
+      const targetKeyId = document.getElementById('seal-designation-key').value;
+      try {
+        button.disabled = true;
+        if (!recipientId || !targetKeyId) throw new Error('Select a recipient and one of their keys');
+        const keyInfo = await API.get(`api/documents/${docId}/key-info`);
+        const currentHolder = getEligiblePkiHolders(currentDoc, keyInfo).find((holder) => String(holder.encryption_key_id) === String(currentKeyId));
+        if (!currentHolder) throw new Error('Select a currently authorized key you can unlock');
+        const targetKeys = role === 'trustee'
+          ? (trusteeKeyCache.get(String(recipientId)) || await loadTrusteeKeysForTrustee(Number(recipientId)))
+          : (memberKeyCache.get(String(recipientId)) || await loadMemberKeysForMember(Number(recipientId)));
+        const newKey = targetKeys.find((key) => String(key.id) === String(targetKeyId));
+        if (!newKey) throw new Error('Select a valid recipient key');
+        const encryptionMetadata = await buildExtendedEnvelopeWithHolder(currentDoc, keyInfo, currentHolder, newKey, {
+          ...(role === 'trustee' ? { trusteeId: Number(recipientId) } : { memberId: Number(recipientId) }),
+          role,
+          passphrase: document.getElementById('seal-designation-passphrase').value,
+          statusEl,
+          sealed: true
+        });
+        statusEl.textContent = 'Saving sealed continuity designation...';
+        await API.post(`api/documents/${docId}/designations/seal`, { encryption_metadata: encryptionMetadata });
+        closeSealDesignationModal();
+        toast('Continuity designation sealed', 'success');
+        await loadDocument();
+      } catch (err) {
+        statusEl.textContent = err.message || 'Unable to seal continuity designation';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function openEncryptModal() {
       try {
         const originals = (currentDoc?.files || []).filter((file) => file.file_type === 'original');
@@ -1740,6 +1896,7 @@
           ${!encryptedDoc ? '<button class="btn btn-sm" onclick="openEncryptModal()">Encrypt</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddBackupKeyModal()">Add Backup Key</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openAddTrustedHolderModal()">Add Trusted Holder</button>' : ''}
+          ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' ? '<button class="btn btn-sm" onclick="openSealDesignationModal()">Seal for Continuity</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' && canReplaceRevokedHolder ? '<button class="btn btn-sm" onclick="openReplaceRevokedHolderModal()">Replace Revoked Holder</button>' : ''}
           ${encryptedDoc && doc.encryption_mode === 'pki' && currentMember?.role === 'parent' && canRemoveRevokedHolder ? '<button class="btn btn-sm" onclick="openRemoveRevokedHolderModal()">Remove Revoked Holder</button>' : ''}
           <button class="btn btn-sm" onclick="openReanalyzeModal()">Re-analyze</button>
@@ -2534,9 +2691,14 @@
     document.getElementById('confirm-replace-holder-btn').addEventListener('click', submitReplaceRevokedHolder);
     document.getElementById('confirm-remove-holder-btn').addEventListener('click', submitRemoveRevokedHolder);
     document.getElementById('confirm-add-trusted-holder-btn').addEventListener('click', submitAddTrustedHolder);
+    document.getElementById('confirm-seal-designation-btn').addEventListener('click', submitSealDesignation);
 
     loadDocument().then(() => {
-      if (currentDoc) maybeStartMagicIndexPolling(currentDoc);
+      if (currentDoc) {
+        maybeStartMagicIndexPolling(currentDoc);
+        const params = new URLSearchParams(location.search);
+        if (params.get('seal_member') || params.get('seal_trustee')) openSealDesignationModal();
+      }
     });
   </script>
 </body>
