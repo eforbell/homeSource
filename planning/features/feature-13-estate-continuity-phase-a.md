@@ -1,7 +1,7 @@
 # Feature #13: Continuity & Inheritance — Program Charter + Phase A Plan
 
 Date: 2026-07-07
-Status: Phase A implementation complete 2026-07-14; full verification in progress
+Status: Phase A complete and locally verified 2026-07-14, including SMTP trustee invitation delivery, trustee key registration, and the sealed-designation ceremony
 Parent: Use Case 2 (estate planning / inheritance) — see design guide
 Depends on: Feature #11 PKI foundation + hardening H1-H4.2 (shipped), Feature #12 posture/readiness (shipped)
 Design guide: `design/homesource-treatment.md` ("a letter, not a vault", Phases A-E)
@@ -441,7 +441,7 @@ decisions #5/#6 (required before Phase C, tracked above).
 |---|---|---|
 | 0 | Mailer, notifications, `key_holders` disposition, attestations | All small; no crypto |
 | A | Trustees, directory, matrix, sealed designations | **This doc**; closest to startable |
-| B | Letter wizard, check-in, status card, `bin/deadman-check.js` | Unblocked once Phase 0 email lands; worker precedent exists |
+| B | Letter wizard, check-in, status card, `bin/deadman-check.js` | Ready for implementation planning; see `feature-13-phase-b-the-letter.md` |
 | C | Trustee notify + pause, beneficiary trigger, scoped single-doc delivery | Needs A + B; settle hardening #5/#6 first |
 | D | Shamir quorum, async ceremony (per D13-4), re-wrap on member change | Library chosen; highest risk; keep last |
 | E | Generated recovery card | ~80% shipped already |
@@ -480,6 +480,11 @@ Phase B/C planning, not Phase A.
     fixture. Home Source currently exports backups rather than providing a
     destructive in-app database restore command; the fixture extracts and
     verifies the complete restore payload.
+11. **Next:** Reconcile the May design treatment with the shipped Phase A data
+    model and ceremony choices, then implement the Phase B plan in
+    `feature-13-phase-b-the-letter.md`. Phase B stops at a durable
+    `delivery_pending` handoff; external-recipient notification, trustee pause,
+    and scoped document delivery remain Phase C.
 
 ### Implementation record — 2026-07-14: Phase A A1 data-model foundation
 
@@ -532,8 +537,8 @@ Phase B/C planning, not Phase A.
   and records `designation.unsealed`.
 - Added the Continuity page: a responsive people directory with current key and
   designation counts, plus a document × recipient matrix showing sealed state.
-  It lists only already-designated documents; this keeps the present read-only
-  matrix focused until a future cell action can launch the wrapping ceremony.
+  At this implementation checkpoint it listed only already-designated documents;
+  the subsequent interaction-completion slice added eligible empty-cell actions.
   The live wrapping ceremony remains on the encrypted-document surface; Phase
   C is the first phase that can turn a sealed cell into delivery authority.
 - **Threat boundary:** sealing is an application access-control gate, not a

@@ -1,8 +1,8 @@
 {
-  "currentFeature": "Feature #13: Continuity & Inheritance — Phase 0",
-  "status": "phase_0_complete_phase_a_ready",
-  "branch": "main",
-  "prdPath": "planning/features/feature-13-estate-continuity-phase-a.md",
+  "currentFeature": "Feature #13: Continuity & Inheritance — Phase B (The Letter)",
+  "status": "phase_a_complete_phase_b_planned",
+  "branch": "feat/continuity-seal-entrypoint",
+  "prdPath": "planning/features/feature-13-phase-b-the-letter.md",
   "completedFeatures": [
     "Feature #1: Foundation (Schema + Auth + Document CRUD + File Upload + Search + Backup + Sharing)",
     "Feature #2: MVP Hardening (iOS/WKWebView fixes, scanner overhaul, mobile polish, tag editor)",
@@ -21,7 +21,9 @@
     "Feature #11 PKI Hardening H4.1: Replace revoked same-member holder",
     "Feature #11 PKI Hardening H4.2: Remove revoked holder cleanup",
     "PKI post-hardening docs/test reconciliation (2026-07-04)",
-    "Feature #12: PKI Key Posture and Readiness (complete for current scope, Slice 4 deferred)"
+    "Feature #12: PKI Key Posture and Readiness (complete for current scope, Slice 4 deferred)",
+    "Feature #13 Phase 0: SMTP mailer, key-event notifications, and key_holders retirement",
+    "Feature #13 Phase A: trustee registration, sealed designations, continuity directory, and permission matrix"
   ],
   "skippedFeatures": [],
   "futureFeatures": [
