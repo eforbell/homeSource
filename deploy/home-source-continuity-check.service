@@ -1,0 +1,15 @@
+[Unit]
+Description=Home Source — Continuity State Advance
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=sovereign
+Group=sovereign
+WorkingDirectory=/opt/sovereign-home/apps/home-source
+ExecStart=/usr/bin/node bin/deadman-check.js --once
+EnvironmentFile=/etc/sovereign-home/home-source.env
+StateDirectory=sovereign-home/home-source/data
+StandardOutput=journal
+StandardError=journal

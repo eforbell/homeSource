@@ -14,7 +14,9 @@
     "magicinsight:eval": "node bin/magicinsight-eval.js",
     "magicindex:preview": "node bin/magicindex-preview.js",
     "worker:import": "node bin/import-worker.js",
-    "worker:import:once": "node bin/import-worker.js --once"
+    "worker:import:once": "node bin/import-worker.js --once",
+    "continuity:check": "node bin/deadman-check.js --once",
+    "continuity:outbox": "node bin/continuity-outbox.js --once"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.0",

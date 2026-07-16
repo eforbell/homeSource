@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <meta name="referrer" content="no-referrer">
+  <title>Home Source — Check in</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="sovereign-fonts.css"><link rel="stylesheet" href="sovereign-chassis.css"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="source-skin.css"><link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <main class="page-content" style="max-width:560px; margin:4rem auto; padding:1.5rem;">
+    <section class="card" aria-labelledby="page-title">
+      <div style="font-size:2rem" aria-hidden="true">✉️</div>
+      <h1 id="page-title">A simple check-in</h1>
+      <p id="summary" class="text-dim">Checking this one-time link…</p>
+      <button id="checkin-button" class="btn btn-primary" type="button" hidden>I'm here</button>
+      <p id="status" class="form-hint" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script>
+    'use strict';
+    const token = new URLSearchParams(location.search).get('token') || '';
+    const summary = document.getElementById('summary');
+    const status = document.getElementById('status');
+    const button = document.getElementById('checkin-button');
+    async function request(path) {
+      const response = await fetch(path, { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ token }), cache:'no-store' });
+      if (!response.ok) throw new Error('This check-in link is unavailable or has expired.');
+      return response.json();
+    }
+    async function validate() {
+      try {
+        const result = await request('api/continuity/check-in/validate');
+        summary.textContent = 'This link only records that you checked in. It does not sign you in or reveal any schedule or document.';
+        status.textContent = `Available until ${new Date(result.expires_at).toLocaleString()}.`;
+        button.hidden = false;
+      } catch (error) { summary.textContent = error.message; status.textContent = ''; }
+    }
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      status.textContent = 'Recording your check-in…';
+      try {
+        await request('api/continuity/check-in');
+        summary.textContent = "You're checked in.";
+        status.textContent = 'You can close this page.';
+        button.hidden = true;
+        history.replaceState(null, '', 'check-in.html');
+      } catch (error) { status.textContent = error.message; button.disabled = false; }
+    });
+    validate();
+  </script>
+</body>
+</html>

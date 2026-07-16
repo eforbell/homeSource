@@ -1,6 +1,6 @@
 {
   "currentFeature": "Feature #13: Continuity & Inheritance — Phase B (The Letter)",
-  "status": "phase_a_complete_phase_b_planned",
+  "status": "phase_b_implemented_pending_operator_acceptance",
   "branch": "feat/continuity-seal-entrypoint",
   "prdPath": "planning/features/feature-13-phase-b-the-letter.md",
   "completedFeatures": [

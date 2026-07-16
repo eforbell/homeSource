@@ -34,6 +34,11 @@
       </div>
     </div>
 
+    <div class="card mt-2" id="continuity-card" style="display:none;">
+      <div class="card-header"><span class="card-title">Continuity check-in</span><a href="continuity.html" class="btn btn-sm">Open</a></div>
+      <div id="continuity-summary"></div>
+    </div>
+
     <!-- Recent documents -->
     <div class="card mt-2">
       <div class="card-header">
@@ -72,6 +77,14 @@
         badge.className = 'posture-badge posture-' + (bp.posture === 'due_soon' ? 'due-soon' : bp.posture).replace('_', '-');
         const postureLabels = { good: 'Backed Up', due_soon: 'Due Soon', overdue: 'Overdue', none: 'No Backups' };
         bpText.textContent = postureLabels[bp.posture] || 'Unknown';
+
+        if (stats.continuity) {
+          const item = stats.continuity;
+          const card = document.getElementById('continuity-card');
+          card.style.display = 'block';
+          const due = item.next_checkin_due_at ? new Date(item.next_checkin_due_at).toLocaleString() : 'not scheduled';
+          document.getElementById('continuity-summary').innerHTML = `<div><span class="badge ${item.tone === 'healthy' ? 'badge-info' : item.tone === 'approaching' ? 'badge-warn' : 'badge-muted'}">${esc(String(item.tone || item.status).replace(/_/g, ' '))}</span></div><div class="text-sm mt-1"><strong>${esc(String(item.status).replace(/_/g, ' '))}</strong> · next check-in ${esc(due)}</div><div class="text-xs text-dim">No trustee or beneficiary is contacted during this phase.</div>`;
+        }
 
         // Recent docs
         const recentEl = document.getElementById('recent-docs');

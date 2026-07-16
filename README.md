@@ -182,6 +182,7 @@ For the full break-glass operator workflow, see:
 
 - [docs/recovery-runbook.md](docs/recovery-runbook.md)
 - [docs/trustee-invitation-runbook.md](docs/trustee-invitation-runbook.md)
+- [docs/continuity-runbook.md](docs/continuity-runbook.md)
 
 ### Manual Decryption of Encrypted Document Files from Backup
 
@@ -217,7 +218,7 @@ Notes:
 | Variable | Required | Default | Notes |
 |---|---|---|---|
 | DATABASE_URL | Yes | -- | PostgreSQL connection |
-| APP_URL | Trustee invitations | -- | Canonical HTTPS URL used in one-time trustee ceremony links (`localhost` may use HTTP for local development) |
+| APP_URL | Trustee invitations and continuity check-ins | -- | Canonical HTTPS URL used in one-time links (`localhost` may use HTTP for local development) |
 | PORT | No | 3008 | HTTP port |
 | STORAGE_PATH | No | ./data | Document storage root |
 | HOUSEHOLD_TIMEZONE | No | America/New_York | For display |
@@ -232,6 +233,7 @@ Notes:
 | NOTIFICATION_TO | No | -- | Comma-separated trusted household recipients for generic key-event alerts |
 | MAIL_TRANSPORT | No | smtp when `SMTP_HOST` is set; otherwise disabled | Explicitly set `console` or `file` only for local message inspection |
 | MAIL_OUTPUT_DIR | No | `./data/mail` | Private `.eml` output directory when `MAIL_TRANSPORT=file` |
+| CONTINUITY_ALLOW_INSPECTION_MAIL | No | no | Set `yes` only to arm against console/file transport during deliberate local inspection |
 | MAGICINDEX_PROVIDER | No | off | `off`, `openai`, `openai_compatible`, or `ollama` |
 | MAGICINDEX_PROVIDER_PRIVATE | No | no | Set `yes` only for private/local providers; allows batch UI to default MagicIndex on |
 | MAGICINDEX_PROVIDER_DEFAULT | No | openai_compatible | Provider preselected by the batch UI |
@@ -262,6 +264,10 @@ messages contain no document contents; every dispatch outcome is audit-logged.
 For development and tests, set `MAIL_TRANSPORT=console` to emit the generated
 message to the process log, or `MAIL_TRANSPORT=file` to write owner-only `.eml`
 files to `MAIL_OUTPUT_DIR`. These transports never contact an SMTP relay.
+
+Feature 13 Phase B adds a daily continuity state timer and a 15-minute reminder-outbox
+timer. See [docs/continuity-runbook.md](docs/continuity-runbook.md) for installation,
+manual execution, recovery, and sealed-recipient safety boundaries.
 
 ## Host Runtime Dependencies (Production)
 

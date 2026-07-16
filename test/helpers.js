@@ -32,6 +32,8 @@ function url(path) {
 
 async function resetDatabase() {
   const tables = [
+    'continuity_scheduler_runs', 'continuity_notification_outbox', 'continuity_events',
+    'continuity_checkin_tokens', 'continuity_recipients', 'continuity_switches',
     'magic_links',
     'magic_data',
     'processing_jobs', 'import_items', 'import_batches',

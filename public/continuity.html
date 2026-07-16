@@ -12,6 +12,28 @@
 <body data-nav-page="continuity">
   <main class="page-content">
     <div class="page-header"><h1>Continuity</h1></div>
+    <section class="card" id="switch-card">
+      <div class="card-header"><span class="card-title">The letter and check-in</span><span id="switch-badge" class="badge badge-muted">Loading</span></div>
+      <p class="form-hint">Write one encrypted letter, choose who it is sealed for, and set a private reminder to check in. This phase never contacts recipients or opens their sealed holders.</p>
+      <div id="switch-summary" class="mt-1"></div>
+      <form id="switch-form" class="mt-1">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(12rem,1fr)); gap:.75rem;">
+          <div class="form-group"><label class="form-label" for="reminder-email">Your reminder email</label><input class="form-input" id="reminder-email" type="email" autocomplete="email" required></div>
+          <div class="form-group"><label class="form-label" for="interval-days">Check-in cadence</label><select class="form-select" id="interval-days"><option value="30">Every 30 days</option><option value="90">Every 90 days</option><option value="180">Every 180 days</option></select></div>
+          <div class="form-group"><label class="form-label" for="grace-days">Grace period</label><input class="form-input" id="grace-days" type="number" min="7" value="14" required></div>
+        </div>
+        <div class="form-group"><label class="form-label">Sealed recipients</label><div id="switch-recipients" class="card" style="padding:.75rem;"></div></div>
+        <div class="form-group"><label class="form-label" for="letter-body">The letter</label><textarea class="form-input" id="letter-body" rows="10" maxlength="50000" placeholder="Write what you want your family to know. The text is encrypted in this browser before it is sent to Home Source."></textarea><div class="form-hint">Unsaved text is never placed in browser storage. Save the encrypted letter before leaving this page.</div></div>
+        <button class="btn btn-primary" id="stage-letter" type="submit">Save encrypted letter</button>
+        <span id="switch-message" class="text-sm text-dim" role="status" aria-live="polite" style="margin-left:.5rem;"></span>
+      </form>
+      <form id="commit-form" class="mt-1" hidden>
+        <div class="form-group"><label class="form-label" for="commit-passphrase">Current Home Source login passphrase</label><input class="form-input" id="commit-passphrase" type="password" autocomplete="current-password" required></div>
+        <button class="btn btn-primary" type="submit">Arm this letter</button>
+      </form>
+      <div id="switch-actions" class="btn-group mt-1"></div>
+      <div id="switch-operations" class="form-hint mt-1"></div>
+    </section>
     <section class="card"><div class="card-header"><span class="card-title">People</span></div><p class="form-hint">Adding someone here does not grant document access. Sealed designations remain unavailable until a future continuity trigger.</p><div id="directory" class="mt-1"></div></section>
     <section class="card mt-2">
       <div class="card-header"><span class="card-title">Trustees</span></div>
@@ -28,10 +50,103 @@
     </section>
     <section class="card mt-2"><div class="card-header"><span class="card-title">Designated documents</span></div><p class="form-hint">Only documents with a continuity designation appear here. Select <strong>Seal</strong> to open the local key-wrapping ceremony for another eligible beneficiary or trustee.</p><div id="matrix" class="table-wrap"></div></section>
   </main>
-  <script src="api.js"></script><script src="nav.js"></script>
+  <script src="api.js"></script><script src="pki-crypto.js"></script><script src="nav.js"></script>
   <script>
     'use strict';
     const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
+    let currentMember = null;
+    let currentSwitch = null;
+    let keyOptions = [];
+    let operations = null;
+
+    function operationKey(prefix) {
+      return `${prefix}-${crypto.randomUUID()}`;
+    }
+
+    function selectedRecipientKeys() {
+      return [...document.querySelectorAll('[name="continuity-recipient"]:checked')]
+        .map(input => keyOptions.find(key => Number(key.id) === Number(input.value))).filter(Boolean);
+    }
+
+    function renderRecipientOptions() {
+      const selected = new Set((currentSwitch?.recipients || []).map(recipient => recipient.member_id ? `m:${recipient.member_id}` : `t:${recipient.trustee_id}`));
+      const byIdentity = new Map();
+      for (const key of keyOptions) {
+        if (Number(key.member_id) === Number(currentMember?.id)) continue;
+        const identity = key.member_id ? `m:${key.member_id}` : `t:${key.trustee_id}`;
+        if (!byIdentity.has(identity)) byIdentity.set(identity, key);
+      }
+      const target = document.getElementById('switch-recipients');
+      target.innerHTML = [...byIdentity.entries()].map(([identity, key]) => `<label style="display:flex; gap:.6rem; align-items:flex-start; margin:.45rem 0;"><input type="checkbox" name="continuity-recipient" value="${Number(key.id)}" ${selected.has(identity) ? 'checked' : ''}><span><strong>${esc(key.member_name || key.trustee_name)}</strong><span class="text-xs text-dim" style="display:block;">${key.trustee_id ? 'Trustee' : 'Beneficiary'} · ${esc(key.label || 'active key')}</span></span></label>`).join('') || '<div class="text-sm text-dim">No eligible beneficiary or registered trustee keys are available yet.</div>';
+    }
+
+    function formatDate(value) {
+      return value ? new Intl.DateTimeFormat(undefined, { dateStyle:'medium', timeStyle:'short' }).format(new Date(value)) : 'Not scheduled';
+    }
+
+    function renderSwitch() {
+      const badge = document.getElementById('switch-badge');
+      const summary = document.getElementById('switch-summary');
+      const form = document.getElementById('switch-form');
+      const commit = document.getElementById('commit-form');
+      const actions = document.getElementById('switch-actions');
+      const item = currentSwitch;
+      badge.textContent = item ? String(item.tone || item.status).replace(/_/g, ' ') : 'Not set up';
+      badge.className = `badge ${item?.tone === 'healthy' ? 'badge-info' : item?.tone === 'approaching' ? 'badge-warn' : 'badge-muted'}`;
+      summary.innerHTML = item ? `<div class="text-sm"><strong>${esc(item.status.replace(/_/g, ' '))}</strong> · next check-in ${esc(formatDate(item.next_checkin_due_at))}</div><div class="text-xs text-dim">Reminder: ${esc(item.reminder_email)} · ${Number(item.interval_days)} day cadence · ${Number(item.grace_period_days)} day grace</div>${item.staged_letter_document_id ? '<div class="text-sm" style="color:var(--warn); margin-top:.4rem;">Encrypted replacement staged and waiting for confirmation.</div>' : ''}` : '<div class="text-sm text-dim">Start with a recipient, your letter, and a reminder cadence.</div>';
+      if (item) {
+        document.getElementById('reminder-email').value = item.reminder_email || '';
+        document.getElementById('interval-days').value = String(item.interval_days || 30);
+        document.getElementById('grace-days').value = String(item.grace_period_days || 14);
+      }
+      const editable = !item || ['draft', 'armed', 'paused'].includes(item.status);
+      form.hidden = !editable;
+      document.getElementById('reminder-email').disabled = item && item.status !== 'draft';
+      document.getElementById('interval-days').disabled = item && item.status !== 'draft';
+      document.getElementById('grace-days').disabled = item && item.status !== 'draft';
+      document.getElementById('stage-letter').textContent = item?.letter_document_id ? 'Stage encrypted replacement' : 'Save encrypted letter';
+      commit.hidden = !item?.staged_letter_document_id;
+      commit.querySelector('button').textContent = item?.status === 'draft' ? 'Arm this letter' : 'Commit encrypted replacement';
+      actions.innerHTML = '';
+      if (item?.status === 'armed') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="check-in">I'm here</button><button class="btn" data-switch-action="pause">Pause</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
+      if (item?.status === 'paused') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="resume">Resume</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
+      const runs = operations?.runs || [];
+      const advance = runs.find(run => run.job_type === 'state_advance');
+      const dispatch = runs.find(run => run.job_type === 'outbox_dispatch');
+      const failedCount = (operations?.outbox?.failed || 0) + (operations?.outbox?.blocked || 0);
+      document.getElementById('switch-operations').innerHTML = `Mail: ${esc(operations?.mail?.ready ? operations.mail.transport + ' ready' : 'not ready')} · schedule job: ${advance?.last_successful_at ? esc(formatDate(advance.last_successful_at)) : 'not run'} · mail job: ${dispatch?.last_successful_at ? esc(formatDate(dispatch.last_successful_at)) : 'not run'} · pending/failed: ${Number(operations?.outbox?.pending || 0)}/${Number(failedCount)}${failedCount && item ? ` · <button class="btn btn-sm" type="button" data-retry-outbox>Retry mail</button>` : ''}`;
+      renderRecipientOptions();
+    }
+
+    async function encryptLetter(text, ownerKey, recipientKeys) {
+      const bytes = new TextEncoder().encode(text);
+      const dek = await crypto.subtle.generateKey({ name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv, tagLength:128 }, dek, bytes));
+      const all = [ownerKey, ...recipientKeys];
+      const holders = [];
+      for (const key of all) {
+        const publicKey = await PKICrypto.importMemberPublicKey(PKICrypto.fromBase64(key.public_key));
+        const wrapped = await PKICrypto.wrapDekForOwner(dek, publicKey);
+        const isOwner = Number(key.member_id) === Number(currentMember.id);
+        holders.push({
+          member_id: key.member_id || undefined, trustee_id: key.trustee_id || undefined,
+          encryption_key_id: Number(key.id), key_fingerprint: key.key_fingerprint,
+          role: isOwner ? 'owner' : (key.trustee_id ? 'trustee' : 'beneficiary'),
+          ...(isOwner ? {} : { sealed:true, sealed_until:'deadman_trigger' }),
+          wrapped_dek: { kind:'pki_x25519', ephemeral_public_key_b64:PKICrypto.toBase64(wrapped.ephemeralPublicKey), hkdf_salt_b64:PKICrypto.toBase64(wrapped.salt), wrapped_dek_b64:PKICrypto.toBase64(wrapped.wrappedDek) }
+        });
+      }
+      return { payload_b64: PKICrypto.toBase64(ciphertext), encryption_metadata: { version:2, mode:'pki', policy:{ plaintext_metadata:'minimal', server_plaintext_processing:false, access_model:'any_one_holder', threshold:1 }, files:{ upload:{ cipher:'aes-256-gcm', iv_b64:PKICrypto.toBase64(iv), tag_length_bits:128, encrypted_file_meta:{ original_filename:'the-letter.txt', mime_type:'text/plain' }, holders } } } };
+    }
+
+    async function loadSwitch() {
+      [currentMember, keyOptions] = await Promise.all([API.get('api/auth/me'), API.get('api/continuity/key-options')]);
+      const state = await API.get('api/continuity/switch');
+      currentSwitch = state.switch;
+      operations = state.operations;
+      renderSwitch();
+    }
     function personCard(person) {
       const status = `${person.active_key_count} active key${person.active_key_count === 1 ? '' : 's'}`;
       const count = Number(person.designation_count || 0);
@@ -73,6 +188,94 @@
       target.textContent = message;
       target.className = `text-sm ${isError ? 'text-danger' : 'text-dim'}`;
     }
+    function setSwitchMessage(message, isError = false) {
+      const target = document.getElementById('switch-message');
+      target.textContent = message;
+      target.style.color = isError ? 'var(--danger)' : '';
+    }
+    document.getElementById('switch-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = document.getElementById('stage-letter');
+      button.disabled = true;
+      try {
+        const recipientKeys = selectedRecipientKeys();
+        if (!recipientKeys.length) throw new Error('Select at least one recipient with an active key.');
+        const ownerKey = keyOptions.find(key => Number(key.member_id) === Number(currentMember.id));
+        if (!ownerKey) throw new Error('Register an active encryption key for yourself first.');
+        const text = document.getElementById('letter-body').value.trim();
+        if (!text) throw new Error('Write the letter before saving it.');
+        setSwitchMessage('Saving switch details…');
+        const recipients = recipientKeys.map(key => key.trustee_id ? { trustee_id:Number(key.trustee_id) } : { member_id:Number(key.member_id) });
+        if (!currentSwitch || currentSwitch.status === 'draft') {
+          currentSwitch = await API.post('api/continuity/switch/draft', {
+            reminder_email:document.getElementById('reminder-email').value,
+            interval_days:Number(document.getElementById('interval-days').value),
+            grace_period_days:Number(document.getElementById('grace-days').value),
+            recipients, operation_key:operationKey('draft')
+          });
+        }
+        setSwitchMessage('Encrypting the letter in this browser…');
+        const encrypted = await encryptLetter(text, ownerKey, recipientKeys);
+        await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/letter/stage`, {
+          ...encrypted, recipients, operation_key:operationKey('letter-stage')
+        });
+        document.getElementById('letter-body').value = '';
+        setSwitchMessage('Encrypted letter saved. Confirm with your login passphrase.');
+        await loadSwitch();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('commit-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('button');
+      button.disabled = true;
+      try {
+        setSwitchMessage(currentSwitch.status === 'draft' ? 'Arming the switch…' : 'Committing the replacement…');
+        await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/letter/commit`, {
+          current_passphrase:document.getElementById('commit-passphrase').value,
+          operation_key:operationKey('letter-commit')
+        });
+        document.getElementById('commit-passphrase').value = '';
+        setSwitchMessage(currentSwitch.status === 'draft' ? 'The letter is armed.' : 'The encrypted replacement is active.');
+        await loadSwitch();
+        await load();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('switch-actions').addEventListener('click', async event => {
+      const button = event.target.closest('[data-switch-action]');
+      if (!button) return;
+      const action = button.dataset.switchAction;
+      let currentPassphrase;
+      if (action === 'pause' || action === 'cancel') {
+        currentPassphrase = window.prompt(`Enter your current Home Source login passphrase to ${action} this switch:`);
+        if (currentPassphrase === null) return;
+      }
+      if (action === 'cancel' && !window.confirm('Cancel this continuity switch? Its encrypted history remains, but reminders stop.')) return;
+      button.disabled = true;
+      try {
+        if (action === 'check-in') {
+          await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/check-in`, { operation_key:operationKey('checkin') });
+          setSwitchMessage('Check-in recorded.');
+        } else {
+          await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/${action}`, { current_passphrase:currentPassphrase, operation_key:operationKey(action) });
+          setSwitchMessage(action === 'resume' ? 'Check-ins resumed.' : action === 'pause' ? 'Check-ins paused.' : 'Switch cancelled.');
+        }
+        await loadSwitch();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('switch-operations').addEventListener('click', async event => {
+      const button = event.target.closest('[data-retry-outbox]');
+      if (!button || !currentSwitch) return;
+      button.disabled = true;
+      try {
+        const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/outbox/retry`, {});
+        setSwitchMessage(`${result.retry_count} mail item${result.retry_count === 1 ? '' : 's'} queued for retry.`);
+        await loadSwitch();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
     document.getElementById('trustee-form').addEventListener('submit', async event => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -106,7 +309,7 @@
       } catch (error) { setTrusteeStatus(error.message, true); }
       finally { button.disabled = false; }
     });
-    load();
+    Promise.all([load(), loadSwitch()]).catch(error => setSwitchMessage(error.message, true));
   </script>
 </body>
 </html>
