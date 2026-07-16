@@ -26,9 +26,18 @@ npm ci --omit=dev
 echo "==> Running migrations..."
 node db/migrate.js
 
+echo "==> Installing continuity timers..."
+sudo install -m 0644 deploy/home-source-continuity-check.service /etc/systemd/system/home-source-continuity-check.service
+sudo install -m 0644 deploy/home-source-continuity-check.timer /etc/systemd/system/home-source-continuity-check.timer
+sudo install -m 0644 deploy/home-source-continuity-outbox.service /etc/systemd/system/home-source-continuity-outbox.service
+sudo install -m 0644 deploy/home-source-continuity-outbox.timer /etc/systemd/system/home-source-continuity-outbox.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now home-source-continuity-check.timer home-source-continuity-outbox.timer
+
 echo "==> Restarting service..."
 sudo systemctl restart home-source
 
 echo "==> Done. Checking health..."
 sleep 2
 curl -sf http://localhost:3008/api/health && echo " OK" || echo " FAILED"
+sudo systemctl --no-pager status home-source-continuity-check.timer home-source-continuity-outbox.timer || true

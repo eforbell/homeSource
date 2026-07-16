@@ -1,10 +1,10 @@
 # HomeSource — Estate-Planning Treatment
 
-**Sovereign Home suite · per-app design treatment · v1 (draft) · May 2026**
+**Sovereign Home suite · per-app design treatment · v2 · July 2026**
 
-> Working document for architecture consultation. Captures the design vision for the
-> estate-planning surfaces plus the decisions that shape data model, crypto flow, and
-> delivery mechanics. Companion to the rendered version in `homesource.html`.
+> Design source of truth for the estate-continuity surfaces. Phase A shipped on
+> 2026-07-14. The May rendered mockups are retained as iteration inputs but must be
+> reconciled with this document before they are committed as current design artifacts.
 
 ---
 
@@ -47,10 +47,11 @@ everyone outside `family_members`. **We diverge for beneficiaries only.**
 - **Trustees** keep the separate `vault_trustees` table — they may be external, must hold a
   key without an account, and want the lightweight invite-and-ceremony flow.
 
-**Architecture implication:** the permission model references two identity sources
-(`family_members.id` for beneficiaries, `vault_trustees.id` for trustees). Sealed-envelope
-key-holder rows need a polymorphic holder reference (`holder_type`, `holder_id`) rather than
-a single FK. Worth settling before Phase A.
+**Shipped architecture:** the permission model references two identity sources
+(`family_members.id` for beneficiaries, `vault_trustees.id` for trustees). The relational
+`document_designations` projection uses two nullable foreign keys with a role/identity XOR
+constraint. Envelope-v2 holder entries remain additive: member holders retain `member_id`;
+trustee holders carry `trustee_id`. The envelope remains the authorization source of truth.
 
 ---
 
@@ -86,23 +87,23 @@ session.
 ## 3. Five new surfaces
 
 ### 3.1 Beneficiary directory
-Lists people who'd inherit (from `family_members`), their relationship, key status, and a
-**designated-document count** (computed from sealed key-holder rows — how many docs *would
-become* readable, not how many they can read now). Adding a beneficiary does **not** grant
-access; it makes them addressable.
+Lists household members and external trustees, their registration/key status, and a
+**designated-document count** computed from the `document_designations` projection — how many
+documents *could become* readable after a later authorized delivery, not how many they can
+read now. Adding a person does **not** grant access; it makes them addressable.
 
 ### 3.2 Permission matrix
-Operator-side, **desktop-only** (nobody makes these decisions on a phone). Documents (rows) ×
-recipients (columns). Cell states: `·` none, `✓` single-recipient, `2/3` quorum participant.
-Tap a cell to designate (creates a sealed key-holder row). Tap a quorum cell for the holder
-detail panel.
+Operator-side, desktop-optimized. Documents (rows) × recipients (columns). Phase A shows
+already-designated documents and the states none / sealed / unsealed. Eligible empty cells
+launch a local unwrap/re-wrap ceremony that adds exactly one envelope-canonical sealed holder
+and its relational projection. Quorum cells and holder detail remain Phase D.
 
 ### 3.3 Trustee registration ceremony
-"Add a trustee" → name, relationship, email, which docs they're a recipient on (default:
-instruction letter only). Generates a **one-time link, 7-day expiry**, audit-logged. The
-trustee receives **a letter, not a security email** — from the operator's name, single CTA,
-clean landing page that never reveals the vault's existence. Hardware key / passkey
-registration only.
+"Add a trustee" → name, relationship, email. Generates a **one-time link, 7-day expiry**,
+stored only as a hash and audit-logged. The trustee receives a content-free invitation from
+the operator and lands on a sessionless ceremony page. The shipped ceremony supports a
+passphrase-wrapped key, a security key, or a platform passkey; it creates no HomeSource app
+session and grants no document access. Document designation is a separate operator ceremony.
 
 ### 3.4 Dead-man switch setup — "composing the letter"
 A four-step guided ceremony, not a settings page:
@@ -224,18 +225,19 @@ I'm here · ceremony · recipient · designated · key arrived/received/waiting 
 Each phase delivers something real on its own. Ordered to surface warm, low-risk work first;
 quorum/Shamir (highest risk) lands last.
 
-### Phase A · People & permissions
-- Beneficiary directory page (reuse Pulse avatar pattern; Encryption Keys becomes a subsection)
-- Trustee table + invitation flow (one-time link, 7-day expiry, clean ceremony landing)
-- Permission matrix page (desktop-only; cells create sealed key-holder rows)
-- **Ships on its own:** households see designated counts before any switch exists.
+### Phase A · People & permissions — shipped 2026-07-14
+- Beneficiary/trustee directory with active-key and designation counts
+- Trustee table + sessionless invitation/key-registration flow
+- Designation matrix + local sealed-holder wrapping ceremony
+- Envelope-v2 backup coverage and operator runbook
 
 ### Phase B · The letter
 - Four-step setup wizard (saves draft between visits; letter created as a document at step 2)
 - Status card · three states
 - Check-in mechanism · in-app + email (single-use token)
-- Daily state-advance job (`bin/deadman-check.js`, cron 9 AM; crypto-inert)
-- **Ships on its own:** working switch with single-recipient sealed access.
+- Crash-safe daily state-advance job (`bin/deadman-check.js`; crypto-inert)
+- **Phase boundary:** owner reminders and check-ins only. At grace expiry the switch enters
+  `delivery_pending`; it does not notify trustees/beneficiaries or serve sealed material.
 
 ### Phase C · Delivery
 - Trustee notification + 30-day pause capability
@@ -256,15 +258,14 @@ quorum/Shamir (highest risk) lands last.
 
 ## 8. Open questions for consultation
 
-1. **Polymorphic holder reference** — confirm `holder_type` + `holder_id` on key-holder rows
-   vs. two nullable FKs. Affects every query touching designations.
+1. **Resolved in Phase A:** two nullable relational FKs plus additive member/trustee envelope
+   identities; see Feature #13 decisions D13-1/D13-2.
 2. **Recovery card: generated vs. static** (see Decision 7). Leaning generated-and-versioned.
-3. **Escalation customization depth** — is trustees-then-beneficiaries enough for v1, or do we
-   need per-document escalation chains? (Recommend: one chain per switch for v1.)
-4. **Letter editing after seal** — editing re-wraps to current recipient set. Confirm we want
-   silent re-wrap vs. an explicit "re-seal" confirmation step (recommend explicit).
-5. **Trustee pause authority** — should a single trustee be able to pause, or require two?
-   (Recommend single trustee can pause but not cancel; only operator cancels.)
+3. **Phase B recommendation:** one active switch and one escalation chain per operator for v1.
+4. **Phase B recommendation:** replacing an armed letter is an explicit re-seal ceremony;
+   never silently mutate recipient wraps.
+5. **Phase C recommendation:** one registered trustee may pause but not cancel; only an
+   authenticated operator cancels. This authority is not implemented in Phase B.
 
 ---
 

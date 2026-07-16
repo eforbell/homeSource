@@ -173,3 +173,23 @@
 - Added unit and API coverage for recipient parsing, header-injection rejection,
   safe unconfigured fallback, SMTP handoff, and audit logging.
 - **Phase 0 complete.** Phase A is now the next implementation lane.
+
+---
+
+## 2026-07-15 — Feature #13 Phase B implemented through automated verification
+
+- Added the continuity switch data model, calendar-safe lifecycle domain, hashed single-use
+  check-in tokens, milestone catch-up, durable outbox retries/leases, and the explicit
+  `delivery_pending` Phase C boundary.
+- Added browser-side encrypted authored-letter staging with envelope-canonical validation,
+  atomic arm/replacement, parent re-authentication, parent-only management APIs, a
+  sessionless check-in page, and dashboard/continuity UI.
+- Added repeatable-read backup coverage and file-manifest validation, scheduler/outbox CLIs,
+  persistent systemd timers, deployment wiring, readiness visibility, retry controls, and an
+  operations runbook.
+- Verification: clean database applied 15 migrations; targeted continuity suites passed 10
+  tests; full suite passed 340 tests across 93 suites; both worker CLIs completed successful
+  no-work runs; Node and inline-browser scripts parsed; `git diff --check` passed.
+- Remaining operator acceptance: real browser key ceremony, configured SMTP delivery plus
+  one-time link consumption, Linux systemd installation/verification, and real backup/restore
+  inspection. No Phase C recipient notification, unsealing, or delivery was implemented.

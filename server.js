@@ -27,8 +27,9 @@ const pki = require('./lib/pki');
 const webauthn = require('./lib/webauthn');
 const { notifyKeyEvent } = require('./lib/notifications');
 const { createKeyNotificationDispatcher } = require('./lib/key-notification-dispatcher');
-const { sendMail } = require('./lib/mailer');
+const { getMailerConfig, sendMail } = require('./lib/mailer');
 const trustees = require('./lib/trustees');
+const continuity = require('./lib/continuity');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -147,9 +148,9 @@ async function bootstrapState() {
 
 const HTML_PAGES = new Set([
   '/', '/index.html', '/documents.html', '/document.html', '/upload.html',
-  '/import.html', '/search.html', '/backup.html', '/settings.html', '/insights.html'
+  '/import.html', '/search.html', '/backup.html', '/settings.html', '/insights.html', '/continuity.html'
 ]);
-const PARENT_ONLY_PAGES = new Set(['/backup.html', '/import.html', '/insights.html']);
+const PARENT_ONLY_PAGES = new Set(['/backup.html', '/import.html', '/insights.html', '/continuity.html']);
 
 app.use(async (req, res, next) => {
   if (req.method !== 'GET') return next();
@@ -181,6 +182,11 @@ app.get('/sovereign-fonts.css', (_req, res) => {
   res.set('content-type', 'text/css; charset=utf-8');
   res.set('cache-control', 'public, max-age=300');
   res.send(buildSovereignFontsCss());
+});
+
+app.get(['/check-in', '/check-in.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'check-in.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -507,6 +513,170 @@ app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, re
     );
     res.json({ members, trustees: trusteeRows, documents });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+async function verifyContinuityPassphrase(memberId, passphrase) {
+  const { rows } = await pool.query('SELECT passphrase_hash FROM family_members WHERE id = $1', [memberId]);
+  if (!rows[0]?.passphrase_hash) throw new Error('Set a login passphrase before using the continuity switch');
+  if (!passphrase || !verifyPassphrase(String(passphrase), rows[0].passphrase_hash)) {
+    throw new Error('Current passphrase is incorrect');
+  }
+}
+
+function assertContinuityMailReady() {
+  trusteeInvitationUrl('continuity-readiness');
+  const config = getMailerConfig();
+  if (config.transport === 'disabled') throw new Error(`Outbound mail is not ready: ${config.reason}`);
+  if (['console', 'file'].includes(config.transport) && process.env.NODE_ENV !== 'test' && process.env.CONTINUITY_ALLOW_INSPECTION_MAIL !== 'yes') {
+    throw new Error('Console/file mail transport may arm continuity only in tests or explicit inspection mode');
+  }
+}
+
+app.get('/api/continuity/switch', requireAuth, requireParent, async (req, res) => {
+  try {
+    const item = await continuity.getSwitchForOwner(req.member.id);
+    res.json({ switch: item, operations: await continuity.getOperationsStatus() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/continuity/key-options', requireAuth, requireParent, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT ek.id, ek.key_type, ek.member_id, ek.trustee_id, ek.public_key, ek.key_fingerprint,
+              ek.label, m.name AS member_name, m.role AS member_role, vt.name AS trustee_name
+       FROM encryption_keys ek
+       LEFT JOIN family_members m ON m.id = ek.member_id
+       LEFT JOIN vault_trustees vt ON vt.id = ek.trustee_id
+       WHERE ek.revoked_at IS NULL
+         AND ((ek.key_type = 'member' AND (ek.member_id = $1 OR m.role = 'kid'))
+           OR (ek.key_type = 'trustee' AND vt.status = 'registered'))
+       ORDER BY CASE WHEN ek.member_id = $1 THEN 0 ELSE 1 END, COALESCE(m.name, vt.name), ek.created_at DESC`,
+      [req.member.id]
+    );
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/draft', requireAuth, requireParent, async (req, res) => {
+  try {
+    const item = await continuity.saveDraft({
+      ownerId: req.member.id,
+      reminderEmail: req.body?.reminder_email,
+      intervalDays: req.body?.interval_days,
+      gracePeriodDays: req.body?.grace_period_days,
+      recipients: req.body?.recipients,
+      operationKey: req.body?.operation_key
+    });
+    await audit.log('continuity.draft_saved', 'continuity_switch', item.id, req.member.id, {
+      recipient_count: item.recipients.length, interval_days: item.interval_days,
+      grace_period_days: item.grace_period_days
+    });
+    res.json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/letter/stage', requireAuth, requireParent, async (req, res) => {
+  try {
+    const payload = String(req.body?.payload_b64 || '');
+    if (!payload || payload.length > 200_000) return res.status(400).json({ error: 'Encrypted letter payload is missing or too large' });
+    const encryptedBytes = Buffer.from(payload, 'base64');
+    const doc = await continuity.stageLetter({
+      ownerId: req.member.id,
+      switchId: Number(req.params.id),
+      recipients: req.body?.recipients,
+      encryptionMetadata: req.body?.encryption_metadata,
+      encryptedBytes,
+      operationKey: req.body?.operation_key
+    });
+    await audit.log('continuity.letter_staged', 'continuity_switch', Number(req.params.id), req.member.id, {
+      document_id: doc.id, encrypted_size_bytes: encryptedBytes.length
+    });
+    res.status(201).json({ document_id: doc.id, status: doc.status });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/letter/commit', requireAuth, requireParent, async (req, res) => {
+  try {
+    await verifyContinuityPassphrase(req.member.id, req.body?.current_passphrase);
+    const existing = await continuity.getSwitchForOwner(req.member.id);
+    if (!existing || Number(existing.id) !== Number(req.params.id)) return res.status(404).json({ error: 'Continuity switch not found' });
+    if (existing.status === 'draft') assertContinuityMailReady();
+    const item = await continuity.commitStagedLetter({
+      ownerId: req.member.id, switchId: Number(req.params.id), operationKey: req.body?.operation_key
+    });
+    await audit.log(existing.status === 'draft' ? 'continuity.armed' : 'continuity.letter_replaced',
+      'continuity_switch', item.id, req.member.id, { document_id: item.letter_document_id });
+    res.json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/check-in', requireAuth, requireParent, async (req, res) => {
+  try {
+    const item = await continuity.checkIn({
+      switchId: Number(req.params.id), ownerId: req.member.id,
+      operationKey: req.body?.operation_key
+    });
+    await audit.log('continuity.checked_in', 'continuity_switch', item.id, req.member.id, { channel: 'app' });
+    res.json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/outbox/retry', requireAuth, requireParent, async (req, res) => {
+  try {
+    const count = await continuity.retryOutboxForOwner({ ownerId: req.member.id, switchId: Number(req.params.id) });
+    await audit.log('continuity.outbox_retry_requested', 'continuity_switch', Number(req.params.id), req.member.id, { row_count: count });
+    res.json({ ok: true, retry_count: count });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/:action', requireAuth, requireParent, async (req, res) => {
+  try {
+    const action = String(req.params.action);
+    if (!['pause', 'resume', 'cancel'].includes(action)) return res.status(404).json({ error: 'Unknown continuity action' });
+    if (action !== 'resume') await verifyContinuityPassphrase(req.member.id, req.body?.current_passphrase);
+    const item = await continuity.transitionOwnerAction({
+      switchId: Number(req.params.id), ownerId: req.member.id, action,
+      operationKey: req.body?.operation_key
+    });
+    const auditAction = { pause: 'continuity.paused', resume: 'continuity.resumed', cancel: 'continuity.cancelled' }[action];
+    await audit.log(auditAction, 'continuity_switch', item.id, req.member.id);
+    res.json(item);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+const checkinFailures = new Map();
+function allowCheckinAttempt(req) {
+  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
+  const now = Date.now();
+  const recent = (checkinFailures.get(key) || []).filter((value) => now - value < 15 * 60_000);
+  checkinFailures.set(key, recent);
+  return recent.length < 20;
+}
+function recordCheckinFailure(req) {
+  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
+  checkinFailures.set(key, [...(checkinFailures.get(key) || []), Date.now()].slice(-20));
+}
+
+app.post('/api/continuity/check-in/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowCheckinAttempt(req)) return res.status(429).json({ error: 'This check-in is not available' });
+    const item = await continuity.getTokenSwitch(req.body?.token);
+    if (!item) { recordCheckinFailure(req); return res.status(404).json({ error: 'This check-in is not available' }); }
+    res.json({ valid: true, expires_at: item.expires_at });
+  } catch (_err) { recordCheckinFailure(req); res.status(404).json({ error: 'This check-in is not available' }); }
+});
+
+app.post('/api/continuity/check-in', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowCheckinAttempt(req)) return res.status(429).json({ error: 'This check-in is not available' });
+    const tokenItem = await continuity.getTokenSwitch(req.body?.token);
+    if (!tokenItem) { recordCheckinFailure(req); return res.status(404).json({ error: 'This check-in is not available' }); }
+    await continuity.checkIn({ switchId: tokenItem.switch_id, rawToken: req.body.token });
+    await audit.log('continuity.checked_in', 'continuity_switch', tokenItem.switch_id, null, { channel: 'email' });
+    res.json({ ok: true });
+  } catch (_err) { recordCheckinFailure(req); res.status(404).json({ error: 'This check-in is not available' }); }
 });
 
 app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {
@@ -2345,6 +2515,7 @@ app.get('/api/stats', requireAuth, async (req, res) => {
     ];
     if (req.member?.role === 'parent') tasks.push(insights.getInsightSummary());
     const [docs, types, recent, expiring, backup, insightSummary = null] = await Promise.all(tasks);
+    const continuitySwitch = req.member?.role === 'parent' ? await continuity.getSwitchForOwner(req.member.id) : null;
 
     res.json({
       total_documents: docs.rows[0].total,
@@ -2352,7 +2523,8 @@ app.get('/api/stats', requireAuth, async (req, res) => {
       recent: recent.rows,
       expiring_soon: expiring.rows,
       backup,
-      insights: insightSummary
+      insights: insightSummary,
+      continuity: continuitySwitch
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
