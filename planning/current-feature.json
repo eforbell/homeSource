@@ -1,8 +1,8 @@
 {
-  "currentFeature": "Feature #13: Continuity & Inheritance — Phase B (The Letter)",
-  "status": "phase_b_implemented_pending_operator_acceptance",
-  "branch": "feat/continuity-seal-entrypoint",
-  "prdPath": "planning/features/feature-13-phase-b-the-letter.md",
+  "currentFeature": "Feature #13: Continuity & Inheritance — Phase C (Conditional Delivery)",
+  "status": "phase_b_operator_acceptance_in_progress_phase_c_prd_draft",
+  "branch": "planning/feature-13-phase-c-delivery",
+  "prdPath": "planning/features/feature-13-phase-c-conditional-delivery.md",
   "completedFeatures": [
     "Feature #1: Foundation (Schema + Auth + Document CRUD + File Upload + Search + Backup + Sharing)",
     "Feature #2: MVP Hardening (iOS/WKWebView fixes, scanner overhaul, mobile polish, tag editor)",

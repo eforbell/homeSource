@@ -26,7 +26,7 @@ Feature-driven development tracking for Home Source, the sovereign family docume
 | 10 | MCP Server | future |
 | 11 | PKI vaulted document access (single-holder, 1-of-M, lifecycle hardening H1-H4.2) | shipped foundation; threshold/estate phases moved to #13 |
 | 12 | PKI Key Posture and Readiness | shipped (Slice 4 deferred) |
-| 13 | Continuity & Inheritance (Use Case 2: trustees, sealed designations, check-in switch, quorum — Phases A-E) | Phase A shipped; Phase B implemented through automated verification, operator acceptance pending — see features/feature-13-phase-b-the-letter.md |
+| 13 | Continuity & Inheritance (Use Case 2: trustees, sealed designations, check-in switch, conditional delivery, quorum — Phases A-E) | Phase A/B shipped; Phase B operator acceptance in progress; Phase C initial PRD drafted — see features/feature-13-phase-c-conditional-delivery.md |
 
 ## Open bugBase Tickets
 
