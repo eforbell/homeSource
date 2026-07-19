@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1 automated gate satisfied
+Status: Active; C0.1, C0.2a, and C0.2b reminder fanout automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -51,6 +51,12 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 - Operator transport tests cannot satisfy reachability acknowledgement.
 - Acknowledgements are owner/switch/channel/config-version bound and cannot check in or arm on
   their own.
+- Each reminder milestone creates independently claimable email and enabled-brrr attempts;
+  one channel's blocked or failed result cannot suppress the other.
+- Brrr outbox rows contain no reusable target, raw token, recipient data, schedule date, or
+  switch state, and outbound payloads remain generic and token-free.
+- Repeated scheduling deduplicates attempts, configuration changes supersede queued brrr work,
+  and owner retry resets failed channels independently.
 - Packet activation is all-or-nothing and permanently binds delivery runs to one version.
 - The complete route matrix denies non-owner continuity administration and prevents sealed-wrap
   leakage through generic parent routes.

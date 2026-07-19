@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1 and C0.2a implemented through automated verification; C0.2b next
+Status: C0.1, C0.2a, and the C0.2b reminder fanout implemented through automated verification; trustee contact replacement next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -43,11 +43,19 @@ green.
 - Provide operator UI for save/test/challenge/acknowledge while ensuring codes cannot check in,
   arm, or grant access.
 
-#### C0.2b — next
+#### C0.2b reminder fanout — implemented
 
-- Add trustee contact replacement verification.
 - Generalize Phase B reminder attempts so email and enabled `brrr` deliver independently with
   durable dedupe, retry, and safe result state.
+- Resolve the reusable write-only brrr target only while claiming an attempt; persist only its
+  channel reference, configuration version, and fingerprint in the sibling outbox.
+- Keep brrr payloads generic and token-free, and supersede queued attempts when either switch
+  state or channel configuration changes.
+- Include per-channel operations state and secret-free outbox history in app backups.
+
+#### C0.2b trustee contact replacement — next
+
+- Add trustee contact replacement verification.
 - Make current reachability acknowledgements part of the later complete Phase C arming
   transaction alongside packet/readiness activation; do not add a partial UI-only gate.
 
