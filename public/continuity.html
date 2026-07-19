@@ -23,6 +23,8 @@
           <div class="form-group"><label class="form-label" for="grace-days">Grace period</label><input class="form-input" id="grace-days" type="number" min="7" value="14" required></div>
         </div>
         <div class="form-group"><label class="form-label">Sealed recipients</label><div id="switch-recipients" class="card" style="padding:.75rem;"></div></div>
+        <div class="form-group"><label class="form-label">Additional packet documents</label><div id="packet-documents" class="card" style="padding:.75rem;"></div><div class="form-hint">The encrypted Letter is always included. Additional documents are delivered only to recipients who already have a matching sealed holder.</div></div>
+        <div class="form-group"><label class="form-label">Witness trustees <span class="text-dim">(optional)</span></label><div id="packet-witnesses" class="card" style="padding:.75rem;"></div><div class="form-hint">Witnesses receive the future pause notice but are not packet recipients unless separately selected above.</div></div>
         <div class="form-group"><label class="form-label" for="letter-body">The letter</label><textarea class="form-input" id="letter-body" rows="10" maxlength="50000" placeholder="Write what you want your family to know. The text is encrypted in this browser before it is sent to Home Source."></textarea><div class="form-hint">Unsaved text is never placed in browser storage. Save the encrypted letter before leaving this page.</div></div>
         <button class="btn btn-primary" id="stage-letter" type="submit">Save encrypted letter</button>
         <span id="switch-message" class="text-sm text-dim" role="status" aria-live="polite" style="margin-left:.5rem;"></span>
@@ -72,6 +74,8 @@
     let keyOptions = [];
     let operations = null;
     let reachability = null;
+    let directoryData = null;
+    let packetState = null;
 
     function operationKey(prefix) {
       return `${prefix}-${crypto.randomUUID()}`;
@@ -92,6 +96,16 @@
       }
       const target = document.getElementById('switch-recipients');
       target.innerHTML = [...byIdentity.entries()].map(([identity, key]) => `<label style="display:flex; gap:.6rem; align-items:flex-start; margin:.45rem 0;"><input type="checkbox" name="continuity-recipient" value="${Number(key.id)}" ${selected.has(identity) ? 'checked' : ''}><span><strong>${esc(key.member_name || key.trustee_name)}</strong><span class="text-xs text-dim" style="display:block;">${key.trustee_id ? 'Trustee' : 'Beneficiary'} · ${esc(key.label || 'active key')}</span></span></label>`).join('') || '<div class="text-sm text-dim">No eligible beneficiary or registered trustee keys are available yet.</div>';
+    }
+
+    function renderPacketOptions() {
+      const packet = packetState?.staged || packetState?.active;
+      const selectedDocuments = new Set((packet?.documents || []).filter(row => row.item_kind === 'selected').map(row => Number(row.document_id)));
+      const witnesses = new Set((packetState?.witnesses || []).map(row => Number(row.id)));
+      const documents = (directoryData?.documents || []).filter(row => Number(row.id) !== Number(currentSwitch?.letter_document_id));
+      document.getElementById('packet-documents').innerHTML = documents.map(row => `<label style="display:flex; gap:.6rem; margin:.4rem 0;"><input type="checkbox" name="packet-document" value="${Number(row.id)}" ${selectedDocuments.has(Number(row.id)) ? 'checked' : ''}><span>${esc(row.title)}</span></label>`).join('') || '<span class="text-sm text-dim">No additional sealed documents are available.</span>';
+      const eligibleWitnesses = (directoryData?.trustees || []).filter(row => row.status === 'registered' && row.verified_contact_id);
+      document.getElementById('packet-witnesses').innerHTML = eligibleWitnesses.map(row => `<label style="display:flex; gap:.6rem; margin:.4rem 0;"><input type="checkbox" name="packet-witness" value="${Number(row.id)}" ${witnesses.has(Number(row.id)) ? 'checked' : ''}><span>${esc(row.name)}</span></label>`).join('') || '<span class="text-sm text-dim">No verified witness trustee is available; a witness is optional.</span>';
     }
 
     function formatDate(value) {
@@ -119,7 +133,7 @@
       document.getElementById('interval-days').disabled = item && item.status !== 'draft';
       document.getElementById('grace-days').disabled = item && item.status !== 'draft';
       document.getElementById('stage-letter').textContent = item?.letter_document_id ? 'Stage encrypted replacement' : 'Save encrypted letter';
-      commit.hidden = !item?.staged_letter_document_id;
+      commit.hidden = !item?.staged_letter_document_id || !item?.staged_packet_version_id;
       commit.querySelector('button').textContent = item?.status === 'draft' ? 'Arm this letter' : 'Commit encrypted replacement';
       actions.innerHTML = '';
       if (item?.status === 'armed') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="check-in">I'm here</button><button class="btn" data-switch-action="pause">Pause</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
@@ -133,6 +147,7 @@
       const channelSummary = `email ${Number(emailAttempts.pending || 0)}/${Number(emailAttempts.failed || 0) + Number(emailAttempts.blocked || 0)}, brrr ${Number(brrrAttempts.pending || 0)}/${Number(brrrAttempts.failed || 0) + Number(brrrAttempts.blocked || 0)}`;
       document.getElementById('switch-operations').innerHTML = `Mail: ${esc(operations?.mail?.ready ? operations.mail.transport + ' ready' : 'not ready')} · schedule job: ${advance?.last_successful_at ? esc(formatDate(advance.last_successful_at)) : 'not run'} · notification job: ${dispatch?.last_successful_at ? esc(formatDate(dispatch.last_successful_at)) : 'not run'} · pending/failed: ${esc(channelSummary)}${failedCount && item ? ` · <button class="btn btn-sm" type="button" data-retry-outbox>Retry notifications</button>` : ''}`;
       renderRecipientOptions();
+      renderPacketOptions();
     }
 
     async function encryptLetter(text, ownerKey, recipientKeys) {
@@ -162,6 +177,7 @@
       const state = await API.get('api/continuity/switch');
       currentSwitch = state.switch;
       operations = state.operations;
+      packetState = currentSwitch ? await API.get(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/packet`) : null;
       renderSwitch();
       await loadReadiness();
     }
@@ -174,7 +190,7 @@
     }
     function renderReadiness() {
       const card = document.getElementById('reachability-card');
-      card.hidden = !currentSwitch || currentSwitch.status !== 'draft';
+      card.hidden = !currentSwitch || !['draft', 'armed', 'paused'].includes(currentSwitch.status);
       if (card.hidden || !reachability) return;
       const badge = document.getElementById('reachability-badge');
       badge.textContent = reachability.ready_to_arm ? 'Reachable' : 'Not ready';
@@ -188,7 +204,7 @@
       document.getElementById('brrr-clear').disabled = !brrrChannel.has_secret;
     }
     async function loadReadiness() {
-      if (!currentSwitch || currentSwitch.status !== 'draft') { reachability = null; renderReadiness(); return; }
+      if (!currentSwitch || !['draft', 'armed', 'paused'].includes(currentSwitch.status)) { reachability = null; renderReadiness(); return; }
       reachability = await API.get(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness`);
       renderReadiness();
     }
@@ -200,7 +216,7 @@
         const contactStatus = person.contact_status
           ? `${esc(person.contact_status)} · ${esc(person.contact_address)}`
           : 'No verified continuity contact';
-        const controls = currentSwitch?.status === 'draft'
+        const controls = ['draft', 'armed', 'paused'].includes(currentSwitch?.status)
           ? `<form data-member-contact-form="${Number(person.id)}" style="display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem;"><input class="form-input" name="email" type="email" autocomplete="email" value="${esc(person.contact_address || '')}" placeholder="Recipient-controlled email" required style="flex:1; min-width:13rem;"><button class="btn btn-sm" type="submit">${person.contact_status ? 'Change and verify' : 'Send verification'}</button>${person.contact_status === 'pending' ? `<button class="btn btn-sm" type="button" data-contact-resend="${Number(person.contact_id)}">Resend</button>` : ''}${person.contact_id ? `<button class="btn btn-sm btn-danger" type="button" data-contact-revoke="${Number(person.contact_id)}">Remove</button>` : ''}</form>`
           : '';
         contact = `<div class="text-xs text-dim" style="margin-top:.35rem;">Contact: ${contactStatus}</div>${controls}`;
@@ -233,12 +249,14 @@
     async function load() {
       try {
         const data = await API.get('api/continuity/directory');
+        directoryData = data;
         const people = [...data.members.map(p => ({ ...p, kind: 'member' })), ...data.trustees.map(p => ({ ...p, kind: 'trustee' }))];
         document.getElementById('directory').innerHTML = data.members.map(personCard).join('');
         document.getElementById('trustees').innerHTML = data.trustees.map(trusteeCard).join('') || '<div class="text-dim text-sm">No trustees invited yet.</div>';
         document.getElementById('matrix').innerHTML = data.documents.length
           ? `<table><thead><tr><th>Document</th>${people.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${data.documents.map(d => `<tr><td><a href="document.html?id=${encodeURIComponent(d.id)}">${esc(d.title)}</a></td>${people.map(p => `<td>${matrixCell(d, p, p.kind)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
           : '<div class="empty-state" style="padding:1rem 0;"><div class="empty-state-title">No continuity designations yet</div><p class="text-dim">When a document is designated, it will appear here.</p></div>';
+        renderPacketOptions();
       } catch (error) { document.getElementById('directory').textContent = error.message; }
     }
     function setTrusteeStatus(message, isError = false) {
@@ -280,8 +298,13 @@
         await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/letter/stage`, {
           ...encrypted, recipients, operation_key:operationKey('letter-stage')
         });
+        await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/packet/stage`, {
+          selected_document_ids:[...document.querySelectorAll('[name="packet-document"]:checked')].map(input => Number(input.value)),
+          witness_trustee_ids:[...document.querySelectorAll('[name="packet-witness"]:checked')].map(input => Number(input.value)),
+          operation_key:operationKey('packet-stage')
+        });
         document.getElementById('letter-body').value = '';
-        setSwitchMessage('Encrypted letter saved. Confirm with your login passphrase.');
+        setSwitchMessage('Encrypted packet staged. Confirm with your login passphrase after readiness is complete.');
         await loadSwitch();
       } catch (error) { setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }

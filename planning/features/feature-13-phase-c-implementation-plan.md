@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1 and C0.2 implemented through automated verification; C0.3 immutable packet policy next
+Status: C0.1–C0.3 implemented through automated verification; C0.4 authorization boundary next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -62,14 +62,23 @@ green.
   collisions/cross-owner changes, and invalidate pending proof when a trustee is revoked.
 - Include contact history and hashed proof state in repeatable-read app backups.
 
-### C0.3 Immutable packet policy
+### C0.3 Immutable packet policy — implemented
 
-- Add staged/active/superseded packet versions, document scope, recipient roster, coverage
-  matrix, and independent switch-trustee witness designations.
-- Migrate only unarmed drafts under the controlled-rollout rule.
-- Activate a complete version through one owner-reauthenticated transaction.
-- Make current operator reachability acknowledgements part of that same packet/readiness
-  activation transaction; do not add a partial UI-only arming gate.
+- Add database-protected staged/active/superseded packet versions, explicit document scope,
+  recipient roster, exact holder/designation coverage evidence, and independent switch-level
+  witness trustees.
+- Reject migration when any armed, paused, or delivery-pending legacy switch exists under the
+  controlled-rollout contract.
+- Derive deterministic per-recipient coverage from version 2 PKI envelopes and sealed
+  designation projections; the Letter must cover every recipient and each additional selected
+  document must cover at least one.
+- Replace packet policy by creating a new version while preserving superseded rows and their
+  encrypted Letter artifact; staging a newer Letter invalidates the prior staged packet.
+- Activate the staged Letter and packet together through the reauthenticated commit only when
+  current operator reachability, verified recipient contacts, active exact keys/wraps, and
+  verified witness contacts all revalidate in the same transaction.
+- Surface packet/document/witness selection and staged/active inspection through owner-only
+  APIs and the continuity operator UI, without creating notification or grant behavior.
 
 ### C0.4 Continuity-aware authorization boundary
 

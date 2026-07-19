@@ -33,6 +33,7 @@ const continuity = require('./lib/continuity');
 const continuityContacts = require('./lib/continuity-contacts');
 const continuityReadiness = require('./lib/continuity-readiness');
 const trusteeContacts = require('./lib/trustee-contacts');
+const continuityPackets = require('./lib/continuity-packets');
 const brrr = require('./lib/brrr');
 
 const app = express();
@@ -921,6 +922,31 @@ app.post('/api/continuity/switch/:id/letter/stage', requireAuth, requireParent, 
       document_id: doc.id, encrypted_size_bytes: encryptedBytes.length
     });
     res.status(201).json({ document_id: doc.id, status: doc.status });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.get('/api/continuity/switch/:id/packet', requireAuth, requireParent, async (req, res) => {
+  try {
+    const packet = await continuityPackets.getPacketForOwner({ ownerId: req.member.id, switchId: req.params.id });
+    if (!packet) return res.status(404).json({ error: 'Continuity switch not found' });
+    res.json(packet);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/packet/stage', requireAuth, requireParent, async (req, res) => {
+  try {
+    const packet = await continuityPackets.stagePacket({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      selectedDocumentIds: req.body?.selected_document_ids || [],
+      witnessTrusteeIds: req.body?.witness_trustee_ids || [],
+      operationKey: req.body?.operation_key
+    });
+    await audit.log('continuity.packet_staged', 'continuity_packet_version', packet.id, req.member.id, {
+      switch_id: Number(req.params.id), version_number: Number(packet.version_number),
+      document_count: packet.documents.length, recipient_count: packet.recipients.length
+    });
+    res.status(201).json(packet);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 

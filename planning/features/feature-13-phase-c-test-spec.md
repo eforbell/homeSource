@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1 and C0.2 automated gates satisfied
+Status: Active; C0.1–C0.3 automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -62,6 +62,13 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
   switch state, and outbound payloads remain generic and token-free.
 - Repeated scheduling deduplicates attempts, configuration changes supersede queued brrr work,
   and owner retry resets failed channels independently.
+- Packet staging creates immutable versioned roster, scope, and full recipient/document matrix
+  rows; replacement supersedes rather than edits history, and a newer Letter invalidates a
+  packet bound to the prior staged artifact.
+- Packet activation fails without current operator reachability, one verified contact per
+  recipient, current exact holder/key/designation evidence, and reachable witness trustees.
+- The owner-reauthenticated commit activates the Letter and packet pointers atomically; it
+  creates no recipient notification, grant, token, session, or unseal behavior.
 - Packet activation is all-or-nothing and permanently binds delivery runs to one version.
 - The complete route matrix denies non-owner continuity administration and prevents sealed-wrap
   leakage through generic parent routes.
