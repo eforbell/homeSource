@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1 implemented through automated verification; C0.2 next
+Status: C0.1 and C0.2a implemented through automated verification; C0.2b next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -32,11 +32,24 @@ green.
 
 ### C0.2 Trustee contacts and operator reachability
 
-- Add reusable trustee contact rows; seed a verified row from successful trustee registration.
-- Add operator notification-channel configuration with write-only `brrr` targets.
-- Separate transport tests from owner reachability challenges and configuration-version them.
-- Require current acknowledgements for baseline email and each enabled optional channel
-  before later arming logic can succeed.
+#### C0.2a — implemented
+
+- Add reusable trustee contact rows and seed a verified row from successful trustee
+  registration.
+- Add operator notification-channel configuration with write-only, masked, versioned `brrr`
+  targets and secret-redacted app backups.
+- Separate transport tests from owner reachability challenges and bind hashed challenge
+  evidence to switch, owner, channel, target fingerprint, and configuration version.
+- Provide operator UI for save/test/challenge/acknowledge while ensuring codes cannot check in,
+  arm, or grant access.
+
+#### C0.2b — next
+
+- Add trustee contact replacement verification.
+- Generalize Phase B reminder attempts so email and enabled `brrr` deliver independently with
+  durable dedupe, retry, and safe result state.
+- Make current reachability acknowledgements part of the later complete Phase C arming
+  transaction alongside packet/readiness activation; do not add a partial UI-only gate.
 
 ### C0.3 Immutable packet policy
 

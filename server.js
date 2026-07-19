@@ -31,6 +31,8 @@ const { getMailerConfig, sendMail } = require('./lib/mailer');
 const trustees = require('./lib/trustees');
 const continuity = require('./lib/continuity');
 const continuityContacts = require('./lib/continuity-contacts');
+const continuityReadiness = require('./lib/continuity-readiness');
+const brrr = require('./lib/brrr');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -654,6 +656,153 @@ app.delete('/api/continuity/switch/:id/contacts/:contactId', requireAuth, requir
   } catch (err) {
     res.status(err.statusCode || 400).json({ error: err.message });
   }
+});
+
+app.put('/api/continuity/notification-channels/brrr', requireAuth, requireParent, async (req, res) => {
+  try {
+    const channel = await continuityReadiness.saveBrrrChannel({
+      ownerId: req.member.id,
+      secret: req.body?.secret,
+      enabled: req.body?.enabled,
+      label: req.body?.label
+    });
+    await audit.log('continuity.brrr_configured', 'member_notification_channel', channel.id, req.member.id, {
+      enabled: channel.enabled, has_secret: channel.has_secret,
+      target_mask: channel.secret_mask, config_version: channel.config_version
+    });
+    res.json(channel);
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.delete('/api/continuity/notification-channels/brrr', requireAuth, requireParent, async (req, res) => {
+  try {
+    const removed = await continuityReadiness.clearBrrrChannel({ ownerId: req.member.id });
+    await audit.log('continuity.brrr_cleared', 'family_member', req.member.id, req.member.id);
+    res.json({ ok: true, removed });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+function continuityOpenUrl() {
+  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
+  if (!configuredBaseUrl) return null;
+  try {
+    const result = new URL('/continuity.html', configuredBaseUrl);
+    return ['http:', 'https:'].includes(result.protocol) ? result.toString() : null;
+  } catch { return null; }
+}
+
+app.post('/api/continuity/notification-channels/brrr/test', requireAuth, requireParent, async (req, res) => {
+  try {
+    const channel = await continuityReadiness.getBrrrChannel(req.member.id);
+    if (!channel?.enabled || !channel.target_secret) return res.status(400).json({ error: 'Enable and save a brrr target first' });
+    const payload = {
+      title: 'Home Source',
+      message: 'A private Home Source check-in needs your attention.'
+    };
+    const openUrl = continuityOpenUrl();
+    if (openUrl) payload.open_url = openUrl;
+    try {
+      const response = await brrr.sendBrrrNotification(channel.target_secret, payload);
+      const safe = await continuityReadiness.recordBrrrTransport({ ownerId: req.member.id, accepted: true });
+      await audit.log('continuity.brrr_transport_tested', 'member_notification_channel', channel.id, req.member.id, {
+        accepted: true, response_status: response.status || null, config_version: safe.config_version
+      });
+      res.json({ ok: true, channel: safe });
+    } catch (error) {
+      const errorClass = continuityReadiness.safeErrorClass(error);
+      await continuityReadiness.recordBrrrTransport({ ownerId: req.member.id, accepted: false, errorClass });
+      await audit.log('continuity.brrr_transport_tested', 'member_notification_channel', channel.id, req.member.id, {
+        accepted: false, error_class: errorClass
+      });
+      res.status(502).json({ error: 'brrr test delivery failed' });
+    }
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.get('/api/continuity/switch/:id/readiness', requireAuth, requireParent, async (req, res) => {
+  try {
+    res.json(await continuityReadiness.getReadiness({ ownerId: req.member.id, switchId: req.params.id }));
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/readiness/:channel/challenge', requireAuth, requireParent, async (req, res) => {
+  let created;
+  try {
+    created = await continuityReadiness.createReachabilityChallenge({
+      ownerId: req.member.id, switchId: req.params.id, channelType: req.params.channel
+    });
+    let delivered = false;
+    if (created.config.channel_type === 'email') {
+      const delivery = await sendMail({
+        to: created.config.target,
+        subject: 'Home Source reachability confirmation',
+        text: `Home Source reachability code: ${created.code}\n\nEnter this code while signed in to Home Source. This code cannot check you in, arm continuity, or grant document access.`
+      });
+      delivered = delivery.delivered === true;
+    } else {
+      const payload = {
+        title: 'Home Source',
+        message: `Home Source reachability code: ${created.code}`
+      };
+      const openUrl = continuityOpenUrl();
+      if (openUrl) payload.open_url = openUrl;
+      await brrr.sendBrrrNotification(created.config.target, payload);
+      delivered = true;
+    }
+    await continuityReadiness.recordChallengeTransport({
+      attestationId: created.attestation.id,
+      accepted: delivered,
+      errorClass: delivered ? null : 'transport_not_accepted'
+    });
+    if (created.config.channel_type === 'brrr') {
+      await continuityReadiness.recordBrrrTransport({
+        ownerId: req.member.id, accepted: delivered,
+        errorClass: delivered ? null : 'transport_not_accepted'
+      });
+    }
+    await audit.log('continuity.reachability_challenge_sent', 'continuity_switch', Number(req.params.id), req.member.id, {
+      channel_type: created.config.channel_type,
+      configuration_version: created.config.configuration_version,
+      target_mask: created.config.target_mask,
+      expires_at: created.attestation.expires_at,
+      transport_accepted: delivered
+    });
+    res.status(201).json({
+      challenge: {
+        channel_type: created.config.channel_type,
+        target_mask: created.config.target_mask,
+        expires_at: created.attestation.expires_at,
+        delivered
+      }
+    });
+  } catch (err) {
+    if (created?.attestation?.id) {
+      const errorClass = continuityReadiness.safeErrorClass(err);
+      await continuityReadiness.recordChallengeTransport({
+        attestationId: created.attestation.id, accepted: false, errorClass
+      }).catch(() => {});
+      if (created.config?.channel_type === 'brrr') {
+        await continuityReadiness.recordBrrrTransport({
+          ownerId: req.member.id, accepted: false, errorClass
+        }).catch(() => {});
+      }
+      return res.status(502).json({ error: 'Reachability challenge delivery failed' });
+    }
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/switch/:id/readiness/:channel/acknowledge', requireAuth, requireParent, async (req, res) => {
+  try {
+    const readiness = await continuityReadiness.acknowledgeReachability({
+      ownerId: req.member.id, switchId: req.params.id,
+      channelType: req.params.channel, code: req.body?.code
+    });
+    await audit.log('continuity.reachability_acknowledged', 'continuity_switch', Number(req.params.id), req.member.id, {
+      channel_type: req.params.channel
+    });
+    res.json(readiness);
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
 });
 
 async function verifyContinuityPassphrase(memberId, passphrase) {

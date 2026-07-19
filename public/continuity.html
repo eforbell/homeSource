@@ -33,6 +33,19 @@
       </form>
       <div id="switch-actions" class="btn-group mt-1"></div>
       <div id="switch-operations" class="form-hint mt-1"></div>
+      <section id="reachability-card" class="card mt-1" style="padding:.75rem;" hidden>
+        <div class="card-header"><span class="card-title">Phase C reachability preparation</span><span id="reachability-badge" class="badge badge-muted">Not ready</span></div>
+        <p class="form-hint">Transport tests and receipt acknowledgements are separate. These codes cannot check you in, arm the switch, or grant document access.</p>
+        <div id="reachability-channels"></div>
+        <form id="brrr-form" class="mt-1">
+          <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
+            <div class="form-group" style="flex:1; min-width:13rem;"><label class="form-label" for="brrr-secret">Optional brrr target</label><input id="brrr-secret" class="form-input" type="password" autocomplete="off" placeholder="Paste a secret or api.brrr.now URL"></div>
+            <div class="form-group" style="flex:1; min-width:10rem;"><label class="form-label" for="brrr-label">Label</label><input id="brrr-label" class="form-input" maxlength="80" autocomplete="off" placeholder="My phone"></div>
+            <label style="display:flex; gap:.4rem; align-items:center; margin-bottom:1rem;"><input id="brrr-enabled" type="checkbox"> Enabled</label>
+            <button class="btn btn-sm" type="submit">Save brrr</button><button id="brrr-test" class="btn btn-sm" type="button">Test</button><button id="brrr-clear" class="btn btn-sm btn-danger" type="button">Clear</button>
+          </div>
+        </form>
+      </section>
     </section>
     <section class="card"><div class="card-header"><span class="card-title">People</span></div><p class="form-hint">Adding someone here does not grant document access. Sealed designations remain unavailable until a future continuity trigger.</p><div id="directory" class="mt-1"></div></section>
     <section class="card mt-2">
@@ -58,6 +71,7 @@
     let currentSwitch = null;
     let keyOptions = [];
     let operations = null;
+    let reachability = null;
 
     function operationKey(prefix) {
       return `${prefix}-${crypto.randomUUID()}`;
@@ -146,6 +160,34 @@
       currentSwitch = state.switch;
       operations = state.operations;
       renderSwitch();
+      await loadReadiness();
+    }
+    function channelReadinessCard(channel) {
+      const acknowledged = channel.reachability_acknowledged;
+      const tested = channel.transport_tested;
+      const label = channel.channel_type === 'email' ? 'Email' : 'brrr';
+      const canChallenge = channel.channel_type === 'email' ? channel.transport_configured : channel.enabled;
+      return `<div class="card" style="padding:.65rem; margin:.5rem 0;"><strong>${label}</strong> <span class="text-xs text-dim">${esc(channel.target_mask || 'not configured')}</span><div class="text-xs text-dim">Transport: ${tested ? 'accepted' : 'not accepted'} · receipt: ${acknowledged ? 'acknowledged' : 'not acknowledged'}</div>${canChallenge && !acknowledged ? `<div style="display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.5rem;"><button class="btn btn-sm" type="button" data-reachability-challenge="${channel.channel_type}">Send code</button><input class="form-input" data-reachability-code="${channel.channel_type}" autocomplete="one-time-code" placeholder="Code received" style="max-width:12rem;"><button class="btn btn-sm" type="button" data-reachability-ack="${channel.channel_type}">Acknowledge</button></div>` : ''}</div>`;
+    }
+    function renderReadiness() {
+      const card = document.getElementById('reachability-card');
+      card.hidden = !currentSwitch || currentSwitch.status !== 'draft';
+      if (card.hidden || !reachability) return;
+      const badge = document.getElementById('reachability-badge');
+      badge.textContent = reachability.ready_to_arm ? 'Reachable' : 'Not ready';
+      badge.className = `badge ${reachability.ready_to_arm ? 'badge-info' : 'badge-warn'}`;
+      document.getElementById('reachability-channels').innerHTML = channelReadinessCard(reachability.channels.email) + channelReadinessCard(reachability.channels.brrr);
+      const brrrChannel = reachability.channels.brrr;
+      document.getElementById('brrr-label').value = brrrChannel.label || '';
+      document.getElementById('brrr-enabled').checked = brrrChannel.enabled === true;
+      document.getElementById('brrr-secret').placeholder = brrrChannel.has_secret ? `Saved ${brrrChannel.secret_mask}; leave blank to keep` : 'Paste a secret or api.brrr.now URL';
+      document.getElementById('brrr-test').disabled = !brrrChannel.enabled;
+      document.getElementById('brrr-clear').disabled = !brrrChannel.has_secret;
+    }
+    async function loadReadiness() {
+      if (!currentSwitch || currentSwitch.status !== 'draft') { reachability = null; renderReadiness(); return; }
+      reachability = await API.get(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness`);
+      renderReadiness();
     }
     function personCard(person) {
       const status = `${person.active_key_count} active key${person.active_key_count === 1 ? '' : 's'}`;
@@ -355,6 +397,56 @@
         } else { return; }
         await load();
       } catch (error) { setContactStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('brrr-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const secret = document.getElementById('brrr-secret').value.trim();
+        await API.put('api/continuity/notification-channels/brrr', {
+          enabled:document.getElementById('brrr-enabled').checked,
+          label:document.getElementById('brrr-label').value,
+          ...(secret ? { secret } : {})
+        });
+        document.getElementById('brrr-secret').value = '';
+        setSwitchMessage('brrr configuration saved; changed targets require a new receipt acknowledgement.');
+        await loadReadiness();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('brrr-test').addEventListener('click', async event => {
+      event.currentTarget.disabled = true;
+      try { await API.post('api/continuity/notification-channels/brrr/test', {}); setSwitchMessage('brrr transport accepted the test.'); await loadReadiness(); }
+      catch (error) { setSwitchMessage(error.message, true); }
+      finally { event.currentTarget.disabled = false; }
+    });
+    document.getElementById('brrr-clear').addEventListener('click', async () => {
+      if (!window.confirm('Clear the saved brrr target?')) return;
+      try { await API.del('api/continuity/notification-channels/brrr'); setSwitchMessage('brrr target cleared.'); await loadReadiness(); }
+      catch (error) { setSwitchMessage(error.message, true); }
+    });
+    document.getElementById('reachability-channels').addEventListener('click', async event => {
+      const challenge = event.target.closest('[data-reachability-challenge]');
+      const acknowledge = event.target.closest('[data-reachability-ack]');
+      if (!challenge && !acknowledge) return;
+      const button = challenge || acknowledge;
+      const channel = challenge?.dataset.reachabilityChallenge || acknowledge.dataset.reachabilityAck;
+      button.disabled = true;
+      try {
+        if (challenge) {
+          const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness/${channel}/challenge`, {});
+          setSwitchMessage(result.challenge.delivered ? `${channel} challenge sent.` : `${channel} challenge created, but transport did not accept it.`);
+        } else {
+          const input = document.querySelector(`[data-reachability-code="${channel}"]`);
+          if (!input.value.trim()) throw new Error('Enter the code you received.');
+          reachability = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness/${channel}/acknowledge`, { code:input.value.trim() });
+          input.value = '';
+          setSwitchMessage(`${channel} receipt acknowledged.`);
+        }
+        await loadReadiness();
+      } catch (error) { setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
     });
     loadSwitch().then(load).catch(error => setSwitchMessage(error.message, true));

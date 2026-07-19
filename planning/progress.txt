@@ -386,3 +386,18 @@
 - Locked the first increment with tests for owner/kid authorization, normalization, malformed
   and duplicate addresses, replacement, expiry, revocation, replay, sessionlessness, static
   page isolation, and raw-token-free backups.
+
+## 2026-07-19 — Phase C operator reachability foundation implemented
+
+- Seeded a reusable verified trustee contact when trustee invitation registration proves
+  control of the invitation address.
+- Added one write-only `brrr` target per parent with official-host validation, masked readback,
+  target fingerprints, configuration versions, transport-test state, and app-backup redaction.
+- Added hashed, 30-minute operator reachability challenges bound to the owning parent, switch
+  draft, channel, target fingerprint, and configuration version. Transport acceptance and
+  authenticated receipt acknowledgement remain separate signals.
+- Added Continuity-page controls for brrr onboarding/test and email/brrr challenge receipt.
+  Challenge codes cannot check in, arm the switch, or grant access; changing a target, switch
+  email, or mail configuration invalidates prior readiness evidence.
+- Kept the final arming gate deferred until immutable packet activation can join the same
+  server-enforced Phase C transaction; no partial UI-only security boundary was introduced.
