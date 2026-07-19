@@ -33,6 +33,7 @@ function url(path) {
 async function resetDatabase() {
   const tables = [
     'continuity_brrr_outbox',
+    'trustee_contact_verification_tokens',
     'continuity_operator_channel_attestations', 'member_notification_channels',
     'trustee_contact_channels',
     'member_contact_verification_tokens', 'member_contact_channels',

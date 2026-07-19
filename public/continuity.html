@@ -211,10 +211,13 @@
       const count = Number(trustee.designation_count || 0);
       const keyCount = Number(trustee.active_key_count || 0);
       const isInvited = trustee.status === 'invited';
+      const contact = trustee.status === 'registered'
+        ? `<div class="text-xs text-dim" style="margin-top:.35rem;">Verified contact: ${esc(trustee.verified_contact_address || trustee.email)}${trustee.pending_contact_address ? `<br>Pending replacement: ${esc(trustee.pending_contact_address)}` : ''}</div><form data-trustee-contact-form="${Number(trustee.id)}" style="display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem;"><input class="form-input" name="email" type="email" autocomplete="email" placeholder="New trustee-controlled email" required style="flex:1; min-width:13rem;"><button class="btn btn-sm" type="submit">Verify replacement</button>${trustee.pending_contact_id ? `<button class="btn btn-sm" type="button" data-trustee-contact-resend="${Number(trustee.pending_contact_id)}" data-trustee-id="${Number(trustee.id)}">Resend</button><button class="btn btn-sm btn-danger" type="button" data-trustee-contact-cancel="${Number(trustee.pending_contact_id)}" data-trustee-id="${Number(trustee.id)}">Cancel pending</button>` : ''}</form>`
+        : '';
       const controls = trustee.status === 'revoked'
         ? ''
         : `<div class="btn-group" style="margin-top:.6rem;">${isInvited ? `<button class="btn btn-sm" type="button" data-resend="${Number(trustee.id)}">Resend invitation</button>` : ''}<button class="btn btn-sm btn-danger" type="button" data-revoke="${Number(trustee.id)}">Revoke trustee</button></div>`;
-      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(trustee.name)}</strong><div class="text-sm text-dim">${esc(trustee.relationship || 'Trustee')} · ${esc(trustee.status)}</div><div class="text-xs text-dim">${keyCount} active key${keyCount === 1 ? '' : 's'} · ${count} designated document${count === 1 ? '' : 's'}</div>${controls}</div>`;
+      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(trustee.name)}</strong><div class="text-sm text-dim">${esc(trustee.relationship || 'Trustee')} · ${esc(trustee.status)}</div><div class="text-xs text-dim">${keyCount} active key${keyCount === 1 ? '' : 's'} · ${count} designated document${count === 1 ? '' : 's'}</div>${contact}${controls}</div>`;
     }
     function matrixCell(document, person, kind) {
       const match = (document.designations || []).find(d => kind === 'member' ? Number(d.member_id) === Number(person.id) : Number(d.trustee_id) === Number(person.id));
@@ -329,7 +332,7 @@
       button.disabled = true;
       try {
         const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/outbox/retry`, {});
-        setSwitchMessage(`${result.retry_count} mail item${result.retry_count === 1 ? '' : 's'} queued for retry.`);
+        setSwitchMessage(`${result.retry_count} notification item${result.retry_count === 1 ? '' : 's'} queued for retry.`);
         await loadSwitch();
       } catch (error) { setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
@@ -352,17 +355,41 @@
     document.getElementById('trustees').addEventListener('click', async event => {
       const resend = event.target.closest('[data-resend]');
       const revoke = event.target.closest('[data-revoke]');
-      if (!resend && !revoke) return;
-      const button = resend || revoke;
+      const contactResend = event.target.closest('[data-trustee-contact-resend]');
+      const contactCancel = event.target.closest('[data-trustee-contact-cancel]');
+      if (!resend && !revoke && !contactResend && !contactCancel) return;
+      const button = resend || revoke || contactResend || contactCancel;
       button.disabled = true;
       try {
         if (resend) {
           const result = await API.post(`api/trustees/${encodeURIComponent(resend.dataset.resend)}/invitations/resend`, {});
           setTrusteeStatus(result.invitation.delivered ? 'Replacement invitation sent.' : 'Replacement invitation created, but email delivery could not be confirmed.');
+        } else if (contactResend) {
+          const result = await API.post(`api/trustees/${encodeURIComponent(contactResend.dataset.trusteeId)}/contacts/${encodeURIComponent(contactResend.dataset.trusteeContactResend)}/resend`, {});
+          setTrusteeStatus(result.verification.delivered ? 'Contact verification resent.' : 'Verification created, but email delivery could not be confirmed.');
+        } else if (contactCancel) {
+          await API.del(`api/trustees/${encodeURIComponent(contactCancel.dataset.trusteeId)}/contacts/${encodeURIComponent(contactCancel.dataset.trusteeContactCancel)}`);
+          setTrusteeStatus('Pending trustee contact replacement cancelled.');
         } else if (window.confirm('Revoke this trustee? Their keys and designations will no longer be eligible for future continuity use.')) {
           await API.del(`api/trustees/${encodeURIComponent(revoke.dataset.revoke)}`);
           setTrusteeStatus('Trustee revoked.');
         } else { return; }
+        await load();
+      } catch (error) { setTrusteeStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('trustees').addEventListener('submit', async event => {
+      const form = event.target.closest('[data-trustee-contact-form]');
+      if (!form) return;
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await API.post(`api/trustees/${encodeURIComponent(form.dataset.trusteeContactForm)}/contacts/email`, {
+          email:new FormData(form).get('email')
+        });
+        form.reset();
+        setTrusteeStatus(result.verification.already_verified ? 'That trustee contact is already verified.' : result.verification.delivered ? 'Trustee contact verification sent.' : 'Verification created, but email delivery could not be confirmed.');
         await load();
       } catch (error) { setTrusteeStatus(error.message, true); }
       finally { button.disabled = false; }

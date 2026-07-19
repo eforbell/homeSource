@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1, C0.2a, and the C0.2b reminder fanout implemented through automated verification; trustee contact replacement next
+Status: C0.1 and C0.2 implemented through automated verification; C0.3 immutable packet policy next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -53,11 +53,14 @@ green.
   state or channel configuration changes.
 - Include per-channel operations state and secret-free outbox history in app backups.
 
-#### C0.2b trustee contact replacement — next
+#### C0.2b trustee contact replacement — implemented
 
-- Add trustee contact replacement verification.
-- Make current reachability acknowledgements part of the later complete Phase C arming
-  transaction alongside packet/readiness activation; do not add a partial UI-only gate.
+- Stage one pending replacement without revoking the currently verified trustee address.
+- Deliver a seven-day, hashed, single-use proof link to the proposed address and atomically
+  switch the verified contact only after sessionless confirmation.
+- Preserve prior contact history, keep the trustee key identity unchanged, reject address
+  collisions/cross-owner changes, and invalidate pending proof when a trustee is revoked.
+- Include contact history and hashed proof state in repeatable-read app backups.
 
 ### C0.3 Immutable packet policy
 
@@ -65,6 +68,8 @@ green.
   matrix, and independent switch-trustee witness designations.
 - Migrate only unarmed drafts under the controlled-rollout rule.
 - Activate a complete version through one owner-reauthenticated transaction.
+- Make current operator reachability acknowledgements part of that same packet/readiness
+  activation transaction; do not add a partial UI-only arming gate.
 
 ### C0.4 Continuity-aware authorization boundary
 

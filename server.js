@@ -32,6 +32,7 @@ const trustees = require('./lib/trustees');
 const continuity = require('./lib/continuity');
 const continuityContacts = require('./lib/continuity-contacts');
 const continuityReadiness = require('./lib/continuity-readiness');
+const trusteeContacts = require('./lib/trustee-contacts');
 const brrr = require('./lib/brrr');
 
 const app = express();
@@ -481,6 +482,44 @@ async function deliverTrusteeInvitation({ trustee, invitation, operator }) {
     delivered: delivery.delivered === true,
     transport: delivery.transport || null,
     reason: delivery.reason || null
+  };
+}
+
+function trusteeContactVerificationUrl(token) {
+  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
+  if (!configuredBaseUrl) throw new Error('APP_URL is required for trustee contact verification');
+  let verificationUrl;
+  try {
+    verificationUrl = new URL('/trustee-contact.html', configuredBaseUrl);
+  } catch {
+    throw new Error('APP_URL must be an absolute http(s) URL');
+  }
+  if (!['http:', 'https:'].includes(verificationUrl.protocol)) {
+    throw new Error('APP_URL must be an absolute http(s) URL');
+  }
+  const localHost = ['localhost', '127.0.0.1', '::1'].includes(verificationUrl.hostname);
+  if (verificationUrl.protocol !== 'https:' && !localHost) {
+    throw new Error('APP_URL must use HTTPS for trustee contact verification (except localhost)');
+  }
+  verificationUrl.searchParams.set('token', token);
+  return verificationUrl.toString();
+}
+
+async function deliverTrusteeContactVerification({ started, operator }) {
+  if (!started.token) return { delivered: false, transport: null, reason: null, already_verified: true };
+  const expiry = new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'long', timeStyle: 'short', timeZone: process.env.HOUSEHOLD_TIMEZONE || 'America/New_York'
+  }).format(new Date(started.expires_at));
+  const delivery = await sendMail({
+    to: started.contact.normalized_address,
+    subject: 'Confirm your Home Source trustee contact address',
+    text: `${operator.name} has requested that this address replace your current Home Source trustee contact. This does not change your trustee key or grant access to any document.\n\nConfirm the new address with this one-time link:\n${trusteeContactVerificationUrl(started.token)}\n\nThis link expires ${expiry}. If you were not expecting this request, you can ignore it and the existing address will remain active.`
+  });
+  return {
+    delivered: delivery.delivered === true,
+    transport: delivery.transport || null,
+    reason: delivery.reason || null,
+    already_verified: false
   };
 }
 
@@ -996,6 +1035,80 @@ app.post('/api/continuity/contact-verification/confirm', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.post('/api/continuity/trustee-contact-verification/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const verification = await trusteeContacts.getValidEmailReplacement(req.body?.token);
+    if (!verification) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    res.json(verification);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/trustee-contact-verification/confirm', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const contact = await trusteeContacts.verifyEmailReplacement({ token: req.body?.token });
+    if (!contact) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    await audit.log('trustee.contact_verified', 'trustee_contact_channel', contact.id, null, {
+      trustee_id: contact.trustee_id
+    });
+    res.json({ verified: true, status: contact.status, target_mask: contact.target_mask });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.post('/api/trustees/:id/contacts/email', requireAuth, requireParent, async (req, res) => {
+  try {
+    trusteeContactVerificationUrl('placeholder');
+    const started = await trusteeContacts.startEmailReplacement({
+      ownerId: req.member.id, trusteeId: req.params.id, email: req.body?.email
+    });
+    const delivery = await deliverTrusteeContactVerification({ started, operator: req.member });
+    await audit.log('trustee.contact_verification_started', 'trustee_contact_channel', started.contact.id, req.member.id, {
+      trustee_id: started.contact.trustee_id,
+      target_mask: started.contact.target_mask,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.status(started.already_verified ? 200 : 201).json({
+      contact: started.contact,
+      verification: {
+        expires_at: started.expires_at,
+        delivered: delivery.delivered,
+        already_verified: started.already_verified
+      }
+    });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.post('/api/trustees/:id/contacts/:contactId/resend', requireAuth, requireParent, async (req, res) => {
+  try {
+    trusteeContactVerificationUrl('placeholder');
+    const started = await trusteeContacts.resendEmailReplacement({
+      ownerId: req.member.id, trusteeId: req.params.id, contactId: req.params.contactId
+    });
+    const delivery = await deliverTrusteeContactVerification({ started, operator: req.member });
+    await audit.log('trustee.contact_verification_resent', 'trustee_contact_channel', started.contact.id, req.member.id, {
+      trustee_id: started.contact.trustee_id,
+      target_mask: started.contact.target_mask,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.json({ contact: started.contact, verification: { expires_at: started.expires_at, delivered: delivery.delivered } });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.delete('/api/trustees/:id/contacts/:contactId', requireAuth, requireParent, async (req, res) => {
+  try {
+    const contact = await trusteeContacts.cancelEmailReplacement({
+      ownerId: req.member.id, trusteeId: req.params.id, contactId: req.params.contactId
+    });
+    await audit.log('trustee.contact_verification_cancelled', 'trustee_contact_channel', contact.id, req.member.id, {
+      trustee_id: contact.trustee_id
+    });
+    res.json({ ok: true });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
 });
 
 app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {

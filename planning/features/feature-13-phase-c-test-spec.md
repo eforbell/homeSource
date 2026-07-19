@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1, C0.2a, and C0.2b reminder fanout automated gates satisfied
+Status: Active; C0.1 and C0.2 automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -48,6 +48,11 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 ## C0.2–C0.4 gates
 
 - Trustee contact seeding/replacement preserves verified-control history.
+- A proposed trustee replacement leaves the prior address verified until one current,
+  single-use proof token confirms the normalized new address; replay, expiry, replacement,
+  collision, cross-owner use, and kid use fail closed.
+- Confirming a trustee address changes no key or designation, while trustee revocation revokes
+  all current contact rows and invalidates outstanding proof tokens.
 - Operator transport tests cannot satisfy reachability acknowledgement.
 - Acknowledgements are owner/switch/channel/config-version bound and cannot check in or arm on
   their own.
