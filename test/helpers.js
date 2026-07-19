@@ -32,6 +32,7 @@ function url(path) {
 
 async function resetDatabase() {
   const tables = [
+    'member_contact_verification_tokens', 'member_contact_channels',
     'continuity_scheduler_runs', 'continuity_notification_outbox', 'continuity_events',
     'continuity_checkin_tokens', 'continuity_recipients', 'continuity_switches',
     'magic_links',

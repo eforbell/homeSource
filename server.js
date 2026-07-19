@@ -30,6 +30,7 @@ const { createKeyNotificationDispatcher } = require('./lib/key-notification-disp
 const { getMailerConfig, sendMail } = require('./lib/mailer');
 const trustees = require('./lib/trustees');
 const continuity = require('./lib/continuity');
+const continuityContacts = require('./lib/continuity-contacts');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -187,6 +188,11 @@ app.get('/sovereign-fonts.css', (_req, res) => {
 app.get(['/check-in', '/check-in.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'check-in.html'));
+});
+
+app.get(['/continuity-contact', '/continuity-contact.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'continuity-contact.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -476,6 +482,55 @@ async function deliverTrusteeInvitation({ trustee, invitation, operator }) {
   };
 }
 
+function memberContactVerificationUrl(token) {
+  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
+  if (!configuredBaseUrl) throw new Error('APP_URL is required for continuity contact verification');
+  let verificationUrl;
+  try {
+    verificationUrl = new URL('/continuity-contact.html', configuredBaseUrl);
+  } catch {
+    throw new Error('APP_URL must be an absolute http(s) URL');
+  }
+  if (!['http:', 'https:'].includes(verificationUrl.protocol)) {
+    throw new Error('APP_URL must be an absolute http(s) URL');
+  }
+  const localHost = ['localhost', '127.0.0.1', '::1'].includes(verificationUrl.hostname);
+  if (verificationUrl.protocol !== 'https:' && !localHost) {
+    throw new Error('APP_URL must use HTTPS for continuity contact verification (except localhost)');
+  }
+  verificationUrl.searchParams.set('token', token);
+  return verificationUrl.toString();
+}
+
+function memberContactVerificationMessage({ contact, operatorName, verificationUrl, expiresAt }) {
+  const expiry = new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'long', timeStyle: 'short', timeZone: process.env.HOUSEHOLD_TIMEZONE || 'America/New_York'
+  }).format(new Date(expiresAt));
+  return {
+    to: contact.normalized_address,
+    subject: 'Confirm a private Home Source contact address',
+    text: `${operatorName} has asked you to confirm this email address for a future private family continuity message. This preparation does not give access to any document and does not mean that anything has happened.\n\nConfirm the address with this one-time link:\n${verificationUrl}\n\nThis link expires ${expiry}. If you were not expecting this request, you can ignore it.`
+  };
+}
+
+async function deliverMemberContactVerification({ started, operator }) {
+  if (!started.token) {
+    return { delivered: false, transport: null, reason: null, already_verified: true };
+  }
+  const delivery = await sendMail(memberContactVerificationMessage({
+    contact: started.contact,
+    operatorName: operator.name,
+    verificationUrl: memberContactVerificationUrl(started.token),
+    expiresAt: started.expires_at
+  }));
+  return {
+    delivered: delivery.delivered === true,
+    transport: delivery.transport || null,
+    reason: delivery.reason || null,
+    already_verified: false
+  };
+}
+
 app.get('/api/trustees', requireAuth, requireParent, async (_req, res) => {
   try {
     res.json(await trustees.listTrustees());
@@ -492,12 +547,16 @@ app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, re
   try {
     const { rows: members } = await pool.query(
       `SELECT m.id, m.name, m.role, m.avatar_emoji,
+              mcc.id AS contact_id, mcc.normalized_address AS contact_address,
+              mcc.status AS contact_status, mcc.verified_at AS contact_verified_at,
               COUNT(DISTINCT dd.id)::int AS designation_count,
               COUNT(DISTINCT ek.id) FILTER (WHERE ek.revoked_at IS NULL)::int AS active_key_count
        FROM family_members m
        LEFT JOIN document_designations dd ON dd.member_id = m.id
        LEFT JOIN encryption_keys ek ON ek.member_id = m.id AND ek.key_type = 'member'
-       GROUP BY m.id ORDER BY m.role, m.name`
+       LEFT JOIN member_contact_channels mcc ON mcc.member_id = m.id
+         AND mcc.channel_type = 'email' AND mcc.status <> 'revoked'
+       GROUP BY m.id, mcc.id ORDER BY m.role, m.name`
     );
     const trusteeRows = await trustees.listTrustees();
     const { rows: documents } = await pool.query(
@@ -513,6 +572,88 @@ app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, re
     );
     res.json({ members, trustees: trusteeRows, documents });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/continuity/switch/:id/contacts', requireAuth, requireParent, async (req, res) => {
+  try {
+    const contacts = await continuityContacts.listMemberContacts({
+      ownerId: req.member.id,
+      switchId: req.params.id
+    });
+    res.json({ contacts });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/switch/:id/contacts/members/:memberId/email', requireAuth, requireParent, async (req, res) => {
+  try {
+    // Reject an unusable deployment URL before persisting a token that cannot be delivered.
+    memberContactVerificationUrl('placeholder');
+    const started = await continuityContacts.startMemberEmailVerification({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      memberId: req.params.memberId,
+      email: req.body?.email
+    });
+    const delivery = await deliverMemberContactVerification({ started, operator: req.member });
+    await audit.log('continuity.contact_verification_started', 'member_contact_channel', started.contact.id, req.member.id, {
+      switch_id: Number(req.params.id),
+      member_id: started.contact.member_id,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.status(started.already_verified ? 200 : 201).json({
+      contact: started.contact,
+      verification: {
+        expires_at: started.expires_at,
+        delivered: delivery.delivered,
+        already_verified: started.already_verified
+      }
+    });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/switch/:id/contacts/:contactId/resend', requireAuth, requireParent, async (req, res) => {
+  try {
+    memberContactVerificationUrl('placeholder');
+    const started = await continuityContacts.resendMemberEmailVerification({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      contactId: req.params.contactId
+    });
+    const delivery = await deliverMemberContactVerification({ started, operator: req.member });
+    await audit.log('continuity.contact_verification_resent', 'member_contact_channel', started.contact.id, req.member.id, {
+      switch_id: Number(req.params.id),
+      member_id: started.contact.member_id,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.json({
+      contact: started.contact,
+      verification: { expires_at: started.expires_at, delivered: delivery.delivered }
+    });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/continuity/switch/:id/contacts/:contactId', requireAuth, requireParent, async (req, res) => {
+  try {
+    const contact = await continuityContacts.revokeMemberContact({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      contactId: req.params.contactId
+    });
+    await audit.log('continuity.contact_revoked', 'member_contact_channel', contact.id, req.member.id, {
+      switch_id: Number(req.params.id), member_id: contact.member_id
+    });
+    res.json({ ok: true, contact });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
 });
 
 async function verifyContinuityPassphrase(memberId, passphrase) {
@@ -677,6 +818,35 @@ app.post('/api/continuity/check-in', async (req, res) => {
     await audit.log('continuity.checked_in', 'continuity_switch', tokenItem.switch_id, null, { channel: 'email' });
     res.json({ ok: true });
   } catch (_err) { recordCheckinFailure(req); res.status(404).json({ error: 'This check-in is not available' }); }
+});
+
+app.post('/api/continuity/contact-verification/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const verification = await continuityContacts.getValidMemberEmailVerification(req.body?.token);
+    if (!verification) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    res.json({
+      recipient_name: verification.recipient_name,
+      masked_address: verification.masked_address,
+      expires_at: verification.expires_at
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/contact-verification/confirm', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const contact = await continuityContacts.verifyMemberEmail({ token: req.body?.token });
+    if (!contact) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    await audit.log('continuity.contact_verified', 'member_contact_channel', contact.id, null, {
+      member_id: contact.member_id
+    });
+    res.json({ verified: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {

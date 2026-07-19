@@ -373,3 +373,16 @@
   trustee witness authority from delivery eligibility, added trustee contact and immutable
   packet/roster version contracts, scoped blocking per recipient, durable hashed sessions and
   separate token subjects, and required a complete continuity-aware generic-route matrix.
+
+## 2026-07-19 — Phase C C0 implementation started
+
+- Converted the attested Phase C PRD into an incremental implementation plan and test
+  specification, retaining the controlled-rollout prohibition on production arming.
+- Began C0 with owner-scoped beneficiary email onboarding for editable continuity drafts.
+- Added normalized member contact rows and hashed, seven-day, replaceable, single-use
+  verification tokens; the sessionless confirmation ceremony grants no document access.
+- Added parent administration APIs, a navigation-free confirmation page, Continuity-page
+  contact status/controls, audit events, repeatable-read backup coverage, and database cleanup.
+- Locked the first increment with tests for owner/kid authorization, normalization, malformed
+  and duplicate addresses, replacement, expiry, revocation, replay, sessionlessness, static
+  page isolation, and raw-token-free backups.

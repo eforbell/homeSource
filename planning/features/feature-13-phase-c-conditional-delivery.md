@@ -2,7 +2,7 @@
 
 Date: 2026-07-16
 Last updated: 2026-07-17
-Status: PRD draft; all decision gates attested and ready for implementation planning
+Status: Implementation in progress; all decision gates attested
 Parent charter: `planning/features/feature-13-estate-continuity-phase-a.md`
 Predecessor: `planning/features/feature-13-phase-b-the-letter.md`
 Design source: `design/homesource-treatment.md`
