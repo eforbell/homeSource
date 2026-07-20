@@ -194,6 +194,15 @@ describe('continuity-aware authorization boundary', () => {
     assert.equal(listed.documents.some((doc) => doc.id === ordinary.id), true);
   });
 
+  it('keeps document totals aligned when a referenced Letter was created by another owner', async () => {
+    await pool.query('UPDATE documents SET created_by = $2 WHERE id = $1', [letter.id, otherParent.id]);
+    const listRes = await authedGet('api/documents', otherCookie);
+    assert.equal(listRes.status, 200);
+    const listed = await listRes.json();
+    assert.equal(listed.documents.some((doc) => doc.id === letter.id), false);
+    assert.equal(listed.total, listed.documents.length);
+  });
+
   it('preserves ordinary document access while redacting continuity-specific sealed wraps', async () => {
     const detailRes = await authedGet(`api/documents/${selected.id}`, otherCookie);
     assert.equal(detailRes.status, 200);
