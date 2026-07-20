@@ -193,3 +193,211 @@
 - Remaining operator acceptance: real browser key ceremony, configured SMTP delivery plus
   one-time link consumption, Linux systemd installation/verification, and real backup/restore
   inspection. No Phase C recipient notification, unsealing, or delivery was implemented.
+
+---
+
+## 2026-07-16 — Feature #13 Phase C initial PRD introduced
+
+- Added `feature-13-phase-c-conditional-delivery.md` as the first dedicated Phase C planning
+  artifact, grounded in the shipped Phase A identity/envelope contracts and Phase B
+  `delivery_pending` boundary.
+- Defined conditional-delivery scope, security invariants, proposed lifecycle, verified
+  beneficiary contact onboarding, trustee pause separation, recipient-scoped grants,
+  delivery manifests, local unlock, operations, backup, testing, and the explicit Phase D
+  quorum boundary.
+- Recorded eleven decision gates requiring product attestation before implementation,
+  including adult/spouse beneficiary support, trustee authority, owner recovery, document
+  scope, beneficiary email verification, revoked/stranded keys, token lifetime, and trustee
+  document eligibility.
+- Preserved the three untracked May design mockup artifacts unchanged.
+
+## 2026-07-16 — Phase C named-kin and Letter lifecycle intent clarified
+
+- Confirmed that The Letter remains a special-purpose encrypted record inside the ordinary
+  `documents` table and is referenced by the continuity switch rather than stored as a
+  separate plaintext content model.
+- Recorded writer intent to select named kin, including adult/parent-role household members,
+  for notification and post-trigger holder access.
+- Added a required authorization repair before adult recipients are allowed: ambient parent
+  document visibility must not expose a sealed holder's wrapped DEK before a delivery grant.
+- Added C13-10 for atomic Letter/recipient revisions after death, divorce, contact changes,
+  and key replacement, with an open decision about how roster changes propagate to other
+  sealed delivery documents.
+
+## 2026-07-16 — Phase C continuity-packet removal semantics confirmed
+
+- Confirmed C13-4 Option B: delivery scope is an explicit writer-curated continuity packet
+  containing the Letter plus selected sealed documents.
+- Confirmed C13-10 Option B: removing a beneficiary updates the Letter and removes that
+  identity's holder wrap/designation from every packet document in one staged atomic
+  re-seal operation; unrelated vault documents are unchanged.
+- Removed beneficiaries lose unused tokens, scoped sessions, grants, queued notifications,
+  and all future Home Source authorization for the packet. The product must state that
+  already-obtained ciphertext/plaintext cannot be recalled.
+
+## 2026-07-16 — Phase C beneficiary verification ceremony confirmed
+
+- Confirmed C13-5: every named beneficiary email must be recipient-verified before delivery
+  eligibility; writer-entered, unverified addresses cannot receive a delivery grant.
+- Combined contact verification with beneficiary key onboarding/readiness where possible:
+  the one-time link verifies the intended member/address, registers a key when needed, and
+  confirms an existing ready key without granting document access.
+- Required calm preparatory copy that does not mention death, incapacity, missed check-ins,
+  document titles, or inheritance details during onboarding.
+
+## 2026-07-16 — Phase C trustee authority shape confirmed
+
+- Confirmed that a writer may designate multiple trustees but trustees form a flat peer set:
+  all eligible trustees are notified concurrently and no trustee is primary, ranked, or
+  granted superior authority.
+- Trustee action tokens remain identity-bound and equally scoped. The no-trustee
+  safety-window behavior remains open for the next decision round.
+
+## 2026-07-16 — Phase C trustee pause cap confirmed
+
+- Confirmed one shared 30-day pause per delivery run. The first valid trustee action wins;
+  concurrent, replayed, or later trustee attempts cannot stack, restart, or extend it.
+- Confirmed that no trustee means no additional Phase C wait: beneficiary delivery begins
+  immediately after the configured Phase B grace period.
+
+## 2026-07-16 — Operator `brrr` reminder channel added to Phase C planning
+
+- Added C13-11 for intentionally redundant operator outreach through email plus an onboarded
+  per-parent `brrr` channel, based on Family Pulse's masked DB onboarding/test pattern and
+  Helm's fail-soft, cooldown, sanitized-log behavior.
+- Required independent durable attempts per channel and low-information push copy suitable
+  for an insecure provider/device preview. `brrr` carries no raw check-in/delivery token and
+  opens the authenticated Continuity page.
+- Left one readiness decision open: whether tested `brrr` is mandatory to arm or strongly
+  recommended alongside the existing SMTP gate.
+
+## 2026-07-16 — Phase C notification-channel readiness policy confirmed
+
+- Confirmed C13-11 Option A: verified SMTP remains the baseline link channel; `brrr` is a
+  strongly recommended but operator-optional second channel rather than a universal arm
+  requirement.
+- Required successful per-channel verification and visible last-success/failure posture.
+  `brrr` itself remains optional; when enabled it must be verified or explicitly disabled
+  before arming, and later channel outages never alter continuity state.
+- Kept the durable attempt model channel-extensible so other operators may adopt different
+  secondary channels later.
+
+## 2026-07-16 — Phase C operator-reachability arming gate clarified
+
+- Distinguished SMTP/provider transport verification from evidence that the owning parent
+  actually receives continuity notifications at the configured destination.
+- Required the authenticated owner to acknowledge a low-information, purpose-bound challenge
+  through baseline email and every optional channel enabled for the switch before arming.
+- Bound evidence to the switch, owner, channel, and configuration version; channel changes
+  invalidate readiness for the next arming ceremony, while later outages remain visible but
+  do not silently disarm an active switch.
+- Preserved operator choice: `brrr` remains optional, but if selected it must be reachability-
+  verified or explicitly disabled before arming.
+
+## 2026-07-17 — Phase C sealed-recipient boundary reconciled
+
+- Superseded the earlier parent-role adult recipient direction: Phase C retains household
+  kids and registered trustees as the only sealed-recipient principal types.
+- Required continuity-owned seal mutations to be scoped to the switch owner/vault operator;
+  another parent cannot administer the owner's Letter or packet seals through ambient parent
+  authorization.
+- Deferred adult/spouse sealed beneficiaries until family relationship can be separated from
+  vault-operator authority. BugBase #142 tracks that future consideration, and shadow trustee
+  identities are not an acceptable workaround.
+
+## 2026-07-17 — Remaining Phase C option gates attested
+
+- Confirmed owner recovery to a fresh `armed` cycle until the first recipient delivery grant
+  activates (C13-3 Option A).
+- Confirmed fail-closed revoked/stranded key behavior (C13-6 Option A), combined with the
+  per-recipient complete-packet rule rather than item-level partial delivery.
+- Confirmed seven-day replaceable delivery links and 60-minute scoped browser sessions; the
+  underlying grant retention, reissue authority after owner unavailability, and final online
+  expiry remain to be specified.
+- Confirmed separately scoped trustee delivery for explicitly selected documents (C13-8
+  Option B) and atomic delivery per recipient (C13-9 Option B).
+
+## 2026-07-17 — Phase C delivery-grant lifetime finalized
+
+- Confirmed seven-day replaceable email links and 60-minute recipient-scoped browser
+  sessions within a hard one-year delivery-grant window.
+- Added rate-limited recipient self-service reissue because the owner may be unavailable;
+  replacements go only to the immutable verified address captured by the grant, return a
+  uniform non-enumerating response, invalidate the prior link, and never extend retention.
+- At one year, the grant, unused links, and scoped sessions expire permanently for online
+  delivery without claiming to revoke already-downloaded material or deleting encrypted
+  backup artifacts.
+
+## 2026-07-17 — Phase C trustee action window finalized
+
+- Added a fixed 72-hour action window after the Phase B grace period whenever one or more
+  eligible trustees are designated; all trustees are notified concurrently.
+- If no trustee acts, recipient delivery begins when the 72-hour deadline expires. The first
+  valid trustee action closes that window and starts the one shared 30-day pause from the
+  action timestamp; later actions cannot stack, restart, or extend it.
+- Preserved immediate post-grace delivery when no trustees are designated.
+
+## 2026-07-17 — Phase C trustee notification failure policy finalized
+
+- Required at least one successful notification send to every designated trustee before the
+  common 72-hour action window begins; its deadline is measured from the final required
+  success.
+- Added fail-closed `trustee_notification_pending` and `trustee_notification_blocked` states.
+  Permanent failure prevents beneficiary grant activation until bounded retry succeeds for
+  every trustee.
+- Preserved owner recovery throughout notification-pending, notification-blocked, action-
+  window, and paused states.
+
+## 2026-07-17 — Phase C pre-unlock metadata policy finalized
+
+- Required every recipient manifest item, including the Letter, to appear only as a
+  deterministic `Private document N` label before local decryption.
+- Prohibited recipient-scoped APIs and UI from exposing server-side titles, filenames,
+  descriptions, types, tags, owners, or continuity-specific meaning before unlock.
+- Allowed decrypted artifact metadata to appear only after successful local decryption while
+  preserving the generic manifest label as the stable item identifier.
+
+## 2026-07-17 — Phase C controlled-rollout constraint confirmed
+
+- Confirmed Home Source remains a single-operator private deployment and will not be released
+  to other households before Phase C is complete.
+- Rejected a legacy Phase C readiness/version compatibility layer as unnecessary complexity;
+  the operator will not arm Phase B in production.
+- Added a deployment acceptance check for zero switches in an armed-or-later active state
+  before enabling Phase C scheduler behavior; unarmed drafts need no compatibility path, and
+  the complete Phase C arming contract is the only supported production path.
+- Approved the irreversible grant boundary at the atomic commit of the immutable grant and
+  manifest, hashed usable access token, and notification outbox entry; provider acceptance,
+  link opening, and local decryption occur after the owner-recovery cutoff.
+- Closed the remaining implementation-readiness findings without new product choices: split
+  trustee witness authority from delivery eligibility, added trustee contact and immutable
+  packet/roster version contracts, scoped blocking per recipient, durable hashed sessions and
+  separate token subjects, and required a complete continuity-aware generic-route matrix.
+
+## 2026-07-19 — Phase C C0 implementation started
+
+- Converted the attested Phase C PRD into an incremental implementation plan and test
+  specification, retaining the controlled-rollout prohibition on production arming.
+- Began C0 with owner-scoped beneficiary email onboarding for editable continuity drafts.
+- Added normalized member contact rows and hashed, seven-day, replaceable, single-use
+  verification tokens; the sessionless confirmation ceremony grants no document access.
+- Added parent administration APIs, a navigation-free confirmation page, Continuity-page
+  contact status/controls, audit events, repeatable-read backup coverage, and database cleanup.
+- Locked the first increment with tests for owner/kid authorization, normalization, malformed
+  and duplicate addresses, replacement, expiry, revocation, replay, sessionlessness, static
+  page isolation, and raw-token-free backups.
+
+## 2026-07-19 — Phase C operator reachability foundation implemented
+
+- Seeded a reusable verified trustee contact when trustee invitation registration proves
+  control of the invitation address.
+- Added one write-only `brrr` target per parent with official-host validation, masked readback,
+  target fingerprints, configuration versions, transport-test state, and app-backup redaction.
+- Added hashed, 30-minute operator reachability challenges bound to the owning parent, switch
+  draft, channel, target fingerprint, and configuration version. Transport acceptance and
+  authenticated receipt acknowledgement remain separate signals.
+- Added Continuity-page controls for brrr onboarding/test and email/brrr challenge receipt.
+  Challenge codes cannot check in, arm the switch, or grant access; changing a target, switch
+  email, or mail configuration invalidates prior readiness evidence.
+- Kept the final arming gate deferred until immutable packet activation can join the same
+  server-enforced Phase C transaction; no partial UI-only security boundary was introduced.

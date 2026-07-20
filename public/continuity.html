@@ -23,6 +23,8 @@
           <div class="form-group"><label class="form-label" for="grace-days">Grace period</label><input class="form-input" id="grace-days" type="number" min="7" value="14" required></div>
         </div>
         <div class="form-group"><label class="form-label">Sealed recipients</label><div id="switch-recipients" class="card" style="padding:.75rem;"></div></div>
+        <div class="form-group"><label class="form-label">Additional packet documents</label><div id="packet-documents" class="card" style="padding:.75rem;"></div><div class="form-hint">The encrypted Letter is always included. Additional documents are delivered only to recipients who already have a matching sealed holder.</div></div>
+        <div class="form-group"><label class="form-label">Witness trustees <span class="text-dim">(optional)</span></label><div id="packet-witnesses" class="card" style="padding:.75rem;"></div><div class="form-hint">Witnesses receive the future pause notice but are not packet recipients unless separately selected above.</div></div>
         <div class="form-group"><label class="form-label" for="letter-body">The letter</label><textarea class="form-input" id="letter-body" rows="10" maxlength="50000" placeholder="Write what you want your family to know. The text is encrypted in this browser before it is sent to Home Source."></textarea><div class="form-hint">Unsaved text is never placed in browser storage. Save the encrypted letter before leaving this page.</div></div>
         <button class="btn btn-primary" id="stage-letter" type="submit">Save encrypted letter</button>
         <span id="switch-message" class="text-sm text-dim" role="status" aria-live="polite" style="margin-left:.5rem;"></span>
@@ -33,6 +35,19 @@
       </form>
       <div id="switch-actions" class="btn-group mt-1"></div>
       <div id="switch-operations" class="form-hint mt-1"></div>
+      <section id="reachability-card" class="card mt-1" style="padding:.75rem;" hidden>
+        <div class="card-header"><span class="card-title">Phase C reachability preparation</span><span id="reachability-badge" class="badge badge-muted">Not ready</span></div>
+        <p class="form-hint">Transport tests and receipt acknowledgements are separate. These codes cannot check you in, arm the switch, or grant document access.</p>
+        <div id="reachability-channels"></div>
+        <form id="brrr-form" class="mt-1">
+          <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
+            <div class="form-group" style="flex:1; min-width:13rem;"><label class="form-label" for="brrr-secret">Optional brrr target</label><input id="brrr-secret" class="form-input" type="password" autocomplete="off" placeholder="Paste a secret or api.brrr.now URL"></div>
+            <div class="form-group" style="flex:1; min-width:10rem;"><label class="form-label" for="brrr-label">Label</label><input id="brrr-label" class="form-input" maxlength="80" autocomplete="off" placeholder="My phone"></div>
+            <label style="display:flex; gap:.4rem; align-items:center; margin-bottom:1rem;"><input id="brrr-enabled" type="checkbox"> Enabled</label>
+            <button class="btn btn-sm" type="submit">Save brrr</button><button id="brrr-test" class="btn btn-sm" type="button">Test</button><button id="brrr-clear" class="btn btn-sm btn-danger" type="button">Clear</button>
+          </div>
+        </form>
+      </section>
     </section>
     <section class="card"><div class="card-header"><span class="card-title">People</span></div><p class="form-hint">Adding someone here does not grant document access. Sealed designations remain unavailable until a future continuity trigger.</p><div id="directory" class="mt-1"></div></section>
     <section class="card mt-2">
@@ -58,6 +73,9 @@
     let currentSwitch = null;
     let keyOptions = [];
     let operations = null;
+    let reachability = null;
+    let directoryData = null;
+    let packetState = null;
 
     function operationKey(prefix) {
       return `${prefix}-${crypto.randomUUID()}`;
@@ -80,6 +98,16 @@
       target.innerHTML = [...byIdentity.entries()].map(([identity, key]) => `<label style="display:flex; gap:.6rem; align-items:flex-start; margin:.45rem 0;"><input type="checkbox" name="continuity-recipient" value="${Number(key.id)}" ${selected.has(identity) ? 'checked' : ''}><span><strong>${esc(key.member_name || key.trustee_name)}</strong><span class="text-xs text-dim" style="display:block;">${key.trustee_id ? 'Trustee' : 'Beneficiary'} · ${esc(key.label || 'active key')}</span></span></label>`).join('') || '<div class="text-sm text-dim">No eligible beneficiary or registered trustee keys are available yet.</div>';
     }
 
+    function renderPacketOptions() {
+      const packet = packetState?.staged || packetState?.active;
+      const selectedDocuments = new Set((packet?.documents || []).filter(row => row.item_kind === 'selected').map(row => Number(row.document_id)));
+      const witnesses = new Set((packetState?.witnesses || []).map(row => Number(row.id)));
+      const documents = (directoryData?.documents || []).filter(row => Number(row.id) !== Number(currentSwitch?.letter_document_id));
+      document.getElementById('packet-documents').innerHTML = documents.map(row => `<label style="display:flex; gap:.6rem; margin:.4rem 0;"><input type="checkbox" name="packet-document" value="${Number(row.id)}" ${selectedDocuments.has(Number(row.id)) ? 'checked' : ''}><span>${esc(row.title)}</span></label>`).join('') || '<span class="text-sm text-dim">No additional sealed documents are available.</span>';
+      const eligibleWitnesses = (directoryData?.trustees || []).filter(row => row.status === 'registered' && row.verified_contact_id);
+      document.getElementById('packet-witnesses').innerHTML = eligibleWitnesses.map(row => `<label style="display:flex; gap:.6rem; margin:.4rem 0;"><input type="checkbox" name="packet-witness" value="${Number(row.id)}" ${witnesses.has(Number(row.id)) ? 'checked' : ''}><span>${esc(row.name)}</span></label>`).join('') || '<span class="text-sm text-dim">No verified witness trustee is available; a witness is optional.</span>';
+    }
+
     function formatDate(value) {
       return value ? new Intl.DateTimeFormat(undefined, { dateStyle:'medium', timeStyle:'short' }).format(new Date(value)) : 'Not scheduled';
     }
@@ -93,7 +121,11 @@
       const item = currentSwitch;
       badge.textContent = item ? String(item.tone || item.status).replace(/_/g, ' ') : 'Not set up';
       badge.className = `badge ${item?.tone === 'healthy' ? 'badge-info' : item?.tone === 'approaching' ? 'badge-warn' : 'badge-muted'}`;
-      summary.innerHTML = item ? `<div class="text-sm"><strong>${esc(item.status.replace(/_/g, ' '))}</strong> · next check-in ${esc(formatDate(item.next_checkin_due_at))}</div><div class="text-xs text-dim">Reminder: ${esc(item.reminder_email)} · ${Number(item.interval_days)} day cadence · ${Number(item.grace_period_days)} day grace</div>${item.staged_letter_document_id ? '<div class="text-sm" style="color:var(--warn); margin-top:.4rem;">Encrypted replacement staged and waiting for confirmation.</div>' : ''}` : '<div class="text-sm text-dim">Start with a recipient, your letter, and a reminder cadence.</div>';
+      const run = item?.delivery_run;
+      const runDetail = run
+        ? `<div class="text-xs text-dim" style="margin-top:.4rem;">Delivery run #${Number(run.id)} · packet version #${Number(run.packet_version_id)} · witnesses notified ${Number(run.trustees_notified)}/${Number(run.trustee_count)}${run.trustee_action_deadline_at ? ` · witness deadline ${esc(formatDate(run.trustee_action_deadline_at))}` : ''}${run.pause_deadline_at ? ` · pause deadline ${esc(formatDate(run.pause_deadline_at))}` : ''}</div>`
+        : '';
+      summary.innerHTML = item ? `<div class="text-sm"><strong>${esc(item.status.replace(/_/g, ' '))}</strong> · next check-in ${esc(formatDate(item.next_checkin_due_at))}</div><div class="text-xs text-dim">Reminder: ${esc(item.reminder_email)} · ${Number(item.interval_days)} day cadence · ${Number(item.grace_period_days)} day grace</div>${runDetail}${item.staged_letter_document_id ? '<div class="text-sm" style="color:var(--warn); margin-top:.4rem;">Encrypted replacement staged and waiting for confirmation.</div>' : ''}` : '<div class="text-sm text-dim">Start with a recipient, your letter, and a reminder cadence.</div>';
       if (item) {
         document.getElementById('reminder-email').value = item.reminder_email || '';
         document.getElementById('interval-days').value = String(item.interval_days || 30);
@@ -105,17 +137,24 @@
       document.getElementById('interval-days').disabled = item && item.status !== 'draft';
       document.getElementById('grace-days').disabled = item && item.status !== 'draft';
       document.getElementById('stage-letter').textContent = item?.letter_document_id ? 'Stage encrypted replacement' : 'Save encrypted letter';
-      commit.hidden = !item?.staged_letter_document_id;
+      commit.hidden = !item?.staged_letter_document_id || !item?.staged_packet_version_id;
       commit.querySelector('button').textContent = item?.status === 'draft' ? 'Arm this letter' : 'Commit encrypted replacement';
       actions.innerHTML = '';
       if (item?.status === 'armed') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="check-in">I'm here</button><button class="btn" data-switch-action="pause">Pause</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
       if (item?.status === 'paused') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="resume">Resume</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
+      if (item && ['delivery_pending', 'delivery_blocked', 'trustee_notification_pending', 'trustee_notification_blocked', 'trustee_window', 'trustee_paused', 'recipient_delivery'].includes(item.status)) {
+        actions.innerHTML = `<button class="btn btn-primary" data-switch-action="recover">I'm here — stop delivery</button>`;
+      }
       const runs = operations?.runs || [];
       const advance = runs.find(run => run.job_type === 'state_advance');
       const dispatch = runs.find(run => run.job_type === 'outbox_dispatch');
       const failedCount = (operations?.outbox?.failed || 0) + (operations?.outbox?.blocked || 0);
-      document.getElementById('switch-operations').innerHTML = `Mail: ${esc(operations?.mail?.ready ? operations.mail.transport + ' ready' : 'not ready')} · schedule job: ${advance?.last_successful_at ? esc(formatDate(advance.last_successful_at)) : 'not run'} · mail job: ${dispatch?.last_successful_at ? esc(formatDate(dispatch.last_successful_at)) : 'not run'} · pending/failed: ${Number(operations?.outbox?.pending || 0)}/${Number(failedCount)}${failedCount && item ? ` · <button class="btn btn-sm" type="button" data-retry-outbox>Retry mail</button>` : ''}`;
+      const emailAttempts = operations?.channels?.email || {};
+      const brrrAttempts = operations?.channels?.brrr || {};
+      const channelSummary = `email ${Number(emailAttempts.pending || 0)}/${Number(emailAttempts.failed || 0) + Number(emailAttempts.blocked || 0)}, brrr ${Number(brrrAttempts.pending || 0)}/${Number(brrrAttempts.failed || 0) + Number(brrrAttempts.blocked || 0)}`;
+      document.getElementById('switch-operations').innerHTML = `Mail: ${esc(operations?.mail?.ready ? operations.mail.transport + ' ready' : 'not ready')} · schedule job: ${advance?.last_successful_at ? esc(formatDate(advance.last_successful_at)) : 'not run'} · notification job: ${dispatch?.last_successful_at ? esc(formatDate(dispatch.last_successful_at)) : 'not run'} · pending/failed: ${esc(channelSummary)}${failedCount && item ? ` · <button class="btn btn-sm" type="button" data-retry-outbox>Retry notifications</button>` : ''}`;
       renderRecipientOptions();
+      renderPacketOptions();
     }
 
     async function encryptLetter(text, ownerKey, recipientKeys) {
@@ -145,21 +184,63 @@
       const state = await API.get('api/continuity/switch');
       currentSwitch = state.switch;
       operations = state.operations;
+      packetState = currentSwitch ? await API.get(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/packet`) : null;
       renderSwitch();
+      await loadReadiness();
+    }
+    function channelReadinessCard(channel) {
+      const acknowledged = channel.reachability_acknowledged;
+      const tested = channel.transport_tested;
+      const label = channel.channel_type === 'email' ? 'Email' : 'brrr';
+      const canChallenge = channel.channel_type === 'email' ? channel.transport_configured : channel.enabled;
+      return `<div class="card" style="padding:.65rem; margin:.5rem 0;"><strong>${label}</strong> <span class="text-xs text-dim">${esc(channel.target_mask || 'not configured')}</span><div class="text-xs text-dim">Transport: ${tested ? 'accepted' : 'not accepted'} · receipt: ${acknowledged ? 'acknowledged' : 'not acknowledged'}</div>${canChallenge && !acknowledged ? `<div style="display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.5rem;"><button class="btn btn-sm" type="button" data-reachability-challenge="${channel.channel_type}">Send code</button><input class="form-input" data-reachability-code="${channel.channel_type}" autocomplete="one-time-code" placeholder="Code received" style="max-width:12rem;"><button class="btn btn-sm" type="button" data-reachability-ack="${channel.channel_type}">Acknowledge</button></div>` : ''}</div>`;
+    }
+    function renderReadiness() {
+      const card = document.getElementById('reachability-card');
+      card.hidden = !currentSwitch || !['draft', 'armed', 'paused'].includes(currentSwitch.status);
+      if (card.hidden || !reachability) return;
+      const badge = document.getElementById('reachability-badge');
+      badge.textContent = reachability.ready_to_arm ? 'Reachable' : 'Not ready';
+      badge.className = `badge ${reachability.ready_to_arm ? 'badge-info' : 'badge-warn'}`;
+      document.getElementById('reachability-channels').innerHTML = channelReadinessCard(reachability.channels.email) + channelReadinessCard(reachability.channels.brrr);
+      const brrrChannel = reachability.channels.brrr;
+      document.getElementById('brrr-label').value = brrrChannel.label || '';
+      document.getElementById('brrr-enabled').checked = brrrChannel.enabled === true;
+      document.getElementById('brrr-secret').placeholder = brrrChannel.has_secret ? `Saved ${brrrChannel.secret_mask}; leave blank to keep` : 'Paste a secret or api.brrr.now URL';
+      document.getElementById('brrr-test').disabled = !brrrChannel.enabled;
+      document.getElementById('brrr-clear').disabled = !brrrChannel.has_secret;
+    }
+    async function loadReadiness() {
+      if (!currentSwitch || !['draft', 'armed', 'paused'].includes(currentSwitch.status)) { reachability = null; renderReadiness(); return; }
+      reachability = await API.get(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness`);
+      renderReadiness();
     }
     function personCard(person) {
       const status = `${person.active_key_count} active key${person.active_key_count === 1 ? '' : 's'}`;
       const count = Number(person.designation_count || 0);
-      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(person.name)}</strong><div class="text-sm text-dim">${esc(person.role)} · ${esc(status)}</div><div class="text-xs text-dim">${count} designated document${count === 1 ? '' : 's'}</div></div>`;
+      let contact = '';
+      if (person.role === 'kid') {
+        const contactStatus = person.contact_status
+          ? `${esc(person.contact_status)} · ${esc(person.contact_address)}`
+          : 'No verified continuity contact';
+        const controls = ['draft', 'armed', 'paused'].includes(currentSwitch?.status)
+          ? `<form data-member-contact-form="${Number(person.id)}" style="display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem;"><input class="form-input" name="email" type="email" autocomplete="email" value="${esc(person.contact_address || '')}" placeholder="Recipient-controlled email" required style="flex:1; min-width:13rem;"><button class="btn btn-sm" type="submit">${person.contact_status ? 'Change and verify' : 'Send verification'}</button>${person.contact_status === 'pending' ? `<button class="btn btn-sm" type="button" data-contact-resend="${Number(person.contact_id)}">Resend</button>` : ''}${person.contact_id ? `<button class="btn btn-sm btn-danger" type="button" data-contact-revoke="${Number(person.contact_id)}">Remove</button>` : ''}</form>`
+          : '';
+        contact = `<div class="text-xs text-dim" style="margin-top:.35rem;">Contact: ${contactStatus}</div>${controls}`;
+      }
+      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(person.name)}</strong><div class="text-sm text-dim">${esc(person.role)} · ${esc(status)}</div><div class="text-xs text-dim">${count} designated document${count === 1 ? '' : 's'}</div>${contact}</div>`;
     }
     function trusteeCard(trustee) {
       const count = Number(trustee.designation_count || 0);
       const keyCount = Number(trustee.active_key_count || 0);
       const isInvited = trustee.status === 'invited';
+      const contact = trustee.status === 'registered'
+        ? `<div class="text-xs text-dim" style="margin-top:.35rem;">Verified contact: ${esc(trustee.verified_contact_address || trustee.email)}${trustee.pending_contact_address ? `<br>Pending replacement: ${esc(trustee.pending_contact_address)}` : ''}</div><form data-trustee-contact-form="${Number(trustee.id)}" style="display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem;"><input class="form-input" name="email" type="email" autocomplete="email" placeholder="New trustee-controlled email" required style="flex:1; min-width:13rem;"><button class="btn btn-sm" type="submit">Verify replacement</button>${trustee.pending_contact_id ? `<button class="btn btn-sm" type="button" data-trustee-contact-resend="${Number(trustee.pending_contact_id)}" data-trustee-id="${Number(trustee.id)}">Resend</button><button class="btn btn-sm btn-danger" type="button" data-trustee-contact-cancel="${Number(trustee.pending_contact_id)}" data-trustee-id="${Number(trustee.id)}">Cancel pending</button>` : ''}</form>`
+        : '';
       const controls = trustee.status === 'revoked'
         ? ''
         : `<div class="btn-group" style="margin-top:.6rem;">${isInvited ? `<button class="btn btn-sm" type="button" data-resend="${Number(trustee.id)}">Resend invitation</button>` : ''}<button class="btn btn-sm btn-danger" type="button" data-revoke="${Number(trustee.id)}">Revoke trustee</button></div>`;
-      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(trustee.name)}</strong><div class="text-sm text-dim">${esc(trustee.relationship || 'Trustee')} · ${esc(trustee.status)}</div><div class="text-xs text-dim">${keyCount} active key${keyCount === 1 ? '' : 's'} · ${count} designated document${count === 1 ? '' : 's'}</div>${controls}</div>`;
+      return `<div class="card" style="padding:.75rem; margin:.5rem 0;"><strong>${esc(trustee.name)}</strong><div class="text-sm text-dim">${esc(trustee.relationship || 'Trustee')} · ${esc(trustee.status)}</div><div class="text-xs text-dim">${keyCount} active key${keyCount === 1 ? '' : 's'} · ${count} designated document${count === 1 ? '' : 's'}</div>${contact}${controls}</div>`;
     }
     function matrixCell(document, person, kind) {
       const match = (document.designations || []).find(d => kind === 'member' ? Number(d.member_id) === Number(person.id) : Number(d.trustee_id) === Number(person.id));
@@ -175,18 +256,23 @@
     async function load() {
       try {
         const data = await API.get('api/continuity/directory');
+        directoryData = data;
         const people = [...data.members.map(p => ({ ...p, kind: 'member' })), ...data.trustees.map(p => ({ ...p, kind: 'trustee' }))];
         document.getElementById('directory').innerHTML = data.members.map(personCard).join('');
         document.getElementById('trustees').innerHTML = data.trustees.map(trusteeCard).join('') || '<div class="text-dim text-sm">No trustees invited yet.</div>';
         document.getElementById('matrix').innerHTML = data.documents.length
           ? `<table><thead><tr><th>Document</th>${people.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${data.documents.map(d => `<tr><td><a href="document.html?id=${encodeURIComponent(d.id)}">${esc(d.title)}</a></td>${people.map(p => `<td>${matrixCell(d, p, p.kind)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
           : '<div class="empty-state" style="padding:1rem 0;"><div class="empty-state-title">No continuity designations yet</div><p class="text-dim">When a document is designated, it will appear here.</p></div>';
+        renderPacketOptions();
       } catch (error) { document.getElementById('directory').textContent = error.message; }
     }
     function setTrusteeStatus(message, isError = false) {
       const target = document.getElementById('trustee-status');
       target.textContent = message;
       target.className = `text-sm ${isError ? 'text-danger' : 'text-dim'}`;
+    }
+    function setContactStatus(message, isError = false) {
+      setSwitchMessage(message, isError);
     }
     function setSwitchMessage(message, isError = false) {
       const target = document.getElementById('switch-message');
@@ -219,8 +305,13 @@
         await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/letter/stage`, {
           ...encrypted, recipients, operation_key:operationKey('letter-stage')
         });
+        await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/packet/stage`, {
+          selected_document_ids:[...document.querySelectorAll('[name="packet-document"]:checked')].map(input => Number(input.value)),
+          witness_trustee_ids:[...document.querySelectorAll('[name="packet-witness"]:checked')].map(input => Number(input.value)),
+          operation_key:operationKey('packet-stage')
+        });
         document.getElementById('letter-body').value = '';
-        setSwitchMessage('Encrypted letter saved. Confirm with your login passphrase.');
+        setSwitchMessage('Encrypted packet staged. Confirm with your login passphrase after readiness is complete.');
         await loadSwitch();
       } catch (error) { setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
@@ -247,11 +338,12 @@
       if (!button) return;
       const action = button.dataset.switchAction;
       let currentPassphrase;
-      if (action === 'pause' || action === 'cancel') {
+      if (action === 'pause' || action === 'cancel' || action === 'recover') {
         currentPassphrase = window.prompt(`Enter your current Home Source login passphrase to ${action} this switch:`);
         if (currentPassphrase === null) return;
       }
       if (action === 'cancel' && !window.confirm('Cancel this continuity switch? Its encrypted history remains, but reminders stop.')) return;
+      if (action === 'recover' && !window.confirm('Prove you are here and stop this delivery run? Home Source will start a fresh check-in cycle. This is unavailable after the first recipient grant activates.')) return;
       button.disabled = true;
       try {
         if (action === 'check-in') {
@@ -259,7 +351,7 @@
           setSwitchMessage('Check-in recorded.');
         } else {
           await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/${action}`, { current_passphrase:currentPassphrase, operation_key:operationKey(action) });
-          setSwitchMessage(action === 'resume' ? 'Check-ins resumed.' : action === 'pause' ? 'Check-ins paused.' : 'Switch cancelled.');
+          setSwitchMessage(action === 'resume' ? 'Check-ins resumed.' : action === 'pause' ? 'Check-ins paused.' : action === 'recover' ? 'Delivery stopped. A fresh check-in cycle is armed.' : 'Switch cancelled.');
         }
         await loadSwitch();
       } catch (error) { setSwitchMessage(error.message, true); }
@@ -271,7 +363,7 @@
       button.disabled = true;
       try {
         const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/outbox/retry`, {});
-        setSwitchMessage(`${result.retry_count} mail item${result.retry_count === 1 ? '' : 's'} queued for retry.`);
+        setSwitchMessage(`${result.retry_count} notification item${result.retry_count === 1 ? '' : 's'} queued for retry.`);
         await loadSwitch();
       } catch (error) { setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
@@ -294,13 +386,21 @@
     document.getElementById('trustees').addEventListener('click', async event => {
       const resend = event.target.closest('[data-resend]');
       const revoke = event.target.closest('[data-revoke]');
-      if (!resend && !revoke) return;
-      const button = resend || revoke;
+      const contactResend = event.target.closest('[data-trustee-contact-resend]');
+      const contactCancel = event.target.closest('[data-trustee-contact-cancel]');
+      if (!resend && !revoke && !contactResend && !contactCancel) return;
+      const button = resend || revoke || contactResend || contactCancel;
       button.disabled = true;
       try {
         if (resend) {
           const result = await API.post(`api/trustees/${encodeURIComponent(resend.dataset.resend)}/invitations/resend`, {});
           setTrusteeStatus(result.invitation.delivered ? 'Replacement invitation sent.' : 'Replacement invitation created, but email delivery could not be confirmed.');
+        } else if (contactResend) {
+          const result = await API.post(`api/trustees/${encodeURIComponent(contactResend.dataset.trusteeId)}/contacts/${encodeURIComponent(contactResend.dataset.trusteeContactResend)}/resend`, {});
+          setTrusteeStatus(result.verification.delivered ? 'Contact verification resent.' : 'Verification created, but email delivery could not be confirmed.');
+        } else if (contactCancel) {
+          await API.del(`api/trustees/${encodeURIComponent(contactCancel.dataset.trusteeId)}/contacts/${encodeURIComponent(contactCancel.dataset.trusteeContactCancel)}`);
+          setTrusteeStatus('Pending trustee contact replacement cancelled.');
         } else if (window.confirm('Revoke this trustee? Their keys and designations will no longer be eligible for future continuity use.')) {
           await API.del(`api/trustees/${encodeURIComponent(revoke.dataset.revoke)}`);
           setTrusteeStatus('Trustee revoked.');
@@ -309,7 +409,108 @@
       } catch (error) { setTrusteeStatus(error.message, true); }
       finally { button.disabled = false; }
     });
-    Promise.all([load(), loadSwitch()]).catch(error => setSwitchMessage(error.message, true));
+    document.getElementById('trustees').addEventListener('submit', async event => {
+      const form = event.target.closest('[data-trustee-contact-form]');
+      if (!form) return;
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await API.post(`api/trustees/${encodeURIComponent(form.dataset.trusteeContactForm)}/contacts/email`, {
+          email:new FormData(form).get('email')
+        });
+        form.reset();
+        setTrusteeStatus(result.verification.already_verified ? 'That trustee contact is already verified.' : result.verification.delivered ? 'Trustee contact verification sent.' : 'Verification created, but email delivery could not be confirmed.');
+        await load();
+      } catch (error) { setTrusteeStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('directory').addEventListener('submit', async event => {
+      const form = event.target.closest('[data-member-contact-form]');
+      if (!form) return;
+      event.preventDefault();
+      if (!currentSwitch || currentSwitch.status !== 'draft') return setContactStatus('Contact changes require an editable continuity draft.', true);
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/contacts/members/${encodeURIComponent(form.dataset.memberContactForm)}/email`, {
+          email:new FormData(form).get('email')
+        });
+        setContactStatus(result.verification.delivered ? 'Verification email sent.' : 'Verification created, but email delivery could not be confirmed.');
+        await load();
+      } catch (error) { setContactStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('directory').addEventListener('click', async event => {
+      const resend = event.target.closest('[data-contact-resend]');
+      const revoke = event.target.closest('[data-contact-revoke]');
+      if (!resend && !revoke) return;
+      if (!currentSwitch || currentSwitch.status !== 'draft') return setContactStatus('Contact changes require an editable continuity draft.', true);
+      const button = resend || revoke;
+      button.disabled = true;
+      try {
+        if (resend) {
+          const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/contacts/${encodeURIComponent(resend.dataset.contactResend)}/resend`, {});
+          setContactStatus(result.verification.delivered ? 'Replacement verification email sent.' : 'Replacement verification created, but email delivery could not be confirmed.');
+        } else if (window.confirm('Remove this continuity contact? Any unused verification link will stop working.')) {
+          await API.del(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/contacts/${encodeURIComponent(revoke.dataset.contactRevoke)}`);
+          setContactStatus('Continuity contact removed.');
+        } else { return; }
+        await load();
+      } catch (error) { setContactStatus(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('brrr-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const secret = document.getElementById('brrr-secret').value.trim();
+        await API.put('api/continuity/notification-channels/brrr', {
+          enabled:document.getElementById('brrr-enabled').checked,
+          label:document.getElementById('brrr-label').value,
+          ...(secret ? { secret } : {})
+        });
+        document.getElementById('brrr-secret').value = '';
+        setSwitchMessage('brrr configuration saved; changed targets require a new receipt acknowledgement.');
+        await loadReadiness();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('brrr-test').addEventListener('click', async event => {
+      event.currentTarget.disabled = true;
+      try { await API.post('api/continuity/notification-channels/brrr/test', {}); setSwitchMessage('brrr transport accepted the test.'); await loadReadiness(); }
+      catch (error) { setSwitchMessage(error.message, true); }
+      finally { event.currentTarget.disabled = false; }
+    });
+    document.getElementById('brrr-clear').addEventListener('click', async () => {
+      if (!window.confirm('Clear the saved brrr target?')) return;
+      try { await API.del('api/continuity/notification-channels/brrr'); setSwitchMessage('brrr target cleared.'); await loadReadiness(); }
+      catch (error) { setSwitchMessage(error.message, true); }
+    });
+    document.getElementById('reachability-channels').addEventListener('click', async event => {
+      const challenge = event.target.closest('[data-reachability-challenge]');
+      const acknowledge = event.target.closest('[data-reachability-ack]');
+      if (!challenge && !acknowledge) return;
+      const button = challenge || acknowledge;
+      const channel = challenge?.dataset.reachabilityChallenge || acknowledge.dataset.reachabilityAck;
+      button.disabled = true;
+      try {
+        if (challenge) {
+          const result = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness/${channel}/challenge`, {});
+          setSwitchMessage(result.challenge.delivered ? `${channel} challenge sent.` : `${channel} challenge created, but transport did not accept it.`);
+        } else {
+          const input = document.querySelector(`[data-reachability-code="${channel}"]`);
+          if (!input.value.trim()) throw new Error('Enter the code you received.');
+          reachability = await API.post(`api/continuity/switch/${encodeURIComponent(currentSwitch.id)}/readiness/${channel}/acknowledge`, { code:input.value.trim() });
+          input.value = '';
+          setSwitchMessage(`${channel} receipt acknowledged.`);
+        }
+        await loadReadiness();
+      } catch (error) { setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    loadSwitch().then(load).catch(error => setSwitchMessage(error.message, true));
   </script>
 </body>
 </html>

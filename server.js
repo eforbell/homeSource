@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { pool } = require('./lib/db');
 const { hashPassphrase, verifyPassphrase, createSession, validateSession, destroySession, cleanExpiredSessions, authEnabled, parseCookie, requireAuth, requireParent } = require('./lib/auth');
-const { listDocuments, getDocument, createDocument, encryptDocumentInPlace, updatePkiDocumentAccess, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount, canMemberAccessDocument } = require('./lib/documents');
+const { listDocuments, getDocument, createDocument, encryptDocumentInPlace, updatePkiDocumentAccess, updateDocument, archiveDocument, permanentDeleteDocument, addOwner, removeOwner, listMembers, getMember, memberCount } = require('./lib/documents');
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
@@ -30,6 +30,13 @@ const { createKeyNotificationDispatcher } = require('./lib/key-notification-disp
 const { getMailerConfig, sendMail } = require('./lib/mailer');
 const trustees = require('./lib/trustees');
 const continuity = require('./lib/continuity');
+const continuityContacts = require('./lib/continuity-contacts');
+const continuityReadiness = require('./lib/continuity-readiness');
+const trusteeContacts = require('./lib/trustee-contacts');
+const continuityPackets = require('./lib/continuity-packets');
+const continuityAuthorization = require('./lib/continuity-authorization');
+const brrr = require('./lib/brrr');
+const { buildAppUrl, tryBuildAppUrl } = require('./lib/app-url');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -52,6 +59,44 @@ function allowSelfFraming(res) {
   if (!existing) return;
   const updated = existing.replace(/frame-ancestors\s+'none'/, "frame-ancestors 'self'");
   res.setHeader('Content-Security-Policy', updated);
+}
+
+async function requireDocumentAuthorization(req, res, mode = 'read', documentId = req.params.id) {
+  try {
+    return await continuityAuthorization.assertDocumentAccess({ documentId, actor: req.member, mode });
+  } catch (err) {
+    const status = err.statusCode || (err instanceof TypeError ? 400 : 500);
+    res.status(status).json({ error: status < 500 ? err.message : 'Unable to authorize document access' });
+    return null;
+  }
+}
+
+function insightDocumentIds(insight) {
+  const ids = Array.isArray(insight?.source_document_ids) ? insight.source_document_ids.map(Number).filter(Boolean) : [];
+  if (insight?.subject_type === 'document' && Number(insight.subject_id) > 0) ids.push(Number(insight.subject_id));
+  return [...new Set(ids)];
+}
+
+async function canAccessInsight(insight, actor, mode = 'read') {
+  const documentIds = insightDocumentIds(insight);
+  const authorizations = await continuityAuthorization.resolveDocumentAuthorizations({ documentIds, actor });
+  for (const documentId of documentIds) {
+    const authorization = authorizations.get(documentId);
+    if (!authorization || (mode === 'administer' ? !authorization.can_administer : !authorization.can_read)) return false;
+  }
+  return true;
+}
+
+async function filterAccessibleInsights(rows, actor, mode = 'read') {
+  const documentIds = [...new Set((rows || []).flatMap(insightDocumentIds))];
+  const authorizations = await continuityAuthorization.resolveDocumentAuthorizations({ documentIds, actor });
+  const permission = mode === 'administer' ? 'can_administer' : 'can_read';
+  return (rows || []).filter((insight) => insightDocumentIds(insight)
+    .every((documentId) => authorizations.get(documentId)?.[permission]));
+}
+
+async function visibleInsightSummary(actor) {
+  return insights.getVisibleInsightSummary(actor.id);
 }
 
 function buildSovereignFontsCss() {
@@ -187,6 +232,21 @@ app.get('/sovereign-fonts.css', (_req, res) => {
 app.get(['/check-in', '/check-in.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'check-in.html'));
+});
+
+app.get(['/continuity-contact', '/continuity-contact.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'continuity-contact.html'));
+});
+
+app.get(['/trustee-contact', '/trustee-contact.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'trustee-contact.html'));
+});
+
+app.get(['/trustee-action', '/trustee-action.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'trustee-action.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -432,23 +492,7 @@ app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
 // ── Continuity trustees ──────────────────────────────────────────────────────
 
 function trusteeInvitationUrl(token) {
-  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
-  if (!configuredBaseUrl) throw new Error('APP_URL is required for trustee invitations');
-  let invitationUrl;
-  try {
-    invitationUrl = new URL('/trustee-invite.html', configuredBaseUrl);
-  } catch {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  if (!['http:', 'https:'].includes(invitationUrl.protocol)) {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  const localHost = ['localhost', '127.0.0.1', '::1'].includes(invitationUrl.hostname);
-  if (invitationUrl.protocol !== 'https:' && !localHost) {
-    throw new Error('APP_URL must use HTTPS for trustee invitations (except localhost)');
-  }
-  invitationUrl.searchParams.set('token', token);
-  return invitationUrl.toString();
+  return buildAppUrl('trustee-invite.html', { token });
 }
 
 function trusteeInvitationMessage({ trustee, operatorName, invitationUrl, expiresAt }) {
@@ -476,30 +520,97 @@ async function deliverTrusteeInvitation({ trustee, invitation, operator }) {
   };
 }
 
-app.get('/api/trustees', requireAuth, requireParent, async (_req, res) => {
+function trusteeContactVerificationUrl(token) {
+  return buildAppUrl('trustee-contact.html', { token });
+}
+
+async function deliverTrusteeContactVerification({ started, operator }) {
+  if (!started.token) return { delivered: false, transport: null, reason: null, already_verified: true };
+  const expiry = new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'long', timeStyle: 'short', timeZone: process.env.HOUSEHOLD_TIMEZONE || 'America/New_York'
+  }).format(new Date(started.expires_at));
+  const delivery = await sendMail({
+    to: started.contact.normalized_address,
+    subject: 'Confirm your Home Source trustee contact address',
+    text: `${operator.name} has requested that this address replace your current Home Source trustee contact. This does not change your trustee key or grant access to any document.\n\nConfirm the new address with this one-time link:\n${trusteeContactVerificationUrl(started.token)}\n\nThis link expires ${expiry}. If you were not expecting this request, you can ignore it and the existing address will remain active.`
+  });
+  return {
+    delivered: delivery.delivered === true,
+    transport: delivery.transport || null,
+    reason: delivery.reason || null,
+    already_verified: false
+  };
+}
+
+function memberContactVerificationUrl(token) {
+  return buildAppUrl('continuity-contact.html', { token });
+}
+
+function memberContactVerificationMessage({ contact, operatorName, verificationUrl, expiresAt }) {
+  const expiry = new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'long', timeStyle: 'short', timeZone: process.env.HOUSEHOLD_TIMEZONE || 'America/New_York'
+  }).format(new Date(expiresAt));
+  return {
+    to: contact.normalized_address,
+    subject: 'Confirm a private Home Source contact address',
+    text: `${operatorName} has asked you to confirm this email address for a future private family continuity message. This preparation does not give access to any document and does not mean that anything has happened.\n\nConfirm the address with this one-time link:\n${verificationUrl}\n\nThis link expires ${expiry}. If you were not expecting this request, you can ignore it.`
+  };
+}
+
+async function deliverMemberContactVerification({ started, operator }) {
+  if (!started.token) {
+    return { delivered: false, transport: null, reason: null, already_verified: true };
+  }
+  const delivery = await sendMail(memberContactVerificationMessage({
+    contact: started.contact,
+    operatorName: operator.name,
+    verificationUrl: memberContactVerificationUrl(started.token),
+    expiresAt: started.expires_at
+  }));
+  return {
+    delivered: delivery.delivered === true,
+    transport: delivery.transport || null,
+    reason: delivery.reason || null,
+    already_verified: false
+  };
+}
+
+app.get('/api/trustees', requireAuth, requireParent, async (req, res) => {
   try {
-    res.json(await trustees.listTrustees());
+    res.json(await trustees.listTrustees(req.member.id));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/trustees/:id/keys', requireAuth, requireParent, async (req, res) => {
   try {
-    res.json(await trustees.listTrusteeKeys(req.params.id));
+    res.json(await trustees.listTrusteeKeys(req.params.id, req.member.id));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, res) => {
+app.get('/api/continuity/directory', requireAuth, requireParent, async (req, res) => {
   try {
     const { rows: members } = await pool.query(
       `SELECT m.id, m.name, m.role, m.avatar_emoji,
+              mcc.id AS contact_id, mcc.normalized_address AS contact_address,
+              mcc.status AS contact_status, mcc.verified_at AS contact_verified_at,
               COUNT(DISTINCT dd.id)::int AS designation_count,
               COUNT(DISTINCT ek.id) FILTER (WHERE ek.revoked_at IS NULL)::int AS active_key_count
        FROM family_members m
        LEFT JOIN document_designations dd ON dd.member_id = m.id
+         AND EXISTS (SELECT 1 FROM document_owners own WHERE own.document_id = dd.document_id AND own.member_id = $1)
        LEFT JOIN encryption_keys ek ON ek.member_id = m.id AND ek.key_type = 'member'
-       GROUP BY m.id ORDER BY m.role, m.name`
+       LEFT JOIN member_contact_channels mcc ON mcc.member_id = m.id
+         AND mcc.channel_type = 'email' AND mcc.status <> 'revoked'
+         AND EXISTS (
+           SELECT 1 FROM continuity_switches contact_switch
+           WHERE contact_switch.owner_id = $1 AND contact_switch.status <> 'cancelled'
+             AND (EXISTS (SELECT 1 FROM continuity_recipients recipient WHERE recipient.switch_id = contact_switch.id AND recipient.member_id = m.id)
+               OR EXISTS (SELECT 1 FROM document_designations staged WHERE staged.document_id = contact_switch.staged_letter_document_id AND staged.member_id = m.id))
+         )
+       GROUP BY m.id, mcc.id ORDER BY m.role, m.name`,
+      [req.member.id]
     );
-    const trusteeRows = await trustees.listTrustees();
+    const trusteeRows = await trustees.listTrustees(req.member.id);
     const { rows: documents } = await pool.query(
       `SELECT d.id, d.title, d.status, d.encryption_mode,
               COALESCE(json_agg(json_build_object(
@@ -509,10 +620,236 @@ app.get('/api/continuity/directory', requireAuth, requireParent, async (_req, re
        FROM documents d
        JOIN document_designations dd ON dd.document_id = d.id
        WHERE d.status = 'active'
-       GROUP BY d.id ORDER BY d.title`
+         AND EXISTS (SELECT 1 FROM document_owners own WHERE own.document_id = d.id AND own.member_id = $1)
+       GROUP BY d.id ORDER BY d.title`,
+      [req.member.id]
     );
     res.json({ members, trustees: trusteeRows, documents });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/continuity/switch/:id/contacts', requireAuth, requireParent, async (req, res) => {
+  try {
+    const contacts = await continuityContacts.listMemberContacts({
+      ownerId: req.member.id,
+      switchId: req.params.id
+    });
+    res.json({ contacts });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/switch/:id/contacts/members/:memberId/email', requireAuth, requireParent, async (req, res) => {
+  try {
+    // Reject an unusable deployment URL before persisting a token that cannot be delivered.
+    memberContactVerificationUrl('placeholder');
+    const started = await continuityContacts.startMemberEmailVerification({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      memberId: req.params.memberId,
+      email: req.body?.email
+    });
+    const delivery = await deliverMemberContactVerification({ started, operator: req.member });
+    await audit.log('continuity.contact_verification_started', 'member_contact_channel', started.contact.id, req.member.id, {
+      switch_id: Number(req.params.id),
+      member_id: started.contact.member_id,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.status(started.already_verified ? 200 : 201).json({
+      contact: started.contact,
+      verification: {
+        expires_at: started.expires_at,
+        delivered: delivery.delivered,
+        already_verified: started.already_verified
+      }
+    });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/switch/:id/contacts/:contactId/resend', requireAuth, requireParent, async (req, res) => {
+  try {
+    memberContactVerificationUrl('placeholder');
+    const started = await continuityContacts.resendMemberEmailVerification({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      contactId: req.params.contactId
+    });
+    const delivery = await deliverMemberContactVerification({ started, operator: req.member });
+    await audit.log('continuity.contact_verification_resent', 'member_contact_channel', started.contact.id, req.member.id, {
+      switch_id: Number(req.params.id),
+      member_id: started.contact.member_id,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.json({
+      contact: started.contact,
+      verification: { expires_at: started.expires_at, delivered: delivery.delivered }
+    });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/continuity/switch/:id/contacts/:contactId', requireAuth, requireParent, async (req, res) => {
+  try {
+    const contact = await continuityContacts.revokeMemberContact({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      contactId: req.params.contactId
+    });
+    await audit.log('continuity.contact_revoked', 'member_contact_channel', contact.id, req.member.id, {
+      switch_id: Number(req.params.id), member_id: contact.member_id
+    });
+    res.json({ ok: true, contact });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.put('/api/continuity/notification-channels/brrr', requireAuth, requireParent, async (req, res) => {
+  try {
+    const channel = await continuityReadiness.saveBrrrChannel({
+      ownerId: req.member.id,
+      secret: req.body?.secret,
+      enabled: req.body?.enabled,
+      label: req.body?.label
+    });
+    await audit.log('continuity.brrr_configured', 'member_notification_channel', channel.id, req.member.id, {
+      enabled: channel.enabled, has_secret: channel.has_secret,
+      target_mask: channel.secret_mask, config_version: channel.config_version
+    });
+    res.json(channel);
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.delete('/api/continuity/notification-channels/brrr', requireAuth, requireParent, async (req, res) => {
+  try {
+    const removed = await continuityReadiness.clearBrrrChannel({ ownerId: req.member.id });
+    await audit.log('continuity.brrr_cleared', 'family_member', req.member.id, req.member.id);
+    res.json({ ok: true, removed });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+function continuityOpenUrl() {
+  return tryBuildAppUrl('continuity.html');
+}
+
+app.post('/api/continuity/notification-channels/brrr/test', requireAuth, requireParent, async (req, res) => {
+  try {
+    const channel = await continuityReadiness.getBrrrChannel(req.member.id);
+    if (!channel?.enabled || !channel.target_secret) return res.status(400).json({ error: 'Enable and save a brrr target first' });
+    const payload = {
+      title: 'Home Source',
+      message: 'A private Home Source check-in needs your attention.'
+    };
+    const openUrl = continuityOpenUrl();
+    if (openUrl) payload.open_url = openUrl;
+    try {
+      const response = await brrr.sendBrrrNotification(channel.target_secret, payload);
+      const safe = await continuityReadiness.recordBrrrTransport({ ownerId: req.member.id, accepted: true });
+      await audit.log('continuity.brrr_transport_tested', 'member_notification_channel', channel.id, req.member.id, {
+        accepted: true, response_status: response.status || null, config_version: safe.config_version
+      });
+      res.json({ ok: true, channel: safe });
+    } catch (error) {
+      const errorClass = continuityReadiness.safeErrorClass(error);
+      await continuityReadiness.recordBrrrTransport({ ownerId: req.member.id, accepted: false, errorClass });
+      await audit.log('continuity.brrr_transport_tested', 'member_notification_channel', channel.id, req.member.id, {
+        accepted: false, error_class: errorClass
+      });
+      res.status(502).json({ error: 'brrr test delivery failed' });
+    }
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.get('/api/continuity/switch/:id/readiness', requireAuth, requireParent, async (req, res) => {
+  try {
+    res.json(await continuityReadiness.getReadiness({ ownerId: req.member.id, switchId: req.params.id }));
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/readiness/:channel/challenge', requireAuth, requireParent, async (req, res) => {
+  let created;
+  try {
+    created = await continuityReadiness.createReachabilityChallenge({
+      ownerId: req.member.id, switchId: req.params.id, channelType: req.params.channel
+    });
+    let delivered = false;
+    if (created.config.channel_type === 'email') {
+      const delivery = await sendMail({
+        to: created.config.target,
+        subject: 'Home Source reachability confirmation',
+        text: `Home Source reachability code: ${created.code}\n\nEnter this code while signed in to Home Source. This code cannot check you in, arm continuity, or grant document access.`
+      });
+      delivered = delivery.delivered === true;
+    } else {
+      const payload = {
+        title: 'Home Source',
+        message: `Home Source reachability code: ${created.code}`
+      };
+      const openUrl = continuityOpenUrl();
+      if (openUrl) payload.open_url = openUrl;
+      await brrr.sendBrrrNotification(created.config.target, payload);
+      delivered = true;
+    }
+    await continuityReadiness.recordChallengeTransport({
+      attestationId: created.attestation.id,
+      accepted: delivered,
+      errorClass: delivered ? null : 'transport_not_accepted'
+    });
+    if (created.config.channel_type === 'brrr') {
+      await continuityReadiness.recordBrrrTransport({
+        ownerId: req.member.id, accepted: delivered,
+        errorClass: delivered ? null : 'transport_not_accepted'
+      });
+    }
+    await audit.log('continuity.reachability_challenge_sent', 'continuity_switch', Number(req.params.id), req.member.id, {
+      channel_type: created.config.channel_type,
+      configuration_version: created.config.configuration_version,
+      target_mask: created.config.target_mask,
+      expires_at: created.attestation.expires_at,
+      transport_accepted: delivered
+    });
+    res.status(201).json({
+      challenge: {
+        channel_type: created.config.channel_type,
+        target_mask: created.config.target_mask,
+        expires_at: created.attestation.expires_at,
+        delivered
+      }
+    });
+  } catch (err) {
+    if (created?.attestation?.id) {
+      const errorClass = continuityReadiness.safeErrorClass(err);
+      await continuityReadiness.recordChallengeTransport({
+        attestationId: created.attestation.id, accepted: false, errorClass
+      }).catch(() => {});
+      if (created.config?.channel_type === 'brrr') {
+        await continuityReadiness.recordBrrrTransport({
+          ownerId: req.member.id, accepted: false, errorClass
+        }).catch(() => {});
+      }
+      return res.status(502).json({ error: 'Reachability challenge delivery failed' });
+    }
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/switch/:id/readiness/:channel/acknowledge', requireAuth, requireParent, async (req, res) => {
+  try {
+    const readiness = await continuityReadiness.acknowledgeReachability({
+      ownerId: req.member.id, switchId: req.params.id,
+      channelType: req.params.channel, code: req.body?.code
+    });
+    await audit.log('continuity.reachability_acknowledged', 'continuity_switch', Number(req.params.id), req.member.id, {
+      channel_type: req.params.channel
+    });
+    res.json(readiness);
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
 });
 
 async function verifyContinuityPassphrase(memberId, passphrase) {
@@ -549,7 +886,7 @@ app.get('/api/continuity/key-options', requireAuth, requireParent, async (req, r
        LEFT JOIN vault_trustees vt ON vt.id = ek.trustee_id
        WHERE ek.revoked_at IS NULL
          AND ((ek.key_type = 'member' AND (ek.member_id = $1 OR m.role = 'kid'))
-           OR (ek.key_type = 'trustee' AND vt.status = 'registered'))
+           OR (ek.key_type = 'trustee' AND vt.status = 'registered' AND vt.created_by = $1))
        ORDER BY CASE WHEN ek.member_id = $1 THEN 0 ELSE 1 END, COALESCE(m.name, vt.name), ek.created_at DESC`,
       [req.member.id]
     );
@@ -595,6 +932,31 @@ app.post('/api/continuity/switch/:id/letter/stage', requireAuth, requireParent, 
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.get('/api/continuity/switch/:id/packet', requireAuth, requireParent, async (req, res) => {
+  try {
+    const packet = await continuityPackets.getPacketForOwner({ ownerId: req.member.id, switchId: req.params.id });
+    if (!packet) return res.status(404).json({ error: 'Continuity switch not found' });
+    res.json(packet);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/switch/:id/packet/stage', requireAuth, requireParent, async (req, res) => {
+  try {
+    const packet = await continuityPackets.stagePacket({
+      ownerId: req.member.id,
+      switchId: req.params.id,
+      selectedDocumentIds: req.body?.selected_document_ids || [],
+      witnessTrusteeIds: req.body?.witness_trustee_ids || [],
+      operationKey: req.body?.operation_key
+    });
+    await audit.log('continuity.packet_staged', 'continuity_packet_version', packet.id, req.member.id, {
+      switch_id: Number(req.params.id), version_number: Number(packet.version_number),
+      document_count: packet.documents.length, recipient_count: packet.recipients.length
+    });
+    res.status(201).json(packet);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 app.post('/api/continuity/switch/:id/letter/commit', requireAuth, requireParent, async (req, res) => {
   try {
     await verifyContinuityPassphrase(req.member.id, req.body?.current_passphrase);
@@ -632,13 +994,19 @@ app.post('/api/continuity/switch/:id/outbox/retry', requireAuth, requireParent, 
 app.post('/api/continuity/switch/:id/:action', requireAuth, requireParent, async (req, res) => {
   try {
     const action = String(req.params.action);
-    if (!['pause', 'resume', 'cancel'].includes(action)) return res.status(404).json({ error: 'Unknown continuity action' });
+    if (!['pause', 'resume', 'cancel', 'recover'].includes(action)) return res.status(404).json({ error: 'Unknown continuity action' });
     if (action !== 'resume') await verifyContinuityPassphrase(req.member.id, req.body?.current_passphrase);
-    const item = await continuity.transitionOwnerAction({
-      switchId: Number(req.params.id), ownerId: req.member.id, action,
+    const input = {
+      switchId: Number(req.params.id), ownerId: req.member.id,
       operationKey: req.body?.operation_key
-    });
-    const auditAction = { pause: 'continuity.paused', resume: 'continuity.resumed', cancel: 'continuity.cancelled' }[action];
+    };
+    const item = action === 'recover'
+      ? await continuity.recoverOwner(input)
+      : await continuity.transitionOwnerAction({ ...input, action });
+    const auditAction = {
+      pause: 'continuity.paused', resume: 'continuity.resumed', cancel: 'continuity.cancelled',
+      recover: 'continuity.owner_recovered'
+    }[action];
     await audit.log(auditAction, 'continuity_switch', item.id, req.member.id);
     res.json(item);
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -679,6 +1047,144 @@ app.post('/api/continuity/check-in', async (req, res) => {
   } catch (_err) { recordCheckinFailure(req); res.status(404).json({ error: 'This check-in is not available' }); }
 });
 
+app.post('/api/continuity/trustee-action/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowCheckinAttempt(req)) return res.status(429).json({ error: 'This trustee action is not available' });
+    const action = await continuity.getTrusteeAction(req.body?.token);
+    if (!action) {
+      recordCheckinFailure(req);
+      return res.status(404).json({ error: 'This trustee action is not available' });
+    }
+    res.json(action);
+  } catch (_err) {
+    recordCheckinFailure(req);
+    res.status(404).json({ error: 'This trustee action is not available' });
+  }
+});
+
+app.post('/api/continuity/trustee-action/pause', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowCheckinAttempt(req)) return res.status(429).json({ error: 'This trustee action is not available' });
+    const result = await continuity.pauseWithTrusteeToken({ rawToken: req.body?.token });
+    if (!result) {
+      recordCheckinFailure(req);
+      return res.status(404).json({ error: 'This trustee action is not available' });
+    }
+    await audit.log('continuity.trustee_paused', 'continuity_delivery_run', null, null, {
+      pause_deadline_at: result.pause_deadline_at, replayed: result.replayed
+    });
+    res.json(result);
+  } catch (_err) {
+    recordCheckinFailure(req);
+    res.status(404).json({ error: 'This trustee action is not available' });
+  }
+});
+
+app.post('/api/continuity/contact-verification/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const verification = await continuityContacts.getValidMemberEmailVerification(req.body?.token);
+    if (!verification) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    res.json({
+      recipient_name: verification.recipient_name,
+      masked_address: verification.masked_address,
+      expires_at: verification.expires_at
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/contact-verification/confirm', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const contact = await continuityContacts.verifyMemberEmail({ token: req.body?.token });
+    if (!contact) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    await audit.log('continuity.contact_verified', 'member_contact_channel', contact.id, null, {
+      member_id: contact.member_id
+    });
+    res.json({ verified: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/continuity/trustee-contact-verification/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const verification = await trusteeContacts.getValidEmailReplacement(req.body?.token);
+    if (!verification) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    res.json(verification);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/continuity/trustee-contact-verification/confirm', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const contact = await trusteeContacts.verifyEmailReplacement({ token: req.body?.token });
+    if (!contact) return res.status(404).json({ error: 'Verification link is unavailable or expired' });
+    await audit.log('trustee.contact_verified', 'trustee_contact_channel', contact.id, null, {
+      trustee_id: contact.trustee_id
+    });
+    res.json({ verified: true, status: contact.status, target_mask: contact.target_mask });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.post('/api/trustees/:id/contacts/email', requireAuth, requireParent, async (req, res) => {
+  try {
+    trusteeContactVerificationUrl('placeholder');
+    const started = await trusteeContacts.startEmailReplacement({
+      ownerId: req.member.id, trusteeId: req.params.id, email: req.body?.email
+    });
+    const delivery = await deliverTrusteeContactVerification({ started, operator: req.member });
+    await audit.log('trustee.contact_verification_started', 'trustee_contact_channel', started.contact.id, req.member.id, {
+      trustee_id: started.contact.trustee_id,
+      target_mask: started.contact.target_mask,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.status(started.already_verified ? 200 : 201).json({
+      contact: started.contact,
+      verification: {
+        expires_at: started.expires_at,
+        delivered: delivery.delivered,
+        already_verified: started.already_verified
+      }
+    });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.post('/api/trustees/:id/contacts/:contactId/resend', requireAuth, requireParent, async (req, res) => {
+  try {
+    trusteeContactVerificationUrl('placeholder');
+    const started = await trusteeContacts.resendEmailReplacement({
+      ownerId: req.member.id, trusteeId: req.params.id, contactId: req.params.contactId
+    });
+    const delivery = await deliverTrusteeContactVerification({ started, operator: req.member });
+    await audit.log('trustee.contact_verification_resent', 'trustee_contact_channel', started.contact.id, req.member.id, {
+      trustee_id: started.contact.trustee_id,
+      target_mask: started.contact.target_mask,
+      expires_at: started.expires_at,
+      email_delivery: delivery
+    });
+    res.json({ contact: started.contact, verification: { expires_at: started.expires_at, delivered: delivery.delivered } });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
+app.delete('/api/trustees/:id/contacts/:contactId', requireAuth, requireParent, async (req, res) => {
+  try {
+    const contact = await trusteeContacts.cancelEmailReplacement({
+      ownerId: req.member.id, trusteeId: req.params.id, contactId: req.params.contactId
+    });
+    await audit.log('trustee.contact_verification_cancelled', 'trustee_contact_channel', contact.id, req.member.id, {
+      trustee_id: contact.trustee_id
+    });
+    res.json({ ok: true });
+  } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
+});
+
 app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {
   try {
     const { name, relationship, email } = req.body || {};
@@ -712,7 +1218,7 @@ app.post('/api/trustees', requireAuth, requireParent, async (req, res) => {
 app.post('/api/trustees/:id/invitations/resend', requireAuth, requireParent, async (req, res) => {
   try {
     trusteeInvitationUrl('placeholder');
-    const replacement = await trustees.replaceTrusteeInvitation(req.params.id);
+    const replacement = await trustees.replaceTrusteeInvitation(req.params.id, req.member.id);
     if (!replacement) return res.status(404).json({ error: 'Trustee is not available for invitation' });
     const delivery = await deliverTrusteeInvitation({
       trustee: replacement.trustee,
@@ -730,7 +1236,7 @@ app.post('/api/trustees/:id/invitations/resend', requireAuth, requireParent, asy
 
 app.delete('/api/trustees/:id', requireAuth, requireParent, async (req, res) => {
   try {
-    const trustee = await trustees.revokeTrustee(req.params.id);
+    const trustee = await trustees.revokeTrustee(req.params.id, req.member.id);
     if (!trustee) return res.status(404).json({ error: 'Trustee not found or already revoked' });
     await audit.log('trustee.revoked', 'vault_trustee', trustee.id, req.member.id);
     res.json({ ok: true, trustee });
@@ -1048,7 +1554,7 @@ app.get('/api/members/:id/keys/:keyId/dependencies', requireAuth, async (req, re
     }
     const summary = await pki.getKeyDependencySummary(keyId, memberId);
     if (!summary) return res.status(404).json({ error: 'Key not found' });
-    res.json(summary);
+    res.json(await continuityAuthorization.sanitizeDependencySummary(summary, req.member));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1078,7 +1584,9 @@ app.delete('/api/members/:id/keys/:keyId', requireAuth, async (req, res) => {
       return res.status(409).json({
         error: blockedError,
         code: blockedCode,
-        affected_documents: (soleHolderDocs.length ? soleHolderDocs : inconsistentDocs).map((doc) => ({
+        affected_documents: (await continuityAuthorization.sanitizeDependencySummary({
+          documents: soleHolderDocs.length ? soleHolderDocs : inconsistentDocs
+        }, req.member)).documents.map((doc) => ({
           document_id: doc.document_id,
           title: doc.title
         }))
@@ -1131,7 +1639,8 @@ app.get('/api/documents', requireAuth, async (req, res) => {
       from_date: req.query.from,
       to_date: req.query.to,
       limit: req.query.limit,
-      offset: req.query.offset
+      offset: req.query.offset,
+      actor: req.member
     };
     if (req.member.role === 'kid') {
       filters.owner_id = req.member.id;
@@ -1145,11 +1654,10 @@ app.get('/api/documents/:id', requireAuth, async (req, res) => {
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    const authorization = await requireDocumentAuthorization(req, res, 'read', doc.id);
+    if (!authorization) return;
     await audit.log('document.viewed', 'document', doc.id, req.member.id);
-    res.json(doc);
+    res.json(continuityAuthorization.sanitizeDocument(doc, authorization));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1157,12 +1665,11 @@ app.get('/api/documents/:id/key-info', requireAuth, async (req, res) => {
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    const authorization = await requireDocumentAuthorization(req, res, 'read', doc.id);
+    if (!authorization) return;
     const info = await pki.getDocumentKeyInfo(doc.id);
     if (!info) return res.status(404).json({ error: 'Document key info not found' });
-    res.json(info);
+    res.json(continuityAuthorization.sanitizeKeyInfo(info, authorization));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1170,9 +1677,7 @@ app.get('/api/documents/:id/magicindex-status', requireAuth, async (req, res) =>
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'read', doc.id))) return;
     const mi = doc.metadata?.magicindex || null;
     res.json({
       state: mi?.state || null,
@@ -1217,9 +1722,7 @@ app.post('/api/documents/:id/encrypt', requireAuth, requireParent, async (req, r
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'administer', doc.id))) return;
     if (isEncryptedDocument(doc)) {
       return res.status(409).json({ error: 'Document is already encrypted' });
     }
@@ -1282,13 +1785,18 @@ app.post('/api/documents/:id/encrypt', requireAuth, requireParent, async (req, r
 app.put('/api/documents/:id', requireAuth, async (req, res) => {
   try {
     if (req.member.role === 'kid') return res.status(403).json({ error: 'Parent access required' });
+    const authorization = await requireDocumentAuthorization(req, res, 'administer');
+    if (!authorization) return;
     const forbidden = ['is_encrypted', 'encryption_mode', 'encryption_metadata', 'encryption_key_id'];
     const found = forbidden.filter((k) => req.body && Object.prototype.hasOwnProperty.call(req.body, k));
     if (found.length) return res.status(400).json({ error: `Encryption fields are immutable via this endpoint: ${found.join(', ')}` });
+    if (req.body?.metadata && Object.prototype.hasOwnProperty.call(req.body.metadata, 'continuity_letter')) {
+      return res.status(400).json({ error: 'Continuity metadata is reserved for the continuity workflow' });
+    }
     const doc = await updateDocument(req.params.id, req.body);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     await audit.log('document.updated', 'document', doc.id, req.member.id, { fields: Object.keys(req.body) });
-    res.json(doc);
+    res.json(continuityAuthorization.sanitizeDocument(doc, authorization));
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
@@ -1296,9 +1804,7 @@ app.post('/api/documents/:id/magicindex/reanalyze', requireAuth, requireParent, 
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'administer', doc.id))) return;
     if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'MagicIndex re-analysis is unavailable for encrypted documents' });
     if (doc.metadata?.magicindex?.state === 'pending') {
       return res.status(409).json({ error: 'MagicIndex re-analysis already pending for this document' });
@@ -1323,9 +1829,7 @@ app.delete('/api/documents/:id/magicindex', requireAuth, requireParent, async (r
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'administer', doc.id))) return;
     if (!doc.metadata?.magicindex) return res.status(404).json({ error: 'No MagicIndex data to delete' });
     const cleaned = { ...doc.metadata };
     delete cleaned.magicindex;
@@ -1337,6 +1841,7 @@ app.delete('/api/documents/:id/magicindex', requireAuth, requireParent, async (r
 
 app.delete('/api/documents/:id', requireAuth, requireParent, async (req, res) => {
   try {
+    if (!(await requireDocumentAuthorization(req, res, 'administer'))) return;
     if (req.query.permanent === 'true') {
       const doc = await getDocument(req.params.id);
       if (!doc) return res.status(404).json({ error: 'Document not found' });
@@ -1446,7 +1951,7 @@ app.post('/api/documents/:id/designations/seal', requireAuth, requireParent, asy
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) return res.status(403).json({ error: 'Access denied' });
+    if (!(await requireDocumentAuthorization(req, res, 'continuity_seal', doc.id))) return;
     if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') return res.status(409).json({ error: 'Document is not PKI-encrypted' });
     const encryptionMetadata = req.body?.encryption_metadata;
     if (!encryptionMetadata || typeof encryptionMetadata !== 'object') return res.status(400).json({ error: 'encryption_metadata is required' });
@@ -1501,7 +2006,7 @@ app.post('/api/documents/:id/designations/:keyId/unseal', requireAuth, requirePa
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) return res.status(403).json({ error: 'Access denied' });
+    if (!(await requireDocumentAuthorization(req, res, 'continuity_seal', doc.id))) return;
     const keyId = Number(req.params.keyId);
     const metadata = structuredClone(doc.encryption_metadata || {});
     metadata.version = 2;
@@ -1529,9 +2034,7 @@ app.post('/api/documents/:id/pki-holders/add', requireAuth, requireParent, async
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'continuity_seal', doc.id))) return;
     if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') {
       return res.status(409).json({ error: 'Document is not PKI-encrypted' });
     }
@@ -1660,9 +2163,7 @@ app.post('/api/documents/:id/pki-holders/replace', requireAuth, requireParent, a
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'continuity_seal', doc.id))) return;
     if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') {
       return res.status(409).json({ error: 'Document is not PKI-encrypted' });
     }
@@ -1829,9 +2330,7 @@ app.post('/api/documents/:id/pki-holders/remove', requireAuth, requireParent, as
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'continuity_seal', doc.id))) return;
     if (!isEncryptedDocument(doc) || doc.encryption_mode !== 'pki') {
       return res.status(409).json({ error: 'Document is not PKI-encrypted' });
     }
@@ -1980,6 +2479,7 @@ app.post('/api/documents/:id/files', requireAuth, async (req, res) => {
     if (req.member.role === 'kid') return res.status(403).json({ error: 'Parent access required' });
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await requireDocumentAuthorization(req, res, 'administer', doc.id))) return;
     if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'Adding files is unavailable for encrypted documents in v1' });
     const parts = await parseMultipart(req);
     const file = parts.file;
@@ -2003,9 +2503,7 @@ app.post('/api/documents/:id/files', requireAuth, async (req, res) => {
 app.get('/api/documents/:id/files/:fileId/download', requireAuth, async (req, res) => {
   try {
     const docId = Number(req.params.id);
-    if (!(await canMemberAccessDocument(docId, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'download', docId))) return;
     const { rows } = await pool.query(
       'SELECT df.* FROM document_files df WHERE df.id = $1 AND df.document_id = $2',
       [req.params.fileId, docId]
@@ -2038,6 +2536,7 @@ app.get('/api/thumbnails/:filename', async (req, res) => {
 
 app.post('/api/documents/:id/owners', requireAuth, requireParent, async (req, res) => {
   try {
+    if (!(await requireDocumentAuthorization(req, res, 'administer'))) return;
     const { member_id, ownership_type } = req.body;
     if (!member_id) return res.status(400).json({ error: 'member_id required' });
     const owner = await addOwner(req.params.id, member_id, ownership_type || 'owner');
@@ -2047,6 +2546,7 @@ app.post('/api/documents/:id/owners', requireAuth, requireParent, async (req, re
 
 app.delete('/api/documents/:id/owners/:memberId', requireAuth, requireParent, async (req, res) => {
   try {
+    if (!(await requireDocumentAuthorization(req, res, 'administer'))) return;
     const removed = await removeOwner(req.params.id, req.params.memberId);
     if (!removed) return res.status(404).json({ error: 'Owner not found' });
     res.json({ ok: true });
@@ -2100,6 +2600,7 @@ app.post('/api/tags/:id/merge', requireAuth, requireParent, async (req, res) => 
 app.put('/api/documents/:id/tags', requireAuth, async (req, res) => {
   try {
     if (req.member.role === 'kid') return res.status(403).json({ error: 'Parent access required' });
+    if (!(await requireDocumentAuthorization(req, res, 'administer'))) return;
     const { tag_ids } = req.body;
     if (!Array.isArray(tag_ids)) return res.status(400).json({ error: 'tag_ids array required' });
     await setDocumentTags(req.params.id, tag_ids);
@@ -2118,7 +2619,8 @@ app.get('/api/search', requireAuth, async (req, res) => {
       from_date: req.query.from,
       to_date: req.query.to,
       limit: req.query.limit,
-      offset: req.query.offset
+      offset: req.query.offset,
+      actor: req.member
     };
     res.json(await fullTextSearch(req.query.q, filters));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2130,6 +2632,7 @@ app.post('/api/documents/:id/share', requireAuth, requireParent, async (req, res
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!(await requireDocumentAuthorization(req, res, 'administer', doc.id))) return;
     if (isEncryptedDocument(doc)) return res.status(409).json({ error: 'Share links are unavailable for encrypted documents in v1' });
     const link = await createShareLink(req.params.id, req.member.id, req.body);
     await audit.log('share.created', 'share_link', link.id, req.member.id, { document_id: Number(req.params.id) });
@@ -2141,9 +2644,7 @@ app.get('/api/documents/:id/shares', requireAuth, async (req, res) => {
   try {
     const doc = await getDocument(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!(await canMemberAccessDocument(doc.id, req.member))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!(await requireDocumentAuthorization(req, res, 'read', doc.id))) return;
     res.json(await listShareLinks(req.params.id));
   }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -2377,13 +2878,14 @@ app.get('/api/audit', requireAuth, requireParent, async (req, res) => {
 
 app.get('/api/insights', requireAuth, requireParent, async (req, res) => {
   try {
-    res.json(await insights.listInsights(req.query));
+    const rows = await insights.listInsights(req.query);
+    res.json(await filterAccessibleInsights(rows, req.member));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/insights/summary', requireAuth, requireParent, async (_req, res) => {
+app.get('/api/insights/summary', requireAuth, requireParent, async (req, res) => {
   try {
-    res.json(await insights.getInsightSummary());
+    res.json(await visibleInsightSummary(req.member));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2391,12 +2893,16 @@ app.get('/api/insights/:id', requireAuth, requireParent, async (req, res) => {
   try {
     const insight = await insights.getInsight(req.params.id);
     if (!insight) return res.status(404).json({ error: 'Insight not found' });
+    if (!(await canAccessInsight(insight, req.member))) return res.status(403).json({ error: 'Access denied' });
     res.json(insight);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/insights/:id', requireAuth, requireParent, async (req, res) => {
   try {
+    const existing = await insights.getInsight(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Insight not found' });
+    if (!(await canAccessInsight(existing, req.member, 'administer'))) return res.status(403).json({ error: 'Access denied' });
     const updated = await insights.updateInsight(req.params.id, req.body, req.member.id);
     if (!updated) return res.status(404).json({ error: 'Insight not found' });
     await audit.log('insight.updated', 'magic_data', updated.id, req.member.id, {
@@ -2412,6 +2918,7 @@ app.delete('/api/insights/:id', requireAuth, requireParent, async (req, res) => 
   try {
     const existing = await insights.getInsight(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Insight not found' });
+    if (!(await canAccessInsight(existing, req.member, 'administer'))) return res.status(403).json({ error: 'Access denied' });
     const ok = await insights.deleteInsight(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Insight not found' });
     await audit.log('insight.deleted', 'magic_data', Number(req.params.id), req.member.id, {
@@ -2442,18 +2949,38 @@ app.post('/api/insights/scan', requireAuth, requireParent, async (req, res) => {
 
 app.get('/api/documents/:id/links', requireAuth, async (req, res) => {
   try {
-    res.json(await magicLinks.listLinksForDocument(req.params.id));
+    if (!(await requireDocumentAuthorization(req, res, 'read'))) return;
+    const links = await magicLinks.listLinksForDocument(req.params.id);
+    const visible = [];
+    for (const link of links) {
+      const related = await continuityAuthorization.resolveDocumentAuthorization({
+        documentId: link.related_document_id, actor: req.member
+      });
+      if (related?.can_read) visible.push(link);
+    }
+    res.json(visible);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.get('/api/links', requireAuth, requireParent, async (req, res) => {
   try {
-    res.json(await magicLinks.listLinks(req.query));
+    const links = await magicLinks.listLinks(req.query);
+    const visible = [];
+    for (const link of links) {
+      const [source, target] = await Promise.all([
+        continuityAuthorization.resolveDocumentAuthorization({ documentId: link.source_document_id, actor: req.member }),
+        continuityAuthorization.resolveDocumentAuthorization({ documentId: link.target_document_id, actor: req.member })
+      ]);
+      if (source?.can_read && target?.can_read) visible.push(link);
+    }
+    res.json(visible);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.post('/api/documents/:id/links', requireAuth, requireParent, async (req, res) => {
   try {
+    if (!(await requireDocumentAuthorization(req, res, 'administer'))) return;
+    if (!(await requireDocumentAuthorization(req, res, 'administer', req.body.target_document_id))) return;
     const link = await magicLinks.createManualLink({
       sourceDocumentId: Number(req.params.id),
       targetDocumentId: Number(req.body.target_document_id),
@@ -2472,6 +2999,10 @@ app.post('/api/documents/:id/links', requireAuth, requireParent, async (req, res
 
 app.put('/api/links/:id', requireAuth, requireParent, async (req, res) => {
   try {
+    const existing = await magicLinks.getLink(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Link not found' });
+    if (!(await requireDocumentAuthorization(req, res, 'administer', existing.source_document_id))) return;
+    if (!(await requireDocumentAuthorization(req, res, 'administer', existing.target_document_id))) return;
     const link = await magicLinks.updateLink(req.params.id, req.body, req.member.id);
     if (!link) return res.status(404).json({ error: 'Link not found' });
     await audit.log('link.updated', 'magic_link', link.id, req.member.id, {
@@ -2484,6 +3015,10 @@ app.put('/api/links/:id', requireAuth, requireParent, async (req, res) => {
 
 app.delete('/api/links/:id', requireAuth, requireParent, async (req, res) => {
   try {
+    const existing = await magicLinks.getLink(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Link not found' });
+    if (!(await requireDocumentAuthorization(req, res, 'administer', existing.source_document_id))) return;
+    if (!(await requireDocumentAuthorization(req, res, 'administer', existing.target_document_id))) return;
     const ok = await magicLinks.deleteLink(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Link not found' });
     await audit.log('link.deleted', 'magic_link', Number(req.params.id), req.member.id, {});
@@ -2505,15 +3040,16 @@ app.get('/api/stats', requireAuth, async (req, res) => {
   try {
     const isKid = req.member.role === 'kid';
     const ownerJoin = isKid ? 'JOIN document_owners do2 ON do2.document_id = d.id AND do2.member_id = $1' : '';
-    const ownerParams = isKid ? [req.member.id] : [];
+    const ownerParams = [req.member.id];
+    const visibleDocument = continuityAuthorization.continuityLetterVisibilitySql('d', '$1');
     const tasks = [
-      pool.query(`SELECT COUNT(*)::int AS total FROM documents d ${ownerJoin} WHERE d.status = 'active'`, ownerParams),
-      pool.query(`SELECT d.document_type, COUNT(*)::int AS count FROM documents d ${ownerJoin} WHERE d.status = 'active' GROUP BY d.document_type ORDER BY count DESC`, ownerParams),
-      pool.query(`SELECT d.id, d.title, d.document_type, d.created_at FROM documents d ${ownerJoin} WHERE d.status = 'active' ORDER BY d.created_at DESC LIMIT 5`, ownerParams),
-      pool.query(`SELECT d.id, d.title, d.document_type, d.expiry_date FROM documents d ${ownerJoin} WHERE d.status = 'active' AND d.expiry_date IS NOT NULL AND d.expiry_date <= NOW() + INTERVAL '90 days' ORDER BY d.expiry_date ASC LIMIT 10`, ownerParams),
+      pool.query(`SELECT COUNT(*)::int AS total FROM documents d ${ownerJoin} WHERE d.status = 'active' AND ${visibleDocument}`, ownerParams),
+      pool.query(`SELECT d.document_type, COUNT(*)::int AS count FROM documents d ${ownerJoin} WHERE d.status = 'active' AND ${visibleDocument} GROUP BY d.document_type ORDER BY count DESC`, ownerParams),
+      pool.query(`SELECT d.id, d.title, d.document_type, d.created_at FROM documents d ${ownerJoin} WHERE d.status = 'active' AND ${visibleDocument} ORDER BY d.created_at DESC LIMIT 5`, ownerParams),
+      pool.query(`SELECT d.id, d.title, d.document_type, d.expiry_date FROM documents d ${ownerJoin} WHERE d.status = 'active' AND ${visibleDocument} AND d.expiry_date IS NOT NULL AND d.expiry_date <= NOW() + INTERVAL '90 days' ORDER BY d.expiry_date ASC LIMIT 10`, ownerParams),
       getBackupStatus()
     ];
-    if (req.member?.role === 'parent') tasks.push(insights.getInsightSummary());
+    if (req.member?.role === 'parent') tasks.push(visibleInsightSummary(req.member));
     const [docs, types, recent, expiring, backup, insightSummary = null] = await Promise.all(tasks);
     const continuitySwitch = req.member?.role === 'parent' ? await continuity.getSwitchForOwner(req.member.id) : null;
 

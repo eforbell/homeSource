@@ -9,6 +9,7 @@ const { execFileSync } = require('node:child_process');
 const {
   authedGet, authedPost, createMember, getPool, loginAs, resetDatabase, startServer, stopServer
 } = require('./helpers');
+const readiness = require('../lib/continuity-readiness');
 
 let pool;
 let parent;
@@ -105,10 +106,51 @@ describe('continuity switch API', () => {
     const hidden = await authedGet(`api/documents/${stagedPayload.document_id}`, parentCookie);
     assert.equal(hidden.status, 403);
 
+    const packetStage = await authedPost(`api/continuity/switch/${item.id}/packet/stage`, parentCookie, {
+      selected_document_ids: [], witness_trustee_ids: [], operation_key: 'packet-api-1'
+    });
+    assert.equal(packetStage.status, 201);
+    const packet = await packetStage.json();
+    assert.equal(packet.version_number, '1');
+    assert.equal(packet.documents.length, 1);
+    assert.equal(packet.recipients.length, 1);
+    assert.equal(packet.coverage[0].coverage_status, 'covered');
+    const packetReplay = await authedPost(`api/continuity/switch/${item.id}/packet/stage`, parentCookie, {
+      selected_document_ids: [], witness_trustee_ids: [], operation_key: 'packet-api-1'
+    });
+    assert.equal((await packetReplay.json()).id, packet.id);
+    await assert.rejects(
+      pool.query('UPDATE continuity_packet_recipients SET packet_order = 2 WHERE id = $1', [packet.recipients[0].id]),
+      /immutable/i
+    );
+
     const wrong = await authedPost(`api/continuity/switch/${item.id}/letter/commit`, parentCookie, {
       current_passphrase: 'wrong-pass', operation_key: 'commit-api-1'
     });
     assert.equal(wrong.status, 400);
+    const notReady = await authedPost(`api/continuity/switch/${item.id}/letter/commit`, parentCookie, {
+      current_passphrase: 'parent-pass', operation_key: 'commit-api-not-ready'
+    });
+    assert.equal(notReady.status, 400);
+    assert.match((await notReady.json()).error, /reachability evidence/i);
+
+    const challenge = await readiness.createReachabilityChallenge({
+      ownerId: parent.id, switchId: item.id, channelType: 'email', env: process.env
+    });
+    await readiness.recordChallengeTransport({ attestationId: challenge.attestation.id, accepted: true });
+    await readiness.acknowledgeReachability({
+      ownerId: parent.id, switchId: item.id, channelType: 'email', code: challenge.code, env: process.env
+    });
+    const noContact = await authedPost(`api/continuity/switch/${item.id}/letter/commit`, parentCookie, {
+      current_passphrase: 'parent-pass', operation_key: 'commit-api-no-contact'
+    });
+    assert.equal(noContact.status, 400);
+    assert.match((await noContact.json()).error, /verified contact/i);
+    await pool.query(
+      `INSERT INTO member_contact_channels
+         (member_id, channel_type, normalized_address, status, created_by, verified_at)
+       VALUES ($1, 'email', 'kid@family.test', 'verified', $2, NOW())`, [kid.id, parent.id]
+    );
     const armed = await authedPost(`api/continuity/switch/${item.id}/letter/commit`, parentCookie, {
       current_passphrase: 'parent-pass', operation_key: 'commit-api-1'
     });
@@ -119,6 +161,10 @@ describe('continuity switch API', () => {
     });
     assert.equal(armedReplay.status, 200);
     assert.equal((await armedReplay.json()).status, 'armed');
+    const packetState = await (await authedGet(`api/continuity/switch/${item.id}/packet`, parentCookie)).json();
+    assert.equal(packetState.staged, null);
+    assert.equal(packetState.active.id, packet.id);
+    assert.equal(packetState.active.status, 'active');
     const visible = await authedGet(`api/documents/${stagedPayload.document_id}`, parentCookie);
     assert.equal(visible.status, 200);
     const { rows: designations } = await pool.query('SELECT sealed, member_id FROM document_designations WHERE document_id = $1', [stagedPayload.document_id]);
@@ -135,6 +181,9 @@ describe('continuity switch API', () => {
       const database = JSON.parse(fs.readFileSync(path.join(root, 'database.json'), 'utf8'));
       assert.equal(database.continuity_switches.length, 1);
       assert.equal(database.continuity_recipients.length, 1);
+      assert.equal(database.continuity_packet_versions.length, 1);
+      assert.equal(database.continuity_packet_versions[0].status, 'active');
+      assert.equal(database.continuity_packet_recipient_documents[0].coverage_status, 'covered');
       assert.ok(database.continuity_events.some(event => event.event_type === 'switch.armed'));
       assert.equal(database.documents.find(doc => Number(doc.id) === Number(stagedPayload.document_id)).source_type, 'authored');
       assert.doesNotMatch(JSON.stringify(database), /parent-pass|encrypted-letter-ciphertext/);

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <meta name="referrer" content="no-referrer">
+  <title>Home Source — Confirm contact</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="sovereign-fonts.css"><link rel="stylesheet" href="sovereign-chassis.css"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="source-skin.css"><link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <main class="page-content" style="max-width:560px; margin:4rem auto; padding:1.5rem;">
+    <section class="card" aria-labelledby="page-title">
+      <div style="font-size:2rem" aria-hidden="true">✉️</div>
+      <h1 id="page-title">Confirm your contact address</h1>
+      <p id="summary" class="text-dim">Checking this one-time link…</p>
+      <button id="confirm-button" class="btn btn-primary" type="button" hidden>Confirm this address</button>
+      <p id="status" class="form-hint" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script>
+    'use strict';
+    const token = new URLSearchParams(location.search).get('token') || '';
+    const summary = document.getElementById('summary');
+    const status = document.getElementById('status');
+    const button = document.getElementById('confirm-button');
+
+    async function request(path) {
+      const response = await fetch(path, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body:JSON.stringify({ token }),
+        cache:'no-store'
+      });
+      if (!response.ok) throw new Error('This verification link is unavailable or has expired.');
+      return response.json();
+    }
+
+    async function validate() {
+      try {
+        const result = await request('api/continuity/contact-verification/validate');
+        summary.textContent = `${result.recipient_name}, confirm that ${result.masked_address} is an address you control.`;
+        status.textContent = `This only verifies a contact address and grants no document access. Available until ${new Date(result.expires_at).toLocaleString()}.`;
+        button.hidden = false;
+      } catch (error) {
+        summary.textContent = error.message;
+        status.textContent = '';
+      }
+    }
+
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      status.textContent = 'Confirming this address…';
+      try {
+        await request('api/continuity/contact-verification/confirm');
+        summary.textContent = 'Your contact address is confirmed.';
+        status.textContent = 'This did not sign you in or reveal any document. You can close this page.';
+        button.hidden = true;
+        history.replaceState(null, '', 'continuity-contact.html');
+      } catch (error) {
+        status.textContent = error.message;
+        button.disabled = false;
+      }
+    });
+
+    validate();
+  </script>
+</body>
+</html>

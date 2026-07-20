@@ -83,7 +83,8 @@
           const card = document.getElementById('continuity-card');
           card.style.display = 'block';
           const due = item.next_checkin_due_at ? new Date(item.next_checkin_due_at).toLocaleString() : 'not scheduled';
-          document.getElementById('continuity-summary').innerHTML = `<div><span class="badge ${item.tone === 'healthy' ? 'badge-info' : item.tone === 'approaching' ? 'badge-warn' : 'badge-muted'}">${esc(String(item.tone || item.status).replace(/_/g, ' '))}</span></div><div class="text-sm mt-1"><strong>${esc(String(item.status).replace(/_/g, ' '))}</strong> · next check-in ${esc(due)}</div><div class="text-xs text-dim">No trustee or beneficiary is contacted during this phase.</div>`;
+          const quiet = ['draft', 'armed', 'paused'].includes(item.status);
+          document.getElementById('continuity-summary').innerHTML = `<div><span class="badge ${item.tone === 'healthy' ? 'badge-info' : item.tone === 'approaching' ? 'badge-warn' : 'badge-muted'}">${esc(String(item.tone || item.status).replace(/_/g, ' '))}</span></div><div class="text-sm mt-1"><strong>${esc(String(item.status).replace(/_/g, ' '))}</strong> · next check-in ${esc(due)}</div><div class="text-xs text-dim">${quiet ? 'No trustee or beneficiary is contacted during this phase.' : 'Continuity verification is active. Open Continuity to review or stop it by proving you are here.'}</div>`;
         }
 
         // Recent docs

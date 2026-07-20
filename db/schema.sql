@@ -269,7 +269,12 @@ CREATE TABLE continuity_switches (
   reminder_email TEXT NOT NULL,
   letter_document_id INT REFERENCES documents(id),
   staged_letter_document_id INT REFERENCES documents(id),
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'armed', 'paused', 'delivery_pending', 'cancelled')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+    'draft', 'armed', 'paused', 'delivery_pending',
+    'trustee_notification_pending', 'trustee_notification_blocked',
+    'trustee_window', 'trustee_paused', 'recipient_delivery',
+    'delivery_active', 'delivery_complete', 'delivery_blocked', 'cancelled'
+  )),
   interval_days INT NOT NULL CHECK (interval_days IN (30, 90, 180)),
   grace_period_days INT NOT NULL DEFAULT 14 CHECK (grace_period_days >= 7 AND grace_period_days < interval_days),
   schedule_cycle BIGINT NOT NULL DEFAULT 0 CHECK (schedule_cycle >= 0),
@@ -359,6 +364,285 @@ CREATE TABLE continuity_scheduler_runs (
   completed_at TIMESTAMPTZ
 );
 CREATE INDEX idx_continuity_scheduler_runs_latest ON continuity_scheduler_runs (job_type, started_at DESC);
+
+-- ── Verified continuity beneficiary contacts ───────────────────────────────
+
+CREATE TABLE member_contact_channels (
+  id SERIAL PRIMARY KEY,
+  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+  channel_type TEXT NOT NULL CHECK (channel_type IN ('email')),
+  normalized_address TEXT NOT NULL CHECK (
+    normalized_address = LOWER(BTRIM(normalized_address))
+    AND normalized_address !~ '[[:space:]]'
+    AND LENGTH(normalized_address) BETWEEN 3 AND 320
+  ),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'revoked')),
+  created_by INT NOT NULL REFERENCES family_members(id),
+  verified_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (status = 'pending' AND verified_at IS NULL AND revoked_at IS NULL)
+    OR (status = 'verified' AND verified_at IS NOT NULL AND revoked_at IS NULL)
+    OR (status = 'revoked' AND revoked_at IS NOT NULL)
+  )
+);
+CREATE UNIQUE INDEX idx_member_contact_channels_one_current ON member_contact_channels (member_id, channel_type) WHERE status <> 'revoked';
+CREATE UNIQUE INDEX idx_member_contact_channels_unique_current_address ON member_contact_channels (channel_type, normalized_address) WHERE status <> 'revoked';
+CREATE INDEX idx_member_contact_channels_member_history ON member_contact_channels (member_id, created_at DESC);
+
+CREATE TABLE member_contact_verification_tokens (
+  id SERIAL PRIMARY KEY,
+  contact_channel_id INT NOT NULL REFERENCES member_contact_channels(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL DEFAULT 'email_control' CHECK (purpose IN ('email_control')),
+  token_hash TEXT NOT NULL UNIQUE CHECK (token_hash ~ '^[a-f0-9]{64}$'),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  replaced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX idx_member_contact_tokens_one_usable ON member_contact_verification_tokens (contact_channel_id, purpose) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+CREATE INDEX idx_member_contact_tokens_expiry ON member_contact_verification_tokens (expires_at) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+
+CREATE TABLE trustee_contact_channels (
+  id SERIAL PRIMARY KEY,
+  trustee_id INT NOT NULL REFERENCES vault_trustees(id) ON DELETE CASCADE,
+  channel_type TEXT NOT NULL CHECK (channel_type IN ('email')),
+  normalized_address TEXT NOT NULL CHECK (normalized_address = LOWER(BTRIM(normalized_address)) AND normalized_address !~ '[[:space:]]' AND LENGTH(normalized_address) BETWEEN 3 AND 320),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'revoked')),
+  verification_source TEXT CHECK (verification_source IN ('trustee_registration', 'contact_verification')),
+  verified_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((status = 'pending' AND verified_at IS NULL AND revoked_at IS NULL) OR (status = 'verified' AND verified_at IS NOT NULL AND revoked_at IS NULL AND verification_source IS NOT NULL) OR (status = 'revoked' AND revoked_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX idx_trustee_contact_channels_one_verified ON trustee_contact_channels (trustee_id, channel_type) WHERE status = 'verified';
+CREATE UNIQUE INDEX idx_trustee_contact_channels_one_pending ON trustee_contact_channels (trustee_id, channel_type) WHERE status = 'pending';
+CREATE UNIQUE INDEX idx_trustee_contact_channels_unique_active_address ON trustee_contact_channels (channel_type, normalized_address) WHERE status <> 'revoked';
+CREATE INDEX idx_trustee_contact_channels_history ON trustee_contact_channels (trustee_id, created_at DESC);
+
+CREATE TABLE trustee_contact_verification_tokens (
+  id SERIAL PRIMARY KEY,
+  contact_channel_id INT NOT NULL REFERENCES trustee_contact_channels(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL DEFAULT 'email_control' CHECK (purpose IN ('email_control')),
+  token_hash TEXT NOT NULL UNIQUE CHECK (token_hash ~ '^[a-f0-9]{64}$'),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  replaced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX idx_trustee_contact_tokens_one_usable ON trustee_contact_verification_tokens (contact_channel_id, purpose) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+CREATE INDEX idx_trustee_contact_tokens_expiry ON trustee_contact_verification_tokens (expires_at) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+
+CREATE TABLE member_notification_channels (
+  id SERIAL PRIMARY KEY,
+  member_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+  channel_type TEXT NOT NULL CHECK (channel_type IN ('brrr')),
+  label TEXT,
+  target_secret TEXT,
+  target_fingerprint TEXT CHECK (target_fingerprint IS NULL OR target_fingerprint ~ '^[a-f0-9]{64}$'),
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  config_version BIGINT NOT NULL DEFAULT 1 CHECK (config_version > 0),
+  transport_tested_at TIMESTAMPTZ,
+  last_transport_status TEXT CHECK (last_transport_status IN ('accepted', 'failed')),
+  last_transport_error_class TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (member_id, channel_type),
+  CHECK (NOT enabled OR (target_secret IS NOT NULL AND target_fingerprint IS NOT NULL))
+);
+
+CREATE TABLE continuity_operator_channel_attestations (
+  id SERIAL PRIMARY KEY,
+  switch_id INT NOT NULL REFERENCES continuity_switches(id) ON DELETE CASCADE,
+  owner_id INT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+  channel_type TEXT NOT NULL CHECK (channel_type IN ('email', 'brrr')),
+  configuration_version TEXT NOT NULL,
+  target_fingerprint TEXT NOT NULL CHECK (target_fingerprint ~ '^[a-f0-9]{64}$'),
+  challenge_hash TEXT NOT NULL UNIQUE CHECK (challenge_hash ~ '^[a-f0-9]{64}$'),
+  expires_at TIMESTAMPTZ NOT NULL,
+  transport_accepted_at TIMESTAMPTZ,
+  transport_error_class TEXT,
+  acknowledged_at TIMESTAMPTZ,
+  replaced_at TIMESTAMPTZ,
+  attempt_count INT NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 5),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX idx_continuity_operator_attestations_one_current ON continuity_operator_channel_attestations (switch_id, channel_type) WHERE replaced_at IS NULL;
+CREATE INDEX idx_continuity_operator_attestations_expiry ON continuity_operator_channel_attestations (expires_at) WHERE replaced_at IS NULL AND acknowledged_at IS NULL;
+
+CREATE TABLE continuity_brrr_outbox (
+  id SERIAL PRIMARY KEY,
+  switch_id INT NOT NULL REFERENCES continuity_switches(id) ON DELETE CASCADE,
+  event_id INT REFERENCES continuity_events(id) ON DELETE SET NULL,
+  notification_channel_id INT REFERENCES member_notification_channels(id) ON DELETE SET NULL,
+  schedule_cycle BIGINT NOT NULL,
+  notification_type TEXT NOT NULL,
+  channel_config_version BIGINT NOT NULL CHECK (channel_config_version > 0),
+  target_fingerprint TEXT NOT NULL CHECK (target_fingerprint ~ '^[a-f0-9]{64}$'),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'sent', 'failed', 'blocked_configuration', 'superseded')),
+  attempt_count INT NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claimed_by TEXT,
+  claim_expires_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ,
+  failed_at TIMESTAMPTZ,
+  blocked_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
+  last_error_class TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (switch_id, schedule_cycle, notification_type, notification_channel_id)
+);
+CREATE INDEX idx_continuity_brrr_outbox_due ON continuity_brrr_outbox (next_attempt_at, id) WHERE status IN ('pending', 'claimed');
+
+CREATE TABLE continuity_packet_versions (
+  id SERIAL PRIMARY KEY,
+  switch_id INT NOT NULL REFERENCES continuity_switches(id) ON DELETE CASCADE,
+  version_number BIGINT NOT NULL CHECK (version_number > 0),
+  status TEXT NOT NULL DEFAULT 'staged' CHECK (status IN ('staged', 'active', 'superseded')),
+  letter_document_id INT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+  policy_hash TEXT NOT NULL CHECK (policy_hash ~ '^[a-f0-9]{64}$'),
+  operation_key TEXT NOT NULL CHECK (LENGTH(operation_key) BETWEEN 1 AND 120),
+  created_by INT NOT NULL REFERENCES family_members(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), activated_at TIMESTAMPTZ, superseded_at TIMESTAMPTZ,
+  UNIQUE (switch_id, version_number), UNIQUE (switch_id, operation_key),
+  CHECK ((status = 'staged' AND activated_at IS NULL AND superseded_at IS NULL) OR (status = 'active' AND activated_at IS NOT NULL AND superseded_at IS NULL) OR (status = 'superseded' AND superseded_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX idx_continuity_packet_one_staged ON continuity_packet_versions (switch_id) WHERE status = 'staged';
+CREATE UNIQUE INDEX idx_continuity_packet_one_active ON continuity_packet_versions (switch_id) WHERE status = 'active';
+
+CREATE TABLE continuity_packet_documents (
+  id SERIAL PRIMARY KEY, packet_version_id INT NOT NULL REFERENCES continuity_packet_versions(id) ON DELETE CASCADE,
+  document_id INT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('letter', 'selected')), packet_order INT NOT NULL CHECK (packet_order > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (packet_version_id, document_id), UNIQUE (packet_version_id, packet_order), UNIQUE (id, packet_version_id)
+);
+CREATE UNIQUE INDEX idx_continuity_packet_one_letter ON continuity_packet_documents (packet_version_id) WHERE item_kind = 'letter';
+
+CREATE TABLE continuity_packet_recipients (
+  id SERIAL PRIMARY KEY, packet_version_id INT NOT NULL REFERENCES continuity_packet_versions(id) ON DELETE CASCADE,
+  member_id INT REFERENCES family_members(id), trustee_id INT REFERENCES vault_trustees(id),
+  role TEXT NOT NULL CHECK (role IN ('beneficiary', 'trustee')), packet_order INT NOT NULL CHECK (packet_order > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((role = 'beneficiary' AND member_id IS NOT NULL AND trustee_id IS NULL) OR (role = 'trustee' AND member_id IS NULL AND trustee_id IS NOT NULL)),
+  UNIQUE (packet_version_id, packet_order), UNIQUE (id, packet_version_id)
+);
+CREATE UNIQUE INDEX idx_continuity_packet_recipient_member ON continuity_packet_recipients (packet_version_id, member_id) WHERE member_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_continuity_packet_recipient_trustee ON continuity_packet_recipients (packet_version_id, trustee_id) WHERE trustee_id IS NOT NULL;
+
+CREATE TABLE continuity_packet_recipient_documents (
+  id SERIAL PRIMARY KEY,
+  packet_version_id INT NOT NULL REFERENCES continuity_packet_versions(id) ON DELETE CASCADE,
+  packet_recipient_id INT NOT NULL, packet_document_id INT NOT NULL,
+  coverage_status TEXT NOT NULL CHECK (coverage_status IN ('covered', 'not_designated')),
+  designation_id INT REFERENCES document_designations(id) ON DELETE RESTRICT,
+  encryption_key_id INT REFERENCES encryption_keys(id) ON DELETE RESTRICT, key_fingerprint TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (packet_recipient_id, packet_document_id),
+  FOREIGN KEY (packet_recipient_id, packet_version_id) REFERENCES continuity_packet_recipients(id, packet_version_id) ON DELETE CASCADE,
+  FOREIGN KEY (packet_document_id, packet_version_id) REFERENCES continuity_packet_documents(id, packet_version_id) ON DELETE CASCADE,
+  CHECK ((coverage_status = 'covered' AND designation_id IS NOT NULL AND encryption_key_id IS NOT NULL AND key_fingerprint IS NOT NULL) OR (coverage_status = 'not_designated' AND designation_id IS NULL AND encryption_key_id IS NULL AND key_fingerprint IS NULL))
+);
+
+CREATE TABLE continuity_switch_trustees (
+  switch_id INT NOT NULL REFERENCES continuity_switches(id) ON DELETE CASCADE,
+  trustee_id INT NOT NULL REFERENCES vault_trustees(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (switch_id, trustee_id)
+);
+
+ALTER TABLE continuity_switches ADD COLUMN staged_packet_version_id INT REFERENCES continuity_packet_versions(id) ON DELETE SET NULL;
+ALTER TABLE continuity_switches ADD COLUMN active_packet_version_id INT REFERENCES continuity_packet_versions(id) ON DELETE SET NULL;
+ALTER TABLE continuity_switches ADD CONSTRAINT continuity_switch_packet_pointer_check CHECK (staged_packet_version_id IS NULL OR staged_packet_version_id <> active_packet_version_id);
+
+CREATE FUNCTION reject_continuity_packet_child_update() RETURNS trigger AS $$ BEGIN IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN RETURN OLD; END IF; RAISE EXCEPTION 'continuity packet policy rows are immutable'; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_continuity_packet_documents_immutable BEFORE UPDATE OR DELETE ON continuity_packet_documents FOR EACH ROW EXECUTE FUNCTION reject_continuity_packet_child_update();
+CREATE TRIGGER trg_continuity_packet_recipients_immutable BEFORE UPDATE OR DELETE ON continuity_packet_recipients FOR EACH ROW EXECUTE FUNCTION reject_continuity_packet_child_update();
+CREATE TRIGGER trg_continuity_packet_coverage_immutable BEFORE UPDATE OR DELETE ON continuity_packet_recipient_documents FOR EACH ROW EXECUTE FUNCTION reject_continuity_packet_child_update();
+
+CREATE FUNCTION enforce_continuity_packet_version_transition() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN IF pg_trigger_depth() > 1 THEN RETURN OLD; END IF; RAISE EXCEPTION 'continuity packet versions are immutable'; END IF;
+  IF NEW.switch_id IS DISTINCT FROM OLD.switch_id OR NEW.version_number IS DISTINCT FROM OLD.version_number OR NEW.letter_document_id IS DISTINCT FROM OLD.letter_document_id OR NEW.policy_hash IS DISTINCT FROM OLD.policy_hash OR NEW.operation_key IS DISTINCT FROM OLD.operation_key OR NEW.created_by IS DISTINCT FROM OLD.created_by OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN RAISE EXCEPTION 'continuity packet version identity is immutable'; END IF;
+  IF NOT ((OLD.status = 'staged' AND NEW.status IN ('active', 'superseded')) OR (OLD.status = 'active' AND NEW.status = 'superseded')) THEN RAISE EXCEPTION 'invalid continuity packet version transition'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_continuity_packet_version_transition BEFORE UPDATE OR DELETE ON continuity_packet_versions FOR EACH ROW EXECUTE FUNCTION enforce_continuity_packet_version_transition();
+
+-- ── Continuity trustee verification window ─────────────────────────────────
+
+CREATE TABLE continuity_delivery_runs (
+  id SERIAL PRIMARY KEY,
+  switch_id INT NOT NULL REFERENCES continuity_switches(id) ON DELETE CASCADE,
+  schedule_cycle BIGINT NOT NULL CHECK (schedule_cycle >= 0),
+  packet_version_id INT NOT NULL REFERENCES continuity_packet_versions(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL CHECK (status IN ('trustee_notification_pending', 'trustee_notification_blocked', 'trustee_window', 'trustee_paused', 'recipient_delivery', 'delivery_active', 'delivery_complete', 'delivery_blocked', 'owner_recovered')),
+  trustee_window_started_at TIMESTAMPTZ, trustee_action_deadline_at TIMESTAMPTZ,
+  paused_at TIMESTAMPTZ, pause_deadline_at TIMESTAMPTZ, released_at TIMESTAMPTZ,
+  first_grant_activated_at TIMESTAMPTZ, recovered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (switch_id, schedule_cycle),
+  CHECK (trustee_action_deadline_at IS NULL OR trustee_window_started_at IS NOT NULL),
+  CHECK (pause_deadline_at IS NULL OR paused_at IS NOT NULL),
+  CHECK (recovered_at IS NULL OR status = 'owner_recovered')
+);
+CREATE INDEX idx_continuity_delivery_runs_due ON continuity_delivery_runs (status, trustee_action_deadline_at, pause_deadline_at);
+
+CREATE TABLE continuity_delivery_run_trustees (
+  id SERIAL PRIMARY KEY,
+  delivery_run_id INT NOT NULL REFERENCES continuity_delivery_runs(id) ON DELETE CASCADE,
+  trustee_id INT NOT NULL REFERENCES vault_trustees(id) ON DELETE RESTRICT,
+  contact_channel_id INT NOT NULL REFERENCES trustee_contact_channels(id) ON DELETE RESTRICT,
+  destination_snapshot TEXT NOT NULL CHECK (destination_snapshot = LOWER(BTRIM(destination_snapshot)) AND destination_snapshot !~ '[[:space:]]' AND LENGTH(destination_snapshot) BETWEEN 3 AND 320),
+  first_successful_send_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (delivery_run_id, trustee_id), UNIQUE (id, delivery_run_id)
+);
+
+CREATE TABLE continuity_trustee_action_tokens (
+  id SERIAL PRIMARY KEY,
+  delivery_run_id INT NOT NULL REFERENCES continuity_delivery_runs(id) ON DELETE CASCADE,
+  delivery_run_trustee_id INT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'pause' CHECK (purpose IN ('pause')),
+  token_hash TEXT NOT NULL UNIQUE CHECK (token_hash ~ '^[a-f0-9]{64}$'),
+  expires_at TIMESTAMPTZ NOT NULL, consumed_at TIMESTAMPTZ, replaced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (delivery_run_trustee_id, delivery_run_id) REFERENCES continuity_delivery_run_trustees(id, delivery_run_id) ON DELETE CASCADE,
+  UNIQUE (id, delivery_run_id, delivery_run_trustee_id)
+);
+CREATE UNIQUE INDEX idx_continuity_trustee_tokens_one_usable ON continuity_trustee_action_tokens (delivery_run_trustee_id, purpose) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+CREATE INDEX idx_continuity_trustee_tokens_expiry ON continuity_trustee_action_tokens (expires_at) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+
+ALTER TABLE continuity_notification_outbox
+  ADD COLUMN delivery_run_id INT REFERENCES continuity_delivery_runs(id) ON DELETE CASCADE,
+  ADD COLUMN delivery_run_trustee_id INT,
+  ADD COLUMN trustee_action_token_id INT,
+  ADD FOREIGN KEY (delivery_run_trustee_id, delivery_run_id) REFERENCES continuity_delivery_run_trustees(id, delivery_run_id) ON DELETE CASCADE,
+  ADD FOREIGN KEY (trustee_action_token_id, delivery_run_id, delivery_run_trustee_id) REFERENCES continuity_trustee_action_tokens(id, delivery_run_id, delivery_run_trustee_id) ON DELETE SET NULL (trustee_action_token_id),
+  ADD CONSTRAINT continuity_outbox_trustee_shape CHECK (
+    (notification_type = 'trustee_verification' AND delivery_run_id IS NOT NULL AND delivery_run_trustee_id IS NOT NULL)
+    OR (notification_type <> 'trustee_verification' AND delivery_run_id IS NULL AND delivery_run_trustee_id IS NULL AND trustee_action_token_id IS NULL)
+  );
+CREATE UNIQUE INDEX idx_continuity_outbox_run_trustee ON continuity_notification_outbox (delivery_run_id, delivery_run_trustee_id, notification_type) WHERE delivery_run_id IS NOT NULL;
+
+CREATE FUNCTION enforce_continuity_delivery_run_identity() RETURNS trigger AS $$
+BEGIN
+  IF NEW.switch_id IS DISTINCT FROM OLD.switch_id OR NEW.schedule_cycle IS DISTINCT FROM OLD.schedule_cycle OR NEW.packet_version_id IS DISTINCT FROM OLD.packet_version_id OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN RAISE EXCEPTION 'continuity delivery run identity is immutable'; END IF;
+  IF OLD.first_grant_activated_at IS NOT NULL AND NEW.first_grant_activated_at IS DISTINCT FROM OLD.first_grant_activated_at THEN RAISE EXCEPTION 'continuity first grant activation boundary is immutable'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_continuity_delivery_run_identity BEFORE UPDATE ON continuity_delivery_runs FOR EACH ROW EXECUTE FUNCTION enforce_continuity_delivery_run_identity();
+
+CREATE FUNCTION enforce_continuity_run_trustee_snapshot() RETURNS trigger AS $$
+BEGIN
+  IF NEW.delivery_run_id IS DISTINCT FROM OLD.delivery_run_id OR NEW.trustee_id IS DISTINCT FROM OLD.trustee_id OR NEW.contact_channel_id IS DISTINCT FROM OLD.contact_channel_id OR NEW.destination_snapshot IS DISTINCT FROM OLD.destination_snapshot OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN RAISE EXCEPTION 'continuity delivery trustee snapshot is immutable'; END IF;
+  IF OLD.first_successful_send_at IS NOT NULL AND NEW.first_successful_send_at IS DISTINCT FROM OLD.first_successful_send_at THEN RAISE EXCEPTION 'continuity trustee notification success is immutable'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_continuity_run_trustee_snapshot BEFORE UPDATE ON continuity_delivery_run_trustees FOR EACH ROW EXECUTE FUNCTION enforce_continuity_run_trustee_snapshot();
 
 -- ── Tags ────────────────────────────────────────────────────────────────────
 
