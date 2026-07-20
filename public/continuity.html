@@ -151,7 +151,8 @@
       const failedCount = (operations?.outbox?.failed || 0) + (operations?.outbox?.blocked || 0);
       const emailAttempts = operations?.channels?.email || {};
       const brrrAttempts = operations?.channels?.brrr || {};
-      const channelSummary = `email ${Number(emailAttempts.pending || 0)}/${Number(emailAttempts.failed || 0) + Number(emailAttempts.blocked || 0)}, brrr ${Number(brrrAttempts.pending || 0)}/${Number(brrrAttempts.failed || 0) + Number(brrrAttempts.blocked || 0)}`;
+      const deferredDeliveries = Number(operations?.channels?.recipient_delivery?.deferred || 0);
+      const channelSummary = `email ${Number(emailAttempts.pending || 0)}/${Number(emailAttempts.failed || 0) + Number(emailAttempts.blocked || 0)}, brrr ${Number(brrrAttempts.pending || 0)}/${Number(brrrAttempts.failed || 0) + Number(brrrAttempts.blocked || 0)}${deferredDeliveries ? `, recipient delivery ${deferredDeliveries} held for C3` : ''}`;
       document.getElementById('switch-operations').innerHTML = `Mail: ${esc(operations?.mail?.ready ? operations.mail.transport + ' ready' : 'not ready')} · schedule job: ${advance?.last_successful_at ? esc(formatDate(advance.last_successful_at)) : 'not run'} · notification job: ${dispatch?.last_successful_at ? esc(formatDate(dispatch.last_successful_at)) : 'not run'} · pending/failed: ${esc(channelSummary)}${failedCount && item ? ` · <button class="btn btn-sm" type="button" data-retry-outbox>Retry notifications</button>` : ''}`;
       renderRecipientOptions();
       renderPacketOptions();

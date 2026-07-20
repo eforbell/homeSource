@@ -2,8 +2,9 @@
 
 Phase B reminders target only the switch owner. Phase C1 may contact designated witness
 trustees after escalation. Phase C2 creates immutable recipient grants and durable recipient
-outbox rows, but the outbox dispatcher intentionally leaves those rows unclaimed until the C3
-scoped recipient doorway exists; this increment sends no beneficiary access link.
+outbox rows in the explicit `deferred` state. The outbox dispatcher cannot claim those rows
+until C3 promotes them after the scoped recipient doorway exists; this increment sends no
+beneficiary access link and does not count the deferred rows as stuck operator mail.
 
 ## Required configuration
 
@@ -44,6 +45,7 @@ outbox service; state transitions must never be edited by hand merely to retry m
 Before and after deployment:
 
 ```sh
+npm run test:schema-parity
 node db/migrate.js
 node bin/deadman-check.js --once
 node bin/continuity-outbox.js --once

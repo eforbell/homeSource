@@ -2,6 +2,7 @@
 
 const { after, before, beforeEach, describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -10,6 +11,8 @@ const {
   createMember, createTestDocument, getPool, resetDatabase, startServer, stopServer
 } = require('./helpers');
 const continuity = require('../lib/continuity');
+const continuityDelivery = require('../lib/continuity-delivery');
+const { withTransaction } = require('../lib/db');
 const { saveFileRecord, storeFile } = require('../lib/files');
 
 let pool;
@@ -270,7 +273,34 @@ describe('Phase C2 recipient grants and manifests', () => {
     });
     assert.equal(mailCalls, 0);
     assert.equal(dispatch.claimed, 0);
-    assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery' AND status = 'pending'")).rows[0].count, 2);
+    assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery' AND status = 'deferred'")).rows[0].count, 2);
+    const operations = await continuity.getOperationsStatus(pool);
+    assert.equal(operations.channels.email.pending, 0);
+    assert.equal(operations.channels.recipient_delivery.deferred, 2);
+    assert.equal(operations.outbox.pending, 0);
+    assert.equal(operations.outbox.deferred, 2);
+  });
+
+  it('hashes each stored artifact once before taking delivery activation locks', async () => {
+    await createReleasedPacket();
+    const at = new Date('2026-04-01T12:00:00Z');
+    await withTransaction((db) => continuityDelivery.initializePendingRuns(db, at));
+    const hashedPaths = [];
+    const preparedBatch = await continuityDelivery.prepareRecipientGrantArtifacts(pool, {
+      hashFile: async (filePath) => {
+        hashedPaths.push(filePath);
+        const bytes = await fs.promises.readFile(filePath);
+        return {
+          size: bytes.length,
+          sha256: crypto.createHash('sha256').update(bytes).digest('hex')
+        };
+      }
+    });
+    const result = await withTransaction((db) =>
+      continuityDelivery.activateRecipientGrants(db, at, preparedBatch));
+    assert.equal(result.active_grants, 2);
+    assert.equal(hashedPaths.length, 2, 'the shared letter must not be re-hashed per recipient');
+    assert.equal(new Set(hashedPaths).size, 2);
   });
 
   it('backs up grant manifests and token hashes without inventing recipient access', async () => {

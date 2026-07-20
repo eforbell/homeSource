@@ -20,6 +20,7 @@ node db/migrate.js     # apply migrations (idempotent)
 
 # Tests
 npm test               # node --test (all test/*.test.js)
+npm run test:schema-parity  # verify db/schema.sql matches the migration chain
 ```
 
 Copy `.env.example` to `.env` and fill in values.

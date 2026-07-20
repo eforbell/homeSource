@@ -113,6 +113,7 @@ CREATE INDEX idx_continuity_delivery_tokens_expiry
 
 ALTER TABLE continuity_notification_outbox
   DROP CONSTRAINT continuity_outbox_trustee_shape,
+  DROP CONSTRAINT continuity_notification_outbox_status_check,
   DROP CONSTRAINT continuity_notification_outbo_switch_id_schedule_cycle_noti_key,
   ADD COLUMN delivery_grant_id INT,
   ADD COLUMN delivery_token_id INT,
@@ -120,10 +121,15 @@ ALTER TABLE continuity_notification_outbox
     REFERENCES continuity_delivery_grants(id, delivery_run_id) ON DELETE CASCADE,
   ADD FOREIGN KEY (delivery_token_id, delivery_grant_id)
     REFERENCES continuity_delivery_tokens(id, delivery_grant_id) ON DELETE SET NULL (delivery_token_id),
+  ADD CONSTRAINT continuity_notification_outbox_status_check CHECK (
+    status IN ('pending', 'claimed', 'sent', 'failed', 'blocked_configuration',
+      'superseded', 'deferred')
+  ),
   ADD CONSTRAINT continuity_outbox_delivery_shape CHECK (
     (notification_type = 'trustee_verification'
       AND delivery_run_id IS NOT NULL AND delivery_run_trustee_id IS NOT NULL
-      AND delivery_grant_id IS NULL AND delivery_token_id IS NULL)
+      AND delivery_grant_id IS NULL AND delivery_token_id IS NULL
+      AND status <> 'deferred')
     OR
     (notification_type = 'recipient_delivery'
       AND delivery_run_id IS NOT NULL AND delivery_run_trustee_id IS NULL
@@ -132,7 +138,7 @@ ALTER TABLE continuity_notification_outbox
     (notification_type NOT IN ('trustee_verification', 'recipient_delivery')
       AND delivery_run_id IS NULL AND delivery_run_trustee_id IS NULL
       AND trustee_action_token_id IS NULL AND delivery_grant_id IS NULL
-      AND delivery_token_id IS NULL)
+      AND delivery_token_id IS NULL AND status <> 'deferred')
   );
 CREATE UNIQUE INDEX idx_continuity_outbox_delivery_grant
   ON continuity_notification_outbox (delivery_grant_id, notification_type)
