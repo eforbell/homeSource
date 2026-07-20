@@ -56,3 +56,10 @@ Backups export continuity tables from one repeatable-read database snapshot and 
 referenced stored file is missing. Check-in, trustee-action, and recipient-access token hashes
 may appear in the database export, along with encrypted holder-local grant material; raw bearer
 tokens, private keys, DEKs, and letter plaintext must not.
+
+Stored document paths are write-once through HomeSource. Recipient preflight streams and hashes
+each distinct artifact immediately before grant activation without holding PostgreSQL locks; the
+activation transaction then locks and revalidates the exact `document_files` row. PostgreSQL
+cannot lock filesystem bytes, so out-of-band mutation between those steps is an explicit host
+integrity boundary rather than a database guarantee. Operators must restrict storage writes to
+the HomeSource service account and treat direct filesystem modification as unsupported.

@@ -200,7 +200,7 @@ describe('Phase C2 recipient grants and manifests', () => {
     const ownerView = await continuity.getSwitchForOwner(parent.id);
     assert.equal(ownerView.delivery_run.active_grant_count, 2);
     assert.equal(ownerView.delivery_run.blocked_grant_count, 0);
-    assert.equal(ownerView.delivery_run.grants.length, 2);
+    assert.equal(Object.hasOwn(ownerView.delivery_run, 'grants'), false);
     assert.equal((await pool.query('SELECT * FROM continuity_delivery_tokens')).rows.length, 2);
     assert.equal((await pool.query("SELECT * FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery'")).rows.length, 2);
     await assert.rejects(
