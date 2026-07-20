@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1–C0.4 automated gates satisfied
+Status: Active; C0.1–C1 automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -12,8 +12,8 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
    responses, logs, audits, outbox payloads, or backup artifacts.
 4. Sessionless ceremonies never create a normal Home Source session.
 5. Replays, cross-identity use, expired material, and concurrent operations fail closed.
-6. Existing Phase A/B behavior remains green and stops at `delivery_pending` until its Phase C
-   transition is explicitly enabled.
+6. Existing Phase A/B behavior remains green; Phase C consumes `delivery_pending` only through
+   an immutable active packet and otherwise fails closed before trustee or recipient delivery.
 
 ## C0.1 verified beneficiary contact cases
 

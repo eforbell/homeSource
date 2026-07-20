@@ -124,7 +124,7 @@ describe('continuity switch domain', () => {
     assert.equal(rows[0].count, 1);
   });
 
-  it('coalesces missed milestones and stops at delivery_pending without recipient mail', async () => {
+  it('coalesces missed milestones and fails closed without an active Phase C packet', async () => {
     const item = await draft();
     await pool.query(
       `UPDATE continuity_switches SET status = 'armed', schedule_cycle = 1,
@@ -132,9 +132,9 @@ describe('continuity switch domain', () => {
     );
     const result = await continuity.advanceDueSwitches({ now: new Date('2026-01-25T12:00:00Z') });
     assert.equal(result.claimed, 1);
-    assert.equal(result.transitions, 4);
+    assert.equal(result.transitions, 5);
     const { rows: switches } = await pool.query('SELECT status FROM continuity_switches WHERE id = $1', [item.id]);
-    assert.equal(switches[0].status, 'delivery_pending');
+    assert.equal(switches[0].status, 'delivery_blocked');
     const { rows: outbox } = await pool.query('SELECT notification_type, recipient_email FROM continuity_notification_outbox WHERE status = $1', ['pending']);
     assert.deepEqual(outbox, [{ notification_type: 'delivery_pending_owner_notice', recipient_email: 'owner@family.test' }]);
     const repeated = await continuity.advanceDueSwitches({ now: new Date('2026-01-25T12:00:00Z') });

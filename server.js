@@ -1046,13 +1046,19 @@ app.post('/api/continuity/switch/:id/outbox/retry', requireAuth, requireParent, 
 app.post('/api/continuity/switch/:id/:action', requireAuth, requireParent, async (req, res) => {
   try {
     const action = String(req.params.action);
-    if (!['pause', 'resume', 'cancel'].includes(action)) return res.status(404).json({ error: 'Unknown continuity action' });
+    if (!['pause', 'resume', 'cancel', 'recover'].includes(action)) return res.status(404).json({ error: 'Unknown continuity action' });
     if (action !== 'resume') await verifyContinuityPassphrase(req.member.id, req.body?.current_passphrase);
-    const item = await continuity.transitionOwnerAction({
-      switchId: Number(req.params.id), ownerId: req.member.id, action,
+    const input = {
+      switchId: Number(req.params.id), ownerId: req.member.id,
       operationKey: req.body?.operation_key
-    });
-    const auditAction = { pause: 'continuity.paused', resume: 'continuity.resumed', cancel: 'continuity.cancelled' }[action];
+    };
+    const item = action === 'recover'
+      ? await continuity.recoverOwner(input)
+      : await continuity.transitionOwnerAction({ ...input, action });
+    const auditAction = {
+      pause: 'continuity.paused', resume: 'continuity.resumed', cancel: 'continuity.cancelled',
+      recover: 'continuity.owner_recovered'
+    }[action];
     await audit.log(auditAction, 'continuity_switch', item.id, req.member.id);
     res.json(item);
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -1091,6 +1097,41 @@ app.post('/api/continuity/check-in', async (req, res) => {
     await audit.log('continuity.checked_in', 'continuity_switch', tokenItem.switch_id, null, { channel: 'email' });
     res.json({ ok: true });
   } catch (_err) { recordCheckinFailure(req); res.status(404).json({ error: 'This check-in is not available' }); }
+});
+
+app.post('/api/continuity/trustee-action/validate', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowCheckinAttempt(req)) return res.status(429).json({ error: 'This trustee action is not available' });
+    const action = await continuity.getTrusteeAction(req.body?.token);
+    if (!action) {
+      recordCheckinFailure(req);
+      return res.status(404).json({ error: 'This trustee action is not available' });
+    }
+    res.json(action);
+  } catch (_err) {
+    recordCheckinFailure(req);
+    res.status(404).json({ error: 'This trustee action is not available' });
+  }
+});
+
+app.post('/api/continuity/trustee-action/pause', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowCheckinAttempt(req)) return res.status(429).json({ error: 'This trustee action is not available' });
+    const result = await continuity.pauseWithTrusteeToken({ rawToken: req.body?.token });
+    if (!result) {
+      recordCheckinFailure(req);
+      return res.status(404).json({ error: 'This trustee action is not available' });
+    }
+    await audit.log('continuity.trustee_paused', 'continuity_delivery_run', null, null, {
+      pause_deadline_at: result.pause_deadline_at, replayed: result.replayed
+    });
+    res.json(result);
+  } catch (_err) {
+    recordCheckinFailure(req);
+    res.status(404).json({ error: 'This trustee action is not available' });
+  }
 });
 
 app.post('/api/continuity/contact-verification/validate', async (req, res) => {

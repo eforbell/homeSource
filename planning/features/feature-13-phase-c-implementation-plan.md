@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1–C0.4 implemented through automated verification; C1 trustee window next
+Status: C0.1–C1 implemented through automated verification; C2 delivery grants next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -98,14 +98,28 @@ green.
 - Record the complete enforced surface in
   `planning/features/feature-13-phase-c-authorization-matrix.md`.
 
-## C1 — Trustee verification window
+## C1 — Trustee verification window — implemented
 
-- Add one idempotent delivery run per switch/cycle.
-- Notify every designated trustee and begin the shared 72-hour window only after every
-  required trustee has at least one successful send.
-- Add separate hashed trustee-action tokens and the first-action, one-time 30-day pause.
-- Permit owner recovery with same-request reauthentication only before the first recipient
-  grant activation commit.
+- Add one immutable-packet-bound, idempotent delivery run per switch/cycle with durable witness
+  contact snapshots and fail-closed blocked/no-trustee transitions.
+- Notify every designated trustee concurrently through the extended durable outbox and begin
+  the shared 72-hour window only at the final required successful send; permanent failure
+  blocks release while bounded owner retry preserves prior success history.
+- Mint separate hashed trustee-action tokens only while claiming an attempt, replace ambiguous
+  retry material, and expose one sessionless pause-only doorway with no document, recipient,
+  envelope, key, or account authority.
+- Fix the first valid trustee pause at one 30-day deadline under the delivery-run lock; later
+  concurrent or replayed actions return that deadline without extending it.
+- Permit owner recovery with same-request passphrase reauthentication only before the durable
+  `first_grant_activated_at` boundary, superseding queued actions and starting a fresh
+  daylight-saving-safe check-in cycle.
+- Surface delivery-run/witness state, notification retry, and recovery in the operator API/UI,
+  and preserve run history, witness snapshots, and token hashes in repeatable-read backups.
+
+Stop condition met by automated verification: one run/window survives scheduler and outbox
+replay, partial/permanent failure cannot consume the common clock, pause concurrency cannot
+extend the deadline, no-witness runs release immediately to the still non-delivering C2 state,
+and owner recovery fails closed once the modeled first-grant boundary is committed.
 
 ## C2 — Delivery manifests and grants
 
