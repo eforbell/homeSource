@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1–C0.3 automated gates satisfied
+Status: Active; C0.1–C0.4 automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -72,6 +72,13 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 - Packet activation is all-or-nothing and permanently binds delivery runs to one version.
 - The complete route matrix denies non-owner continuity administration and prevents sealed-wrap
   leakage through generic parent routes.
+- Staged Letters remain absent from generic routes even for the owner; active/historical Letter
+  metadata, files, posture, links, insights, and dependencies remain owner-scoped.
+- Ordinary packet-document read/download behavior remains available under normal vault policy,
+  but generic responses redact sealed holders and packet-bound mutation requires packet-owner
+  authority.
+- Backup retains encrypted continuity state without creating a grant, session, unseal action, or
+  application restore bypass; no application restore endpoint exists in C0.4.
 
 ## C1 gates
 

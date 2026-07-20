@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1–C0.3 implemented through automated verification; C0.4 authorization boundary next
+Status: C0.1–C0.4 implemented through automated verification; C1 trustee window next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -80,14 +80,23 @@ green.
 - Surface packet/document/witness selection and staged/active inspection through owner-only
   APIs and the continuity operator UI, without creating notification or grant behavior.
 
-### C0.4 Continuity-aware authorization boundary
+### C0.4 Continuity-aware authorization boundary — implemented
 
-- Introduce one shared resolver for Letter administration, continuity seal mutation, and
-  future exact-item grant serving.
-- Inventory and regression-test list/detail/search, key-info/envelope, file download,
-  archive/delete/replace, share, import/export, and backup/restore surfaces.
-- Preserve ordinary vault access independently granted to ordinary documents while never
-  exposing continuity-specific sealed wraps through ambient parent authority.
+- Add one fail-closed resolver for Letter visibility, packet-bound administration,
+  continuity-seal mutation, sealed-wrap projection, and the future exact-item grant extension.
+- Hide staged Letters from generic document routes and active/historical Letters from every
+  non-owner metadata, key-info, file, mutation, link, insight, posture, and aggregate surface.
+- Preserve ordinary read/download access to packet-selected documents while redacting sealed
+  holders and requiring document/packet ownership for continuity-holder or packet-bound
+  mutations.
+- Scope trustee and continuity-directory administration to the owning operator, redact hidden
+  key dependencies without weakening revoke safeguards, and reserve continuity metadata from
+  generic document updates.
+- Exclude Letters from deterministic scanners and document the import/export/backup boundary:
+  backup preserves ciphertext and durable policy but creates no application grant or restore
+  authority.
+- Record the complete enforced surface in
+  `planning/features/feature-13-phase-c-authorization-matrix.md`.
 
 ## C1 — Trustee verification window
 
