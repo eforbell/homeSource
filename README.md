@@ -340,5 +340,6 @@ See [deploy/](deploy/) for systemd unit and deploy script.
 ## Testing
 
 ```sh
-npm test    # node --test (all test/*.test.js)
+npm test                       # node --test (all test/*.test.js)
+npm run test:schema-parity     # compare fresh migration and schema-snapshot databases
 ```

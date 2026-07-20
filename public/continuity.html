@@ -123,7 +123,7 @@
       badge.className = `badge ${item?.tone === 'healthy' ? 'badge-info' : item?.tone === 'approaching' ? 'badge-warn' : 'badge-muted'}`;
       const run = item?.delivery_run;
       const runDetail = run
-        ? `<div class="text-xs text-dim" style="margin-top:.4rem;">Delivery run #${Number(run.id)} · packet version #${Number(run.packet_version_id)} · witnesses notified ${Number(run.trustees_notified)}/${Number(run.trustee_count)}${run.trustee_action_deadline_at ? ` · witness deadline ${esc(formatDate(run.trustee_action_deadline_at))}` : ''}${run.pause_deadline_at ? ` · pause deadline ${esc(formatDate(run.pause_deadline_at))}` : ''}</div>`
+        ? `<div class="text-xs text-dim" style="margin-top:.4rem;">Delivery run #${Number(run.id)} · packet version #${Number(run.packet_version_id)} · witnesses notified ${Number(run.trustees_notified)}/${Number(run.trustee_count)} · recipient grants ${Number(run.active_grant_count || 0)} active / ${Number(run.blocked_grant_count || 0)} blocked${run.trustee_action_deadline_at ? ` · witness deadline ${esc(formatDate(run.trustee_action_deadline_at))}` : ''}${run.pause_deadline_at ? ` · pause deadline ${esc(formatDate(run.pause_deadline_at))}` : ''}</div>`
         : '';
       summary.innerHTML = item ? `<div class="text-sm"><strong>${esc(item.status.replace(/_/g, ' '))}</strong> · next check-in ${esc(formatDate(item.next_checkin_due_at))}</div><div class="text-xs text-dim">Reminder: ${esc(item.reminder_email)} · ${Number(item.interval_days)} day cadence · ${Number(item.grace_period_days)} day grace</div>${runDetail}${item.staged_letter_document_id ? '<div class="text-sm" style="color:var(--warn); margin-top:.4rem;">Encrypted replacement staged and waiting for confirmation.</div>' : ''}` : '<div class="text-sm text-dim">Start with a recipient, your letter, and a reminder cadence.</div>';
       if (item) {
@@ -151,7 +151,8 @@
       const failedCount = (operations?.outbox?.failed || 0) + (operations?.outbox?.blocked || 0);
       const emailAttempts = operations?.channels?.email || {};
       const brrrAttempts = operations?.channels?.brrr || {};
-      const channelSummary = `email ${Number(emailAttempts.pending || 0)}/${Number(emailAttempts.failed || 0) + Number(emailAttempts.blocked || 0)}, brrr ${Number(brrrAttempts.pending || 0)}/${Number(brrrAttempts.failed || 0) + Number(brrrAttempts.blocked || 0)}`;
+      const deferredDeliveries = Number(operations?.channels?.recipient_delivery?.deferred || 0);
+      const channelSummary = `email ${Number(emailAttempts.pending || 0)}/${Number(emailAttempts.failed || 0) + Number(emailAttempts.blocked || 0)}, brrr ${Number(brrrAttempts.pending || 0)}/${Number(brrrAttempts.failed || 0) + Number(brrrAttempts.blocked || 0)}${deferredDeliveries ? `, recipient delivery ${deferredDeliveries} held for C3` : ''}`;
       document.getElementById('switch-operations').innerHTML = `Mail: ${esc(operations?.mail?.ready ? operations.mail.transport + ' ready' : 'not ready')} · schedule job: ${advance?.last_successful_at ? esc(formatDate(advance.last_successful_at)) : 'not run'} · notification job: ${dispatch?.last_successful_at ? esc(formatDate(dispatch.last_successful_at)) : 'not run'} · pending/failed: ${esc(channelSummary)}${failedCount && item ? ` · <button class="btn btn-sm" type="button" data-retry-outbox>Retry notifications</button>` : ''}`;
       renderRecipientOptions();
       renderPacketOptions();

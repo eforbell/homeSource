@@ -1,7 +1,10 @@
 # Continuity switch operations
 
-Phase B sends reminders only to the switch owner's confirmed reminder address. It never
-contacts trustees or beneficiaries and never changes sealed envelope holders.
+Phase B reminders target only the switch owner. Phase C1 may contact designated witness
+trustees after escalation. Phase C2 creates immutable recipient grants and durable recipient
+outbox rows in the explicit `deferred` state. The outbox dispatcher cannot claim those rows
+until C3 promotes them after the scoped recipient doorway exists; this increment sends no
+beneficiary access link and does not count the deferred rows as stuck operator mail.
 
 ## Required configuration
 
@@ -42,6 +45,7 @@ outbox service; state transitions must never be edited by hand merely to retry m
 Before and after deployment:
 
 ```sh
+npm run test:schema-parity
 node db/migrate.js
 node bin/deadman-check.js --once
 node bin/continuity-outbox.js --once
@@ -49,5 +53,13 @@ systemd-analyze verify deploy/home-source-continuity-*.service deploy/home-sourc
 ```
 
 Backups export continuity tables from one repeatable-read database snapshot and fail when a
-referenced stored file is missing. Check-in token hashes may appear in the database export;
-raw check-in tokens and letter plaintext must not.
+referenced stored file is missing. Check-in, trustee-action, and recipient-access token hashes
+may appear in the database export, along with encrypted holder-local grant material; raw bearer
+tokens, private keys, DEKs, and letter plaintext must not.
+
+Stored document paths are write-once through HomeSource. Recipient preflight streams and hashes
+each distinct artifact immediately before grant activation without holding PostgreSQL locks; the
+activation transaction then locks and revalidates the exact `document_files` row. PostgreSQL
+cannot lock filesystem bytes, so out-of-band mutation between those steps is an explicit host
+integrity boundary rather than a database guarantee. Operators must restrict storage writes to
+the HomeSource service account and treat direct filesystem modification as unsupported.
