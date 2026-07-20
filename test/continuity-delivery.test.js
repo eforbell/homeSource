@@ -10,11 +10,19 @@ const {
   authedPost, createMember, getPool, loginAs, resetDatabase, startServer, stopServer, url
 } = require('./helpers');
 const continuity = require('../lib/continuity');
+const { saveFileRecord, storeFile } = require('../lib/files');
 
 let pool;
 let parent;
 let kid;
 let parentCookie;
+
+function wrapped(value) {
+  return {
+    kind: 'pki_x25519', ephemeral_public_key_b64: `ephemeral-${value}`,
+    hkdf_salt_b64: `salt-${value}`, wrapped_dek_b64: `wrapped-${value}`
+  };
+}
 
 async function createEscalatedSwitch({ witnesses = 0 } = {}) {
   const item = await continuity.saveDraft({
@@ -25,12 +33,47 @@ async function createEscalatedSwitch({ witnesses = 0 } = {}) {
     recipients: [{ member_id: kid.id }],
     operationKey: `c1-draft-${witnesses}`
   });
+  const { rows: keys } = await pool.query(
+    `INSERT INTO encryption_keys
+       (key_type, member_id, public_key, encrypted_private_key, algorithm, key_fingerprint, protection_tier)
+     VALUES ('member', $1, 'owner-public', 'owner-private', 'x25519', $3, 'passphrase'),
+            ('member', $2, 'kid-public', 'kid-private', 'x25519', $4, 'passphrase')
+     RETURNING *`, [parent.id, kid.id, `c1-owner-key-${witnesses}`, `c1-kid-key-${witnesses}`]
+  );
+  const ownerKey = keys.find((key) => Number(key.member_id) === Number(parent.id));
+  const kidKey = keys.find((key) => Number(key.member_id) === Number(kid.id));
+  const envelope = { version: 2, mode: 'pki', files: { upload: {
+    cipher: 'aes-256-gcm', iv_b64: 'c1-iv', tag_length_bits: 128, holders: [
+      { member_id: parent.id, role: 'owner', encryption_key_id: ownerKey.id,
+        key_fingerprint: ownerKey.key_fingerprint, wrapped_dek: wrapped('owner') },
+      { member_id: kid.id, role: 'beneficiary', sealed: true, sealed_until: 'deadman_trigger',
+        encryption_key_id: kidKey.id, key_fingerprint: kidKey.key_fingerprint,
+        wrapped_dek: wrapped('kid') }
+    ]
+  } } };
   const { rows: letters } = await pool.query(
     `INSERT INTO documents
        (title, document_type, source_type, status, is_encrypted, encryption_mode,
-        encryption_metadata, created_by)
-     VALUES ('The Letter', 'legal', 'authored', 'active', TRUE, 'pki', '{}', $1)
-     RETURNING *`, [parent.id]
+        encryption_metadata, encryption_key_id, metadata, created_by)
+     VALUES ('The Letter', 'legal', 'authored', 'active', TRUE, 'pki', $2, $3,
+             '{"continuity_letter":true}', $1)
+     RETURNING *`, [parent.id, JSON.stringify(envelope), ownerKey.id]
+  );
+  await saveFileRecord(
+    letters[0].id,
+    await storeFile(Buffer.from(`c1-letter-${witnesses}`), `c1-letter-${witnesses}.enc`, 'application/octet-stream')
+  );
+  const { rows: designations } = await pool.query(
+    `INSERT INTO document_designations
+       (document_id, member_id, role, sealed, sealed_until, encryption_key_id)
+     VALUES ($1, $2, 'beneficiary', TRUE, 'deadman_trigger', $3) RETURNING *`,
+    [letters[0].id, kid.id, kidKey.id]
+  );
+  await pool.query(
+    `INSERT INTO member_contact_channels
+       (member_id, channel_type, normalized_address, status, created_by, verified_at)
+     VALUES ($1, 'email', $2, 'verified', $3, $4)`,
+    [kid.id, `kid-${witnesses}@family.test`, parent.id, new Date('2026-03-01T12:00:00Z')]
   );
   const { rows: packets } = await pool.query(
     `INSERT INTO continuity_packet_versions
@@ -39,6 +82,24 @@ async function createEscalatedSwitch({ witnesses = 0 } = {}) {
      VALUES ($1, 1, 'active', $2, $3, 'c1-active-packet', $4, $5)
      RETURNING *`,
     [item.id, letters[0].id, 'a'.repeat(64), parent.id, new Date('2026-03-01T12:00:00Z')]
+  );
+  const { rows: packetDocuments } = await pool.query(
+    `INSERT INTO continuity_packet_documents
+       (packet_version_id, document_id, item_kind, packet_order)
+     VALUES ($1, $2, 'letter', 1) RETURNING *`, [packets[0].id, letters[0].id]
+  );
+  const { rows: packetRecipients } = await pool.query(
+    `INSERT INTO continuity_packet_recipients
+       (packet_version_id, member_id, role, packet_order)
+     VALUES ($1, $2, 'beneficiary', 1) RETURNING *`, [packets[0].id, kid.id]
+  );
+  await pool.query(
+    `INSERT INTO continuity_packet_recipient_documents
+       (packet_version_id, packet_recipient_id, packet_document_id, coverage_status,
+        designation_id, encryption_key_id, key_fingerprint)
+     VALUES ($1, $2, $3, 'covered', $4, $5, $6)`,
+    [packets[0].id, packetRecipients[0].id, packetDocuments[0].id,
+      designations[0].id, kidKey.id, kidKey.key_fingerprint]
   );
   await pool.query(
     `UPDATE continuity_switches
@@ -70,7 +131,7 @@ async function createEscalatedSwitch({ witnesses = 0 } = {}) {
     );
     trustees.push({ ...trustee, contact: contacts[0] });
   }
-  return { switchItem: item, packet: packets[0], trustees };
+  return { switchItem: item, packet: packets[0], trustees, kidKey };
 }
 
 function rawTokenFromMessage(message) {
@@ -210,7 +271,7 @@ describe('Phase C1 trustee verification window', () => {
     assert.equal(second.delivery_runs_created, 0);
     const { rows: runs } = await pool.query('SELECT * FROM continuity_delivery_runs');
     assert.equal(runs.length, 1);
-    assert.equal(runs[0].status, 'recipient_delivery');
+    assert.equal(runs[0].status, 'delivery_active');
     const { rows: outbox } = await pool.query(
       "SELECT * FROM continuity_notification_outbox WHERE notification_type = 'trustee_verification'"
     );
@@ -230,7 +291,7 @@ describe('Phase C1 trustee verification window', () => {
     const atBoundary = await continuity.advanceDueSwitches({ now: new Date('2026-04-04T12:05:00Z') });
     assert.equal(atBoundary.delivery_runs_released, 1);
     const { rows } = await pool.query('SELECT status, released_at FROM continuity_delivery_runs');
-    assert.equal(rows[0].status, 'recipient_delivery');
+    assert.equal(rows[0].status, 'delivery_active');
     assert.equal(new Date(rows[0].released_at).toISOString(), '2026-04-04T12:05:00.000Z');
   });
 
@@ -295,6 +356,10 @@ describe('Phase C1 trustee verification window', () => {
 
   it('requires same-request owner reauthentication and fails closed after the grant boundary', async () => {
     const fixture = await createEscalatedSwitch({ witnesses: 0 });
+    await pool.query(
+      'UPDATE encryption_keys SET revoked_at = $2 WHERE id = $1',
+      [fixture.kidKey.id, new Date('2026-04-01T11:00:00Z')]
+    );
     await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
     const wrong = await authedPost(`api/continuity/switch/${fixture.switchItem.id}/recover`, parentCookie, {
       current_passphrase: 'wrong-passphrase', operation_key: 'owner-recover-wrong'
@@ -312,11 +377,6 @@ describe('Phase C1 trustee verification window', () => {
     parentCookie = await loginAs(parent, 'parent-pass');
     const boundary = await createEscalatedSwitch({ witnesses: 0 });
     await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
-    await pool.query(
-      `UPDATE continuity_delivery_runs
-       SET first_grant_activated_at = $2 WHERE switch_id = $1`,
-      [boundary.switchItem.id, new Date('2026-04-01T12:01:00Z')]
-    );
     const blocked = await authedPost(`api/continuity/switch/${boundary.switchItem.id}/recover`, parentCookie, {
       current_passphrase: 'parent-pass', operation_key: 'owner-recover-too-late'
     });

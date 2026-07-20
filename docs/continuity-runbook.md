@@ -1,7 +1,9 @@
 # Continuity switch operations
 
-Phase B sends reminders only to the switch owner's confirmed reminder address. It never
-contacts trustees or beneficiaries and never changes sealed envelope holders.
+Phase B reminders target only the switch owner. Phase C1 may contact designated witness
+trustees after escalation. Phase C2 creates immutable recipient grants and durable recipient
+outbox rows, but the outbox dispatcher intentionally leaves those rows unclaimed until the C3
+scoped recipient doorway exists; this increment sends no beneficiary access link.
 
 ## Required configuration
 
@@ -49,5 +51,6 @@ systemd-analyze verify deploy/home-source-continuity-*.service deploy/home-sourc
 ```
 
 Backups export continuity tables from one repeatable-read database snapshot and fail when a
-referenced stored file is missing. Check-in token hashes may appear in the database export;
-raw check-in tokens and letter plaintext must not.
+referenced stored file is missing. Check-in, trustee-action, and recipient-access token hashes
+may appear in the database export, along with encrypted holder-local grant material; raw bearer
+tokens, private keys, DEKs, and letter plaintext must not.

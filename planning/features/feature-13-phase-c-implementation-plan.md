@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1–C1 implemented through automated verification; C2 delivery grants next
+Status: C0.1–C2 implemented through automated verification; C3 scoped doorway next
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -121,13 +121,20 @@ replay, partial/permanent failure cannot consume the common clock, pause concurr
 extend the deadline, no-witness runs release immediately to the still non-delivering C2 state,
 and owner recovery fails closed once the modeled first-grant boundary is committed.
 
-## C2 — Delivery manifests and grants
+## C2 — Delivery manifests and grants — implemented
 
 - Run envelope-canonical preflight under the delivery-run lock.
 - Snapshot immutable per-recipient grants and generic-ordinal manifest items.
 - Apply atomic delivery per recipient: one blocked item blocks that recipient, not healthy
   recipients.
 - Commit grant, manifest, hashed usable token, and notification outbox atomically.
+
+Stop condition met by automated verification: delivery-time posture is revalidated without
+decrypting, each recipient receives one immutable complete manifest or one blocked grant,
+healthy recipients activate independently, the first active grant fixes the owner-recovery
+cutoff, scheduler replay creates no duplicate durable state, and repeatable-read backup retains
+only hashed bearer material. Recipient outbox rows remain deliberately unclaimed until C3 adds
+the exact-item doorway; C2 cannot accidentally send a check-in link in their place.
 
 ## C3 — Scoped recipient doorway
 

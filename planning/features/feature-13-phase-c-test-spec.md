@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1–C1 automated gates satisfied
+Status: Active; C0.1–C2 automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -88,11 +88,20 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 - The first valid pause wins and fixes one 30-day deadline; replay/concurrency cannot extend it.
 - Owner recovery loses the race after the atomic first-grant activation boundary.
 
-## C2/C3 gates
+## C2 gates
 
 - Preflight classifies missing, revoked, mismatched, stranded, and healthy items without
   decrypting anything.
 - A blocked item blocks its recipient's complete packet while healthy recipient grants proceed.
+- Grant, generic-ordinal manifest, hashed access token, recipient outbox row, and the first-grant
+  owner-recovery cutoff commit atomically under the delivery-run lock.
+- Replayed schedulers do not duplicate grants, manifest items, tokens, or outbox rows.
+- Recipient outbox rows are not dispatched through the owner check-in or trustee pathways before
+  the C3 scoped doorway exists.
+- Grant/item/token state is backup-covered without raw bearer material or document metadata.
+
+## C3 gates
+
 - Tokens are purpose-bound, replaceable, and cross-grant/cross-recipient use fails uniformly.
 - Recipient APIs expose only generic ordinals before local unlock and serve exact grant items.
 - Link, session, and grant deadlines are seven days, 60 minutes, and one year respectively;

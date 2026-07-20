@@ -401,3 +401,22 @@
   email, or mail configuration invalidates prior readiness evidence.
 - Kept the final arming gate deferred until immutable packet activation can join the same
   server-enforced Phase C transaction; no partial UI-only security boundary was introduced.
+
+## 2026-07-20 — Phase C C2 delivery grants implemented
+
+- Added immutable per-recipient delivery grants, generic-ordinal exact-item manifests, hashed
+  access tokens, and recipient outbox bindings through migration 022 and the canonical schema.
+- Revalidated recipient eligibility, verified contact, encrypted file integrity, envelope-v2
+  holder identity, active exact key/fingerprint, and designation projection under the locked
+  delivery run without unwrapping a DEK.
+- Activated healthy recipients independently while one blocked item blocks its recipient's
+  complete grant; all-blocked runs retain owner recovery because no first grant activated.
+- Committed each healthy grant, manifest, initial token hash, outbox row, and the durable
+  first-grant recovery cutoff in one transaction. Replayed scheduler runs create no duplicates.
+- Kept recipient outbox rows non-dispatching until C3 supplies the scoped token exchange and
+  exact-item doorway, preventing C2 from emitting a dead or incorrectly scoped link.
+- Extended operator status and repeatable-read backups with grant/item counts and hashed bearer
+  state while keeping document titles, filenames, raw tokens, plaintext, private keys, and DEKs
+  outside recipient delivery metadata.
+- Verified the 22-migration chain, fresh `db/schema.sql`, focused C1/C2/security suites, and the
+  full 386-test regression suite.
