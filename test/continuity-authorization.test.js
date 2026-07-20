@@ -185,6 +185,15 @@ describe('continuity-aware authorization boundary', () => {
     assert.equal(dependency.documents[0].title, 'Protected continuity document');
   });
 
+  it('filters an unmarked switch-referenced Letter without failing the complete document list', async () => {
+    await pool.query(`UPDATE documents SET metadata = '{}'::jsonb WHERE id = $1`, [letter.id]);
+    const listRes = await authedGet('api/documents', otherCookie);
+    assert.equal(listRes.status, 200);
+    const listed = await listRes.json();
+    assert.equal(listed.documents.some((doc) => doc.id === letter.id), false);
+    assert.equal(listed.documents.some((doc) => doc.id === ordinary.id), true);
+  });
+
   it('preserves ordinary document access while redacting continuity-specific sealed wraps', async () => {
     const detailRes = await authedGet(`api/documents/${selected.id}`, otherCookie);
     assert.equal(detailRes.status, 200);

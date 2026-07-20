@@ -257,6 +257,42 @@ describe('Phase C1 trustee verification window', () => {
     assert.equal(replay, null);
   });
 
+  it('lets the reauthenticated owner recover or cancel a delivery-blocked switch', async () => {
+    const recoverFixture = await createEscalatedSwitch({ witnesses: 1 });
+    await pool.query(
+      `UPDATE vault_trustees SET status = 'revoked', revoked_at = $2 WHERE id = $1`,
+      [recoverFixture.trustees[0].id, new Date('2026-04-01T11:00:00Z')]
+    );
+    await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
+    let { rows: switches } = await pool.query(
+      'SELECT status FROM continuity_switches WHERE id = $1', [recoverFixture.switchItem.id]
+    );
+    assert.equal(switches[0].status, 'delivery_blocked');
+    const recovered = await authedPost(
+      `api/continuity/switch/${recoverFixture.switchItem.id}/recover`, parentCookie,
+      { current_passphrase: 'parent-pass', operation_key: 'recover-delivery-blocked' }
+    );
+    assert.equal(recovered.status, 200);
+    assert.equal((await recovered.json()).status, 'armed');
+
+    await resetDatabase();
+    parent = await createMember('C1 Cancel Parent', 'parent', 'parent-pass');
+    kid = await createMember('C1 Cancel Kid', 'kid', 'kid-pass');
+    parentCookie = await loginAs(parent, 'parent-pass');
+    const cancelFixture = await createEscalatedSwitch({ witnesses: 1 });
+    await pool.query(
+      `UPDATE vault_trustees SET status = 'revoked', revoked_at = $2 WHERE id = $1`,
+      [cancelFixture.trustees[0].id, new Date('2026-04-01T11:00:00Z')]
+    );
+    await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
+    const cancelled = await authedPost(
+      `api/continuity/switch/${cancelFixture.switchItem.id}/cancel`, parentCookie,
+      { current_passphrase: 'parent-pass', operation_key: 'cancel-delivery-blocked' }
+    );
+    assert.equal(cancelled.status, 200);
+    assert.equal((await cancelled.json()).status, 'cancelled');
+  });
+
   it('requires same-request owner reauthentication and fails closed after the grant boundary', async () => {
     const fixture = await createEscalatedSwitch({ witnesses: 0 });
     await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });

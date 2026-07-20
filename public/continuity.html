@@ -142,7 +142,7 @@
       actions.innerHTML = '';
       if (item?.status === 'armed') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="check-in">I'm here</button><button class="btn" data-switch-action="pause">Pause</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
       if (item?.status === 'paused') actions.innerHTML = `<button class="btn btn-primary" data-switch-action="resume">Resume</button><button class="btn btn-danger" data-switch-action="cancel">Cancel</button>`;
-      if (item && ['delivery_pending', 'trustee_notification_pending', 'trustee_notification_blocked', 'trustee_window', 'trustee_paused', 'recipient_delivery'].includes(item.status)) {
+      if (item && ['delivery_pending', 'delivery_blocked', 'trustee_notification_pending', 'trustee_notification_blocked', 'trustee_window', 'trustee_paused', 'recipient_delivery'].includes(item.status)) {
         actions.innerHTML = `<button class="btn btn-primary" data-switch-action="recover">I'm here — stop delivery</button>`;
       }
       const runs = operations?.runs || [];

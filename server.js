@@ -36,6 +36,7 @@ const trusteeContacts = require('./lib/trustee-contacts');
 const continuityPackets = require('./lib/continuity-packets');
 const continuityAuthorization = require('./lib/continuity-authorization');
 const brrr = require('./lib/brrr');
+const { buildAppUrl, tryBuildAppUrl } = require('./lib/app-url');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -77,35 +78,25 @@ function insightDocumentIds(insight) {
 }
 
 async function canAccessInsight(insight, actor, mode = 'read') {
-  for (const documentId of insightDocumentIds(insight)) {
-    const authorization = await continuityAuthorization.resolveDocumentAuthorization({ documentId, actor });
+  const documentIds = insightDocumentIds(insight);
+  const authorizations = await continuityAuthorization.resolveDocumentAuthorizations({ documentIds, actor });
+  for (const documentId of documentIds) {
+    const authorization = authorizations.get(documentId);
     if (!authorization || (mode === 'administer' ? !authorization.can_administer : !authorization.can_read)) return false;
   }
   return true;
 }
 
+async function filterAccessibleInsights(rows, actor, mode = 'read') {
+  const documentIds = [...new Set((rows || []).flatMap(insightDocumentIds))];
+  const authorizations = await continuityAuthorization.resolveDocumentAuthorizations({ documentIds, actor });
+  const permission = mode === 'administer' ? 'can_administer' : 'can_read';
+  return (rows || []).filter((insight) => insightDocumentIds(insight)
+    .every((documentId) => authorizations.get(documentId)?.[permission]));
+}
+
 async function visibleInsightSummary(actor) {
-  const all = await insights.listInsights({ include_all_statuses: true, limit: 500 });
-  const visible = [];
-  for (const insight of all) if (await canAccessInsight(insight, actor)) visible.push(insight);
-  const count = (status, severity = null) => visible.filter((row) => row.status === status && (!severity || row.severity === severity)).length;
-  const categories = new Map();
-  for (const row of visible.filter((entry) => ['new', 'accepted'].includes(entry.status))) {
-    categories.set(row.category, (categories.get(row.category) || 0) + 1);
-  }
-  const topDue = visible.filter((row) => row.status === 'new' && ['critical', 'warning'].includes(row.severity))
-    .sort((a, b) => (a.severity === b.severity ? String(a.due_date || '9999').localeCompare(String(b.due_date || '9999')) : (a.severity === 'critical' ? -1 : 1)))
-    .slice(0, 3)
-    .map(({ id, category, severity, status, title, due_date, action_url }) => ({ id, category, severity, status, title, due_date, action_url }));
-  return {
-    action_required_count: visible.filter((row) => row.status === 'new' && ['critical', 'warning'].includes(row.severity)).length,
-    new_critical_count: count('new', 'critical'), new_warning_count: count('new', 'warning'),
-    new_info_count: count('new', 'info'), accepted_count: count('accepted'),
-    dismissed_count: count('dismissed'), stale_count: count('stale'),
-    by_category: [...categories].map(([category, categoryCount]) => ({ category, count: categoryCount }))
-      .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
-    top_due: topDue
-  };
+  return insights.getVisibleInsightSummary(actor.id);
 }
 
 function buildSovereignFontsCss() {
@@ -246,6 +237,16 @@ app.get(['/check-in', '/check-in.html'], (_req, res) => {
 app.get(['/continuity-contact', '/continuity-contact.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'continuity-contact.html'));
+});
+
+app.get(['/trustee-contact', '/trustee-contact.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'trustee-contact.html'));
+});
+
+app.get(['/trustee-action', '/trustee-action.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'trustee-action.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -491,23 +492,7 @@ app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
 // ── Continuity trustees ──────────────────────────────────────────────────────
 
 function trusteeInvitationUrl(token) {
-  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
-  if (!configuredBaseUrl) throw new Error('APP_URL is required for trustee invitations');
-  let invitationUrl;
-  try {
-    invitationUrl = new URL('/trustee-invite.html', configuredBaseUrl);
-  } catch {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  if (!['http:', 'https:'].includes(invitationUrl.protocol)) {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  const localHost = ['localhost', '127.0.0.1', '::1'].includes(invitationUrl.hostname);
-  if (invitationUrl.protocol !== 'https:' && !localHost) {
-    throw new Error('APP_URL must use HTTPS for trustee invitations (except localhost)');
-  }
-  invitationUrl.searchParams.set('token', token);
-  return invitationUrl.toString();
+  return buildAppUrl('trustee-invite.html', { token });
 }
 
 function trusteeInvitationMessage({ trustee, operatorName, invitationUrl, expiresAt }) {
@@ -536,23 +521,7 @@ async function deliverTrusteeInvitation({ trustee, invitation, operator }) {
 }
 
 function trusteeContactVerificationUrl(token) {
-  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
-  if (!configuredBaseUrl) throw new Error('APP_URL is required for trustee contact verification');
-  let verificationUrl;
-  try {
-    verificationUrl = new URL('/trustee-contact.html', configuredBaseUrl);
-  } catch {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  if (!['http:', 'https:'].includes(verificationUrl.protocol)) {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  const localHost = ['localhost', '127.0.0.1', '::1'].includes(verificationUrl.hostname);
-  if (verificationUrl.protocol !== 'https:' && !localHost) {
-    throw new Error('APP_URL must use HTTPS for trustee contact verification (except localhost)');
-  }
-  verificationUrl.searchParams.set('token', token);
-  return verificationUrl.toString();
+  return buildAppUrl('trustee-contact.html', { token });
 }
 
 async function deliverTrusteeContactVerification({ started, operator }) {
@@ -574,23 +543,7 @@ async function deliverTrusteeContactVerification({ started, operator }) {
 }
 
 function memberContactVerificationUrl(token) {
-  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
-  if (!configuredBaseUrl) throw new Error('APP_URL is required for continuity contact verification');
-  let verificationUrl;
-  try {
-    verificationUrl = new URL('/continuity-contact.html', configuredBaseUrl);
-  } catch {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  if (!['http:', 'https:'].includes(verificationUrl.protocol)) {
-    throw new Error('APP_URL must be an absolute http(s) URL');
-  }
-  const localHost = ['localhost', '127.0.0.1', '::1'].includes(verificationUrl.hostname);
-  if (verificationUrl.protocol !== 'https:' && !localHost) {
-    throw new Error('APP_URL must use HTTPS for continuity contact verification (except localhost)');
-  }
-  verificationUrl.searchParams.set('token', token);
-  return verificationUrl.toString();
+  return buildAppUrl('continuity-contact.html', { token });
 }
 
 function memberContactVerificationMessage({ contact, operatorName, verificationUrl, expiresAt }) {
@@ -782,12 +735,7 @@ app.delete('/api/continuity/notification-channels/brrr', requireAuth, requirePar
 });
 
 function continuityOpenUrl() {
-  const configuredBaseUrl = String(process.env.APP_URL || '').trim();
-  if (!configuredBaseUrl) return null;
-  try {
-    const result = new URL('/continuity.html', configuredBaseUrl);
-    return ['http:', 'https:'].includes(result.protocol) ? result.toString() : null;
-  } catch { return null; }
+  return tryBuildAppUrl('continuity.html');
 }
 
 app.post('/api/continuity/notification-channels/brrr/test', requireAuth, requireParent, async (req, res) => {
@@ -2931,9 +2879,7 @@ app.get('/api/audit', requireAuth, requireParent, async (req, res) => {
 app.get('/api/insights', requireAuth, requireParent, async (req, res) => {
   try {
     const rows = await insights.listInsights(req.query);
-    const visible = [];
-    for (const insight of rows) if (await canAccessInsight(insight, req.member)) visible.push(insight);
-    res.json(visible);
+    res.json(await filterAccessibleInsights(rows, req.member));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
