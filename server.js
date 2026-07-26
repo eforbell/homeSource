@@ -1071,36 +1071,42 @@ function sendRecipientUnavailable(res) {
   return res.status(404).json({ error: 'This private delivery is unavailable' });
 }
 
-const recipientFailures = new Map();
-function allowRecipientAttempt(req) {
-  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
+const recipientExchangeFailures = new Map();
+const recipientReissueAttempts = new Map();
+function recipientRateKey(req) {
+  return String(req.ip || req.socket.remoteAddress || 'unknown');
+}
+function allowRecipientAttempt(bucket, req) {
+  const key = recipientRateKey(req);
   const now = Date.now();
-  const recent = (recipientFailures.get(key) || []).filter((value) => now - value < 15 * 60_000);
-  recipientFailures.set(key, recent);
+  const recent = (bucket.get(key) || []).filter((value) => now - value < 15 * 60_000);
+  bucket.set(key, recent);
   return recent.length < 20;
 }
-function recordRecipientFailure(req) {
-  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
-  recipientFailures.set(key, [...(recipientFailures.get(key) || []), Date.now()].slice(-20));
+function recordRecipientAttempt(bucket, req) {
+  const key = recipientRateKey(req);
+  bucket.set(key, [...(bucket.get(key) || []), Date.now()].slice(-20));
 }
 
 app.post('/api/continuity/recipient/exchange', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    if (!allowRecipientAttempt(req)) return sendRecipientUnavailable(res);
+    if (!allowRecipientAttempt(recipientExchangeFailures, req)) return sendRecipientUnavailable(res);
     const exchanged = await continuityRecipient.exchangeAccessToken(req.body?.token);
     res.json(exchanged);
-  } catch (_err) { recordRecipientFailure(req); sendRecipientUnavailable(res); }
+  } catch (_err) { recordRecipientAttempt(recipientExchangeFailures, req); sendRecipientUnavailable(res); }
 });
 
 app.post('/api/continuity/recipient/reissue', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    if (allowRecipientAttempt(req)) await continuityRecipient.requestRecipientReissue(req.body?.token);
+    if (allowRecipientAttempt(recipientReissueAttempts, req)) {
+      await continuityRecipient.requestRecipientReissue(req.body?.token);
+    }
   } catch (_err) { /* Preserve the uniform accepted response. */ }
-  // Count every resend request, including valid ones, so possession of an old link cannot
-  // turn this enumeration-safe endpoint into an unbounded mail relay.
-  recordRecipientFailure(req);
+  // Resends have their own budget: they cannot become an unbounded mail relay, and they
+  // cannot deny a recipient's independent link-redemption path.
+  recordRecipientAttempt(recipientReissueAttempts, req);
   res.status(202).json({ ok: true });
 });
 
@@ -1127,10 +1133,21 @@ app.post('/api/continuity/recipient/items/:ordinal/webauthn/assertion-options', 
   try {
     if (!webauthn.isSecureWebAuthnContext(req)) throw new Error('unavailable');
     const resolved = await continuityRecipient.resolveExactItem(recipientBearer(req), req.params.ordinal);
-    if (!resolved.item.member_id || !resolved.key.credential_verified || !resolved.key.credential_id) throw new Error('unavailable');
-    const member = await getMember(resolved.item.member_id);
-    if (!member) throw new Error('unavailable');
-    res.json(await webauthn.createMemberKeyAssertionOptions(req, member, resolved.key.credential_id));
+    if (!resolved.key.credential_verified || !resolved.key.credential_id) throw new Error('unavailable');
+    if (resolved.item.member_id) {
+      const member = await getMember(resolved.item.member_id);
+      if (!member) throw new Error('unavailable');
+      return res.json(await webauthn.createMemberKeyAssertionOptions(req, member, resolved.key.credential_id));
+    }
+    if (resolved.item.trustee_id) {
+      const { rows } = await pool.query(
+        `SELECT id, name, relationship FROM vault_trustees
+         WHERE id = $1 AND status = 'registered' AND revoked_at IS NULL`, [resolved.item.trustee_id]
+      );
+      if (!rows[0]) throw new Error('unavailable');
+      return res.json(await webauthn.createTrusteeKeyAssertionOptions(req, rows[0], resolved.key.credential_id));
+    }
+    throw new Error('unavailable');
   } catch (_err) { sendRecipientUnavailable(res); }
 });
 

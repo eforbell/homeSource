@@ -37,7 +37,9 @@
   const summary = document.getElementById('summary'); const itemsEl = document.getElementById('items');
   const unlockEl = document.getElementById('unlock'); const statusEl = document.getElementById('status');
   const resultEl = document.getElementById('result'); const passkeyButton = document.getElementById('passkey-button');
-  const token = new URLSearchParams(location.search).get('token') || ''; let bearer = null; let selectedOrdinal = null; let selectedItem = null;
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const recipientBearerStorageKey = 'homesource-recipient-delivery-bearer';
+  let bearer = sessionStorage.getItem(recipientBearerStorageKey) || null; let selectedOrdinal = null; let selectedItem = null;
   const reissueButton = document.getElementById('reissue-button');
   function authHeaders() { return { Authorization: `Bearer ${bearer}` }; }
   async function api(path, options = {}) {
@@ -92,15 +94,25 @@
       passkeyButton.hidden = !(selectedItem.key_material.credential_verified && selectedItem.key_material.credential_id);
     } catch (error) { statusEl.textContent = error.message; }
   }
+  function showItems(items) {
+    if (!items.length) throw new Error('This private delivery is unavailable or has expired.');
+    summary.textContent = 'Select a private item to unlock in this browser.'; itemsEl.hidden = false; itemsEl.replaceChildren();
+    for (const item of items) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn'; button.textContent = item.label; button.addEventListener('click', () => choose(item.ordinal)); itemsEl.append(button); }
+  }
   async function start() {
     try {
+      if (bearer) {
+        const manifest = await (await api('api/continuity/recipient/manifest')).json();
+        showItems(manifest.items); return;
+      }
       const response = await fetch('api/continuity/recipient/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }), cache: 'no-store', credentials: 'omit' });
       if (!response.ok) throw new Error('This private delivery is unavailable or has expired.');
-      const exchanged = await response.json(); bearer = exchanged.bearer; history.replaceState(null, '', 'recipient-delivery.html');
-      summary.textContent = 'Select a private item to unlock in this browser.'; itemsEl.hidden = false;
-      for (const item of exchanged.items) { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn'; button.textContent = item.label; button.addEventListener('click', () => choose(item.ordinal)); itemsEl.append(button); }
-      if (!exchanged.items.length) throw new Error('This private delivery is unavailable or has expired.');
-    } catch (error) { summary.textContent = error.message; reissueButton.hidden = !token; }
+      const exchanged = await response.json(); bearer = exchanged.bearer; sessionStorage.setItem(recipientBearerStorageKey, bearer); history.replaceState(null, '', 'recipient-delivery.html');
+      showItems(exchanged.items);
+    } catch (error) {
+      bearer = null; sessionStorage.removeItem(recipientBearerStorageKey);
+      summary.textContent = error.message; reissueButton.hidden = false;
+    }
   }
   reissueButton.addEventListener('click', async () => {
     reissueButton.disabled = true;

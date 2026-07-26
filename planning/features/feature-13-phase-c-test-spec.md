@@ -114,13 +114,14 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 ## C4 completion matrix
 
 - Recipient reissue accepts only a prior hashed access token, gives all callers the same
-  accepted response, invalidates usable prior links, and queues only the immutable grant
-  destination without extending grant expiry.
+  accepted response, invalidates usable prior links and sessions, and queues only the immutable
+  grant destination without extending grant expiry.
 - At the one-year boundary the scheduler expires every active grant, revokes recipient
   sessions, replaces usable links, supersedes unsent recipient delivery, and records token-free
   owner-visible events; no remaining active grant completes the delivery run.
 - Scheduler and outbox restarts do not duplicate runs, windows, grants, or usable links.
 - Backup/restore preserves all durable state from a consistent snapshot.
-- Rate-limit and enumeration scenarios return uniform safe responses.
+- Resend throttling and redemption throttling remain isolated; rate-limit and enumeration
+  scenarios return uniform safe responses.
 - Full automated suite, browser ceremonies, SMTP delivery, systemd timers, and a
   production-like backup/restore inspection complete without plaintext or token leakage.
