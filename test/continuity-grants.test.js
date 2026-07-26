@@ -312,6 +312,41 @@ describe('Phase C2 recipient grants and manifests', () => {
     );
   });
 
+  it('routes a trustee-backed recipient passkey through the trustee WebAuthn ceremony', async () => {
+    const { rows: trustees } = await pool.query(
+      `INSERT INTO vault_trustees (name, email, status, created_by, registered_at)
+       VALUES ('Grant Trustee', 'trustee@family.test', 'registered', $1, NOW()) RETURNING *`, [parent.id]
+    );
+    const trustee = trustees[0];
+    await pool.query(
+      `INSERT INTO webauthn_credentials
+         (trustee_id, credential_id, credential_public_key, registration_prf_salt, counter,
+          credential_device_type, credential_backed_up, credential_attachment,
+          credential_transports, requested_method)
+       VALUES ($1, 'trustee-recipient-credential', 'trustee-public-key', 'trustee-prf-salt', 0,
+               'singleDevice', false, 'cross-platform', '[]'::jsonb, 'security_key')`, [trustee.id]
+    );
+    const resolveExactItem = continuityRecipient.resolveExactItem;
+    continuityRecipient.resolveExactItem = async () => ({
+      item: { member_id: null, trustee_id: trustee.id },
+      key: { credential_verified: true, credential_id: 'trustee-recipient-credential' }
+    });
+    try {
+      const response = await fetch(url('api/continuity/recipient/items/1/webauthn/assertion-options'), {
+        method: 'POST', headers: { Authorization: 'Bearer trustee-recipient-bearer', 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'home.family.test' }, body: '{}'
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.equal(payload.options.extensions.prf.evalByCredential['trustee-recipient-credential'].first, 'trustee-prf-salt');
+      const { rows: challenges } = await pool.query(
+        "SELECT trustee_id, purpose FROM webauthn_challenges WHERE trustee_id = $1", [trustee.id]
+      );
+      assert.deepEqual(challenges, [{ trustee_id: trustee.id, purpose: 'trustee_key_assertion' }]);
+    } finally {
+      continuityRecipient.resolveExactItem = resolveExactItem;
+    }
+  });
+
   it('fails closed when canonical holder evidence changes after a grant is issued', async () => {
     const fixture = await createReleasedPacket();
     const at = new Date('2026-04-01T12:00:00Z');
@@ -369,8 +404,23 @@ describe('Phase C2 recipient grants and manifests', () => {
     assert.equal(replacementMessages[0].to, 'one@family.test');
     const replacementToken = replacementMessages[0].text.match(/[?&]token=([^\s]+)/)[1];
     const session = await continuityRecipient.exchangeAccessToken(replacementToken, { now: dispatchedAt });
+    const revokeSessionReissue = await fetch(url('api/continuity/recipient/reissue'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: replacementToken })
+    });
+    assert.equal(revokeSessionReissue.status, 202);
+    await assert.rejects(() => continuityRecipient.getRecipientManifest(session.bearer), /private delivery/i);
+    const { rows: thirdAttempt } = await pool.query(
+      `SELECT next_attempt_at FROM continuity_notification_outbox
+       WHERE notification_type = 'recipient_delivery' ORDER BY id LIMIT 1`
+    );
+    const thirdMessages = [];
+    await continuity.dispatchOutbox({
+      now: new Date(thirdAttempt[0].next_attempt_at), env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async (message) => { thirdMessages.push(message); return { delivered: true }; } }
+    });
+    assert.equal(thirdMessages.length, 1);
 
-    for (let attempt = 0; attempt < 18; attempt += 1) {
+    for (let attempt = 0; attempt < 17; attempt += 1) {
       const throttledUnknown = await fetch(url('api/continuity/recipient/reissue'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: `unknown-${attempt}` })
       });
@@ -386,6 +436,11 @@ describe('Phase C2 recipient grants and manifests', () => {
       "SELECT status FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery' ORDER BY id LIMIT 1"
     );
     assert.equal(rateLimitedOutbox[0].status, 'sent');
+    const thirdToken = thirdMessages[0].text.match(/[?&]token=([^\s]+)/)[1];
+    const redemptionAfterReissues = await fetch(url('api/continuity/recipient/exchange'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: thirdToken })
+    });
+    assert.equal(redemptionAfterReissues.status, 200, 'resend throttling cannot block link redemption');
 
     const expiry = await continuity.advanceDueSwitches({ now: new Date('2027-04-01T12:00:00Z') });
     assert.equal(expiry.grants_expired, 2);
@@ -394,8 +449,8 @@ describe('Phase C2 recipient grants and manifests', () => {
     const { rows: grants } = await pool.query('SELECT status, expired_at FROM continuity_delivery_grants ORDER BY id');
     assert.equal(grants.every((grant) => grant.status === 'expired' && grant.expired_at), true);
     const { rows: sessions } = await pool.query('SELECT revoked_at FROM continuity_delivery_sessions');
-    assert.equal(sessions.length, 1);
-    assert.ok(sessions[0].revoked_at);
+    assert.equal(sessions.length, 2);
+    assert.equal(sessions.every((recipientSession) => recipientSession.revoked_at), true);
     const { rows: events } = await pool.query("SELECT event_type, details FROM continuity_events WHERE event_type LIKE 'delivery.recipient_%' ORDER BY id");
     assert.equal(events.some((event) => event.event_type === 'delivery.recipient_reissue_queued'), true);
     const ownerCookie = await loginAs(parent, 'parent-pass');
@@ -406,6 +461,7 @@ describe('Phase C2 recipient grants and manifests', () => {
     assert.equal(events.filter((event) => event.event_type === 'delivery.recipient_grant_expired').length, 2);
     assert.equal(JSON.stringify(events).includes(originalToken), false);
     assert.equal(JSON.stringify(events).includes(replacementToken), false);
+    assert.equal(JSON.stringify(events).includes(thirdToken), false);
   });
 
   it('hashes each stored artifact once before taking delivery activation locks', async () => {

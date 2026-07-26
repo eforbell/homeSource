@@ -446,13 +446,14 @@
 - Added migration 024 so the immutable recipient-session trigger permits only terminal
   revocation after a grant expires; session identity and lifetime stay immutable.
 - Added enumeration-safe recipient-initiated reissue: a prior hashed link invalidates all
-  usable links for its exact grant and requeues mail solely to the immutable verified recipient
-  snapshot without extending the one-year lifetime.
+  usable links and live sessions for its exact grant and requeues mail solely to the immutable
+  verified recipient snapshot without extending the one-year lifetime.
 - Added scheduler terminal expiry for active grants: it expires grants, revokes sessions,
   invalidates remaining links, supersedes outstanding recipient outbox rows, completes exhausted
   runs, and writes token-free lifecycle events exposed through the parent-authorized timeline.
-- Added recipient attempt rate limiting, C4 regression coverage for cross-state reissue, exact
-  expiry, session revocation, destination preservation, event secrecy, and timeline ownership.
+- Added separate recipient resend/redemption rate-limit budgets, trustee passkey assertion
+  support, and C4 regression coverage for cross-state reissue, exact expiry, session revocation,
+  destination preservation, event secrecy, and timeline ownership.
 - Verified the 24-migration chain, fresh `db/schema.sql`, and the full 390-test regression
   suite. C4 operator acceptance (real SMTP/browser/systemd and production-like
   backup/restore) remains outstanding; production arming stays disabled.

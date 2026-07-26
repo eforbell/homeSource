@@ -155,13 +155,15 @@ or key drift fails closed.
 ## C4 — Operations and completion — in progress
 
 - Implemented recipient-initiated replacement requests using only a prior hashed access token:
-  they replace all usable grant links, queue delivery only to the immutable verified destination,
-  retain the original one-year deadline, and return an enumeration-safe public response.
+  they replace all usable grant links and recipient sessions, queue delivery only to the immutable
+  verified destination, retain the original one-year deadline, and return an enumeration-safe
+  public response.
 - Implemented scheduler-driven terminal grant expiry: it expires grants, revokes recipient
   sessions, replaces any remaining usable links, supersedes recipient outbox work, completes
   fully exhausted runs, and records owner-visible token-free lifecycle events.
 - Implemented the parent-authorized delivery timeline endpoint and recipient endpoint rate
-  limiting. Existing owner outbox retry remains the safe blocked-state recovery path.
+  limiting with separate redemption and resend budgets. Existing owner outbox retry remains the
+  safe blocked-state recovery path.
 - Remaining: extend restart/backup-restore and hostile browser/SMTP/systemd acceptance coverage,
   then perform the production-like operator ceremony. Production arming stays disabled.
 
