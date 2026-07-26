@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Test Specification
 
 Date: 2026-07-19
-Status: Active; C0.1–C2 automated gates satisfied
+Status: Active; C0.1–C3 and the C4 recipient lifecycle automated gates satisfied
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 
 ## Invariants exercised in every slice
@@ -96,19 +96,29 @@ PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 - Grant, generic-ordinal manifest, hashed access token, recipient outbox row, and the first-grant
   owner-recovery cutoff commit atomically under the delivery-run lock.
 - Replayed schedulers do not duplicate grants, manifest items, tokens, or outbox rows.
-- Recipient outbox rows are not dispatched through the owner check-in or trustee pathways before
-  the C3 scoped doorway exists.
+- Recipient outbox rows are not dispatched through the owner check-in or trustee pathways;
+  C3 promotion is the only sender that can replace their staged token and deliver the scoped link.
 - Grant/item/token state is backup-covered without raw bearer material or document metadata.
 
 ## C3 gates
 
 - Tokens are purpose-bound, replaceable, and cross-grant/cross-recipient use fails uniformly.
+- Deferred recipient outbox promotion replaces the staged token atomically and never routes
+  through owner-check-in or trustee dispatch paths.
 - Recipient APIs expose only generic ordinals before local unlock and serve exact grant items.
+- Every exact-item request revalidates the active grant, envelope-v2 holder, sealed
+  designation, active key/fingerprint, immutable file row, and ciphertext hash.
 - Link, session, and grant deadlines are seven days, 60 minutes, and one year respectively;
   replacement never extends the grant deadline.
 
 ## C4 completion matrix
 
+- Recipient reissue accepts only a prior hashed access token, gives all callers the same
+  accepted response, invalidates usable prior links, and queues only the immutable grant
+  destination without extending grant expiry.
+- At the one-year boundary the scheduler expires every active grant, revokes recipient
+  sessions, replaces usable links, supersedes unsent recipient delivery, and records token-free
+  owner-visible events; no remaining active grant completes the delivery run.
 - Scheduler and outbox restarts do not duplicate runs, windows, grants, or usable links.
 - Backup/restore preserves all durable state from a consistent snapshot.
 - Rate-limit and enumeration scenarios return uniform safe responses.

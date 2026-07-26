@@ -35,6 +35,7 @@ const continuityReadiness = require('./lib/continuity-readiness');
 const trusteeContacts = require('./lib/trustee-contacts');
 const continuityPackets = require('./lib/continuity-packets');
 const continuityAuthorization = require('./lib/continuity-authorization');
+const continuityRecipient = require('./lib/continuity-recipient');
 const brrr = require('./lib/brrr');
 const { buildAppUrl, tryBuildAppUrl } = require('./lib/app-url');
 
@@ -247,6 +248,11 @@ app.get(['/trustee-contact', '/trustee-contact.html'], (_req, res) => {
 app.get(['/trustee-action', '/trustee-action.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'trustee-action.html'));
+});
+
+app.get(['/recipient-delivery', '/recipient-delivery.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'recipient-delivery.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -983,6 +989,14 @@ app.post('/api/continuity/switch/:id/check-in', requireAuth, requireParent, asyn
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.get('/api/continuity/switch/:id/timeline', requireAuth, requireParent, async (req, res) => {
+  try {
+    res.json(await continuity.getDeliveryTimelineForOwner({
+      ownerId: req.member.id, switchId: Number(req.params.id), limit: req.query?.limit
+    }));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 app.post('/api/continuity/switch/:id/outbox/retry', requireAuth, requireParent, async (req, res) => {
   try {
     const count = await continuity.retryOutboxForOwner({ ownerId: req.member.id, switchId: Number(req.params.id) });
@@ -1045,6 +1059,79 @@ app.post('/api/continuity/check-in', async (req, res) => {
     await audit.log('continuity.checked_in', 'continuity_switch', tokenItem.switch_id, null, { channel: 'email' });
     res.json({ ok: true });
   } catch (_err) { recordCheckinFailure(req); res.status(404).json({ error: 'This check-in is not available' }); }
+});
+
+function recipientBearer(req) {
+  const header = String(req.headers.authorization || '');
+  return header.startsWith('Bearer ') ? header.slice(7) : null;
+}
+
+function sendRecipientUnavailable(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(404).json({ error: 'This private delivery is unavailable' });
+}
+
+const recipientFailures = new Map();
+function allowRecipientAttempt(req) {
+  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
+  const now = Date.now();
+  const recent = (recipientFailures.get(key) || []).filter((value) => now - value < 15 * 60_000);
+  recipientFailures.set(key, recent);
+  return recent.length < 20;
+}
+function recordRecipientFailure(req) {
+  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
+  recipientFailures.set(key, [...(recipientFailures.get(key) || []), Date.now()].slice(-20));
+}
+
+app.post('/api/continuity/recipient/exchange', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!allowRecipientAttempt(req)) return sendRecipientUnavailable(res);
+    const exchanged = await continuityRecipient.exchangeAccessToken(req.body?.token);
+    res.json(exchanged);
+  } catch (_err) { recordRecipientFailure(req); sendRecipientUnavailable(res); }
+});
+
+app.post('/api/continuity/recipient/reissue', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (allowRecipientAttempt(req)) await continuityRecipient.requestRecipientReissue(req.body?.token);
+  } catch (_err) { /* Preserve the uniform accepted response. */ }
+  // Count every resend request, including valid ones, so possession of an old link cannot
+  // turn this enumeration-safe endpoint into an unbounded mail relay.
+  recordRecipientFailure(req);
+  res.status(202).json({ ok: true });
+});
+
+app.get('/api/continuity/recipient/manifest', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try { res.json(await continuityRecipient.getRecipientManifest(recipientBearer(req))); }
+  catch (_err) { sendRecipientUnavailable(res); }
+});
+
+app.get('/api/continuity/recipient/items/:ordinal', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try { res.json(await continuityRecipient.getRecipientItem(recipientBearer(req), req.params.ordinal)); }
+  catch (_err) { sendRecipientUnavailable(res); }
+});
+
+app.get('/api/continuity/recipient/items/:ordinal/ciphertext', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try { await continuityRecipient.streamRecipientCiphertext(recipientBearer(req), req.params.ordinal, res); }
+  catch (_err) { if (!res.headersSent) sendRecipientUnavailable(res); else res.destroy(); }
+});
+
+app.post('/api/continuity/recipient/items/:ordinal/webauthn/assertion-options', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!webauthn.isSecureWebAuthnContext(req)) throw new Error('unavailable');
+    const resolved = await continuityRecipient.resolveExactItem(recipientBearer(req), req.params.ordinal);
+    if (!resolved.item.member_id || !resolved.key.credential_verified || !resolved.key.credential_id) throw new Error('unavailable');
+    const member = await getMember(resolved.item.member_id);
+    if (!member) throw new Error('unavailable');
+    res.json(await webauthn.createMemberKeyAssertionOptions(req, member, resolved.key.credential_id));
+  } catch (_err) { sendRecipientUnavailable(res); }
 });
 
 app.post('/api/continuity/trustee-action/validate', async (req, res) => {

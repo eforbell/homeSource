@@ -1,4 +1,5 @@
 -- HomeSource canonical schema snapshot.
+
 -- Generated from the complete migration chain; verify with npm run test:schema-parity.
 
 --
@@ -7,7 +8,7 @@
 
 
 -- Dumped from database version 16.14
--- Dumped by pg_dump version 16.14
+-- Dumped by pg_dump version 18.4
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -120,6 +121,36 @@ BEGIN
   IF OLD.first_grant_activated_at IS NOT NULL
      AND NEW.first_grant_activated_at IS DISTINCT FROM OLD.first_grant_activated_at THEN
     RAISE EXCEPTION 'continuity first grant activation boundary is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: enforce_continuity_delivery_session(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_continuity_delivery_session() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE grant_row continuity_delivery_grants%ROWTYPE;
+BEGIN
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  IF TG_OP = 'INSERT' THEN
+    SELECT * INTO grant_row FROM continuity_delivery_grants WHERE id = NEW.delivery_grant_id;
+    IF NOT FOUND OR grant_row.status <> 'active' OR grant_row.expires_at <= NEW.created_at
+       OR NEW.expires_at > grant_row.expires_at THEN
+      RAISE EXCEPTION 'continuity delivery session must remain within an active grant';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.delivery_grant_id IS DISTINCT FROM OLD.delivery_grant_id
+     OR NEW.bearer_hash IS DISTINCT FROM OLD.bearer_hash
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+     OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at) THEN
+    RAISE EXCEPTION 'continuity delivery session identity is immutable';
   END IF;
   RETURN NEW;
 END;
@@ -587,6 +618,42 @@ CREATE SEQUENCE public.continuity_delivery_runs_id_seq
 --
 
 ALTER SEQUENCE public.continuity_delivery_runs_id_seq OWNED BY public.continuity_delivery_runs.id;
+
+
+--
+-- Name: continuity_delivery_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.continuity_delivery_sessions (
+    id integer NOT NULL,
+    delivery_grant_id integer NOT NULL,
+    bearer_hash text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    last_active_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT continuity_delivery_sessions_bearer_hash_check CHECK ((bearer_hash ~ '^[a-f0-9]{64}$'::text))
+);
+
+
+--
+-- Name: continuity_delivery_sessions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.continuity_delivery_sessions_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: continuity_delivery_sessions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.continuity_delivery_sessions_id_seq OWNED BY public.continuity_delivery_sessions.id;
 
 
 --
@@ -1722,6 +1789,16 @@ ALTER SEQUENCE public.processing_jobs_id_seq OWNED BY public.processing_jobs.id;
 
 
 --
+-- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.schema_migrations (
+    filename text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: sessions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2120,6 +2197,13 @@ ALTER TABLE ONLY public.continuity_delivery_run_trustees ALTER COLUMN id SET DEF
 --
 
 ALTER TABLE ONLY public.continuity_delivery_runs ALTER COLUMN id SET DEFAULT nextval('public.continuity_delivery_runs_id_seq'::regclass);
+
+
+--
+-- Name: continuity_delivery_sessions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.continuity_delivery_sessions ALTER COLUMN id SET DEFAULT nextval('public.continuity_delivery_sessions_id_seq'::regclass);
 
 
 --
@@ -2528,6 +2612,22 @@ ALTER TABLE ONLY public.continuity_delivery_runs
 
 
 --
+-- Name: continuity_delivery_sessions continuity_delivery_sessions_bearer_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.continuity_delivery_sessions
+    ADD CONSTRAINT continuity_delivery_sessions_bearer_hash_key UNIQUE (bearer_hash);
+
+
+--
+-- Name: continuity_delivery_sessions continuity_delivery_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.continuity_delivery_sessions
+    ADD CONSTRAINT continuity_delivery_sessions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: continuity_delivery_tokens continuity_delivery_tokens_id_delivery_grant_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2928,6 +3028,14 @@ ALTER TABLE ONLY public.processing_jobs
 
 
 --
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (filename);
+
+
+--
 -- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3087,6 +3195,20 @@ CREATE INDEX idx_continuity_delivery_grants_status ON public.continuity_delivery
 --
 
 CREATE INDEX idx_continuity_delivery_runs_due ON public.continuity_delivery_runs USING btree (status, trustee_action_deadline_at, pause_deadline_at);
+
+
+--
+-- Name: idx_continuity_delivery_sessions_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_continuity_delivery_sessions_active ON public.continuity_delivery_sessions USING btree (bearer_hash, expires_at) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: idx_continuity_delivery_sessions_grant; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_continuity_delivery_sessions_grant ON public.continuity_delivery_sessions USING btree (delivery_grant_id, expires_at) WHERE (revoked_at IS NULL);
 
 
 --
@@ -3601,6 +3723,13 @@ CREATE TRIGGER trg_continuity_delivery_run_identity BEFORE UPDATE ON public.cont
 
 
 --
+-- Name: continuity_delivery_sessions trg_continuity_delivery_session; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_continuity_delivery_session BEFORE INSERT OR DELETE OR UPDATE ON public.continuity_delivery_sessions FOR EACH ROW EXECUTE FUNCTION public.enforce_continuity_delivery_session();
+
+
+--
 -- Name: continuity_packet_recipient_documents trg_continuity_packet_coverage_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3843,6 +3972,14 @@ ALTER TABLE ONLY public.continuity_delivery_runs
 
 ALTER TABLE ONLY public.continuity_delivery_runs
     ADD CONSTRAINT continuity_delivery_runs_switch_id_fkey FOREIGN KEY (switch_id) REFERENCES public.continuity_switches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: continuity_delivery_sessions continuity_delivery_sessions_delivery_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.continuity_delivery_sessions
+    ADD CONSTRAINT continuity_delivery_sessions_delivery_grant_id_fkey FOREIGN KEY (delivery_grant_id) REFERENCES public.continuity_delivery_grants(id) ON DELETE CASCADE;
 
 
 --
@@ -4440,9 +4577,3 @@ ALTER TABLE ONLY public.webauthn_credentials
 --
 -- PostgreSQL database dump complete
 --
-
-
-
--- Default application configuration seeded by migration 001.
-INSERT INTO public.app_config (key, value) VALUES
-  ('backup_policy', '{"frequency_days": 30, "notify_overdue_days": 7, "encrypt_backups": false}');

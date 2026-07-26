@@ -8,10 +8,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const {
-  createMember, createTestDocument, getPool, resetDatabase, startServer, stopServer
+  createMember, createTestDocument, getPool, loginAs, resetDatabase, startServer, stopServer, url
 } = require('./helpers');
 const continuity = require('../lib/continuity');
 const continuityDelivery = require('../lib/continuity-delivery');
+const continuityRecipient = require('../lib/continuity-recipient');
 const { withTransaction } = require('../lib/db');
 const { saveFileRecord, storeFile } = require('../lib/files');
 
@@ -242,7 +243,7 @@ describe('Phase C2 recipient grants and manifests', () => {
     assert.deepEqual(outbox, [{ recipient_email: 'one@family.test' }]);
   });
 
-  it('keeps all-blocked delivery recoverable and does not mis-dispatch C2 rows before C3 exists', async () => {
+  it('keeps all-blocked delivery recoverable and promotes C3 recipient rows only through the scoped delivery path', async () => {
     const fixture = await createReleasedPacket();
     await pool.query(
       'UPDATE encryption_keys SET revoked_at = $2 WHERE id = ANY($1::int[])',
@@ -271,14 +272,140 @@ describe('Phase C2 recipient grants and manifests', () => {
       env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
       mailer: { sendMail: async () => { mailCalls += 1; return { delivered: true }; } }
     });
-    assert.equal(mailCalls, 0);
-    assert.equal(dispatch.claimed, 0);
-    assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery' AND status = 'deferred'")).rows[0].count, 2);
+    assert.equal(mailCalls, 2);
+    assert.equal(dispatch.claimed, 2);
+    assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery' AND status = 'sent'")).rows[0].count, 2);
     const operations = await continuity.getOperationsStatus(pool);
-    assert.equal(operations.channels.email.pending, 0);
-    assert.equal(operations.channels.recipient_delivery.deferred, 2);
-    assert.equal(operations.outbox.pending, 0);
-    assert.equal(operations.outbox.deferred, 2);
+    assert.equal(operations.channels.recipient_delivery.deferred, 0);
+    assert.equal(operations.outbox.deferred, 0);
+  });
+
+  it('exchanges a replaceable recipient link into a one-hour exact-grant session without document semantics', async () => {
+    await createReleasedPacket();
+    const at = new Date('2026-04-01T12:00:00Z');
+    await continuity.advanceDueSwitches({ now: at });
+    const sent = [];
+    await continuity.dispatchOutbox({
+      now: at, env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async (message) => { sent.push(message); return { delivered: true }; } }
+    });
+    const rawToken = sent[0].text.match(/[?&]token=([^\s]+)/)[1];
+    const exchanged = await continuityRecipient.exchangeAccessToken(rawToken, { now: at });
+    assert.equal(exchanged.items.length, 2);
+    assert.deepEqual(exchanged.items, [
+      { ordinal: 1, label: 'Private document 1' }, { ordinal: 2, label: 'Private document 2' }
+    ]);
+    assert.equal(JSON.stringify(exchanged.items).includes('Grant'), false);
+    const normalCookie = await loginAs(parent, 'parent-pass');
+    const normalSessionOnly = await fetch(url('api/continuity/recipient/manifest'), { headers: { Cookie: normalCookie } });
+    assert.equal(normalSessionOnly.status, 404, 'a normal Home Source session is never a recipient session');
+    await assert.rejects(() => continuityRecipient.exchangeAccessToken(rawToken, { now: at }), /private delivery/i);
+
+    const item = await continuityRecipient.getRecipientItem(exchanged.bearer, 1, { now: at });
+    assert.deepEqual(Object.keys(item).sort(), ['artifact', 'key_material', 'label', 'ordinal']);
+    assert.equal(item.label, 'Private document 1');
+    assert.equal(Object.hasOwn(item, 'title'), false);
+    assert.equal(Object.hasOwn(item.artifact, 'holders'), false);
+    await assert.rejects(
+      () => continuityRecipient.getRecipientItem(exchanged.bearer, 2, { now: new Date('2026-04-01T13:00:01Z') }),
+      /private delivery/i
+    );
+  });
+
+  it('fails closed when canonical holder evidence changes after a grant is issued', async () => {
+    const fixture = await createReleasedPacket();
+    const at = new Date('2026-04-01T12:00:00Z');
+    await continuity.advanceDueSwitches({ now: at });
+    const sent = [];
+    await continuity.dispatchOutbox({
+      now: at, env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async (message) => { sent.push(message); return { delivered: true }; } }
+    });
+    const rawToken = sent[0].text.match(/[?&]token=([^\s]+)/)[1];
+    const exchanged = await continuityRecipient.exchangeAccessToken(rawToken, { now: at });
+    await pool.query('UPDATE encryption_keys SET revoked_at = $2 WHERE id = $1', [fixture.keyOne.id, at]);
+    await assert.rejects(
+      () => continuityRecipient.getRecipientItem(exchanged.bearer, 1, { now: at }),
+      /private delivery/i
+    );
+  });
+
+  it('reissues only to the immutable grant destination and expires all online recipient access at one year', async () => {
+    await createReleasedPacket();
+    const activatedAt = new Date('2026-04-01T12:00:00Z');
+    await continuity.advanceDueSwitches({ now: activatedAt });
+    const firstMessages = [];
+    await continuity.dispatchOutbox({
+      now: activatedAt, env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async (message) => { firstMessages.push(message); return { delivered: true }; } }
+    });
+    const originalToken = firstMessages[0].text.match(/[?&]token=([^\s]+)/)[1];
+    const reissueAt = new Date('2026-04-02T12:00:00Z');
+    const unknownReissue = await fetch(url('api/continuity/recipient/reissue'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'not-a-delivery-token' })
+    });
+    assert.equal(unknownReissue.status, 202);
+    assert.deepEqual(await unknownReissue.json(), { ok: true });
+    const reissue = await fetch(url('api/continuity/recipient/reissue'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: originalToken })
+    });
+    assert.equal(reissue.status, 202);
+    assert.deepEqual(await reissue.json(), { ok: true });
+    const { rows: reissueRow } = await pool.query(
+      `SELECT status, delivery_token_id, recipient_email, next_attempt_at FROM continuity_notification_outbox
+       WHERE notification_type = 'recipient_delivery' ORDER BY id LIMIT 1`
+    );
+    assert.equal(reissueRow[0].status, 'pending');
+    assert.equal(reissueRow[0].delivery_token_id, null);
+    assert.equal(reissueRow[0].recipient_email, 'one@family.test');
+    const dispatchedAt = new Date(reissueRow[0].next_attempt_at);
+    await assert.rejects(() => continuityRecipient.exchangeAccessToken(originalToken, { now: dispatchedAt }), /private delivery/i);
+    const replacementMessages = [];
+    await continuity.dispatchOutbox({
+      now: dispatchedAt, env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async (message) => { replacementMessages.push(message); return { delivered: true }; } }
+    });
+    assert.equal(replacementMessages.length, 1);
+    assert.equal(replacementMessages[0].to, 'one@family.test');
+    const replacementToken = replacementMessages[0].text.match(/[?&]token=([^\s]+)/)[1];
+    const session = await continuityRecipient.exchangeAccessToken(replacementToken, { now: dispatchedAt });
+
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      const throttledUnknown = await fetch(url('api/continuity/recipient/reissue'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: `unknown-${attempt}` })
+      });
+      assert.equal(throttledUnknown.status, 202);
+      assert.deepEqual(await throttledUnknown.json(), { ok: true });
+    }
+    const throttledKnown = await fetch(url('api/continuity/recipient/reissue'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: originalToken })
+    });
+    assert.equal(throttledKnown.status, 202);
+    assert.deepEqual(await throttledKnown.json(), { ok: true });
+    const { rows: rateLimitedOutbox } = await pool.query(
+      "SELECT status FROM continuity_notification_outbox WHERE notification_type = 'recipient_delivery' ORDER BY id LIMIT 1"
+    );
+    assert.equal(rateLimitedOutbox[0].status, 'sent');
+
+    const expiry = await continuity.advanceDueSwitches({ now: new Date('2027-04-01T12:00:00Z') });
+    assert.equal(expiry.grants_expired, 2);
+    assert.equal(expiry.runs_completed, 1);
+    await assert.rejects(() => continuityRecipient.getRecipientManifest(session.bearer, { now: new Date('2027-04-01T12:00:00Z') }), /private delivery/i);
+    const { rows: grants } = await pool.query('SELECT status, expired_at FROM continuity_delivery_grants ORDER BY id');
+    assert.equal(grants.every((grant) => grant.status === 'expired' && grant.expired_at), true);
+    const { rows: sessions } = await pool.query('SELECT revoked_at FROM continuity_delivery_sessions');
+    assert.equal(sessions.length, 1);
+    assert.ok(sessions[0].revoked_at);
+    const { rows: events } = await pool.query("SELECT event_type, details FROM continuity_events WHERE event_type LIKE 'delivery.recipient_%' ORDER BY id");
+    assert.equal(events.some((event) => event.event_type === 'delivery.recipient_reissue_queued'), true);
+    const ownerCookie = await loginAs(parent, 'parent-pass');
+    const switchId = (await pool.query('SELECT id FROM continuity_switches')).rows[0].id;
+    const timeline = await fetch(url(`api/continuity/switch/${switchId}/timeline`), { headers: { Cookie: ownerCookie } });
+    assert.equal(timeline.status, 200);
+    assert.equal((await timeline.json()).some((event) => event.event_type === 'delivery.recipient_reissue_queued'), true);
+    assert.equal(events.filter((event) => event.event_type === 'delivery.recipient_grant_expired').length, 2);
+    assert.equal(JSON.stringify(events).includes(originalToken), false);
+    assert.equal(JSON.stringify(events).includes(replacementToken), false);
   });
 
   it('hashes each stored artifact once before taking delivery activation locks', async () => {
@@ -305,7 +432,14 @@ describe('Phase C2 recipient grants and manifests', () => {
 
   it('backs up grant manifests and token hashes without inventing recipient access', async () => {
     await createReleasedPacket();
-    await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
+    const at = new Date('2026-04-01T12:00:00Z');
+    await continuity.advanceDueSwitches({ now: at });
+    const sent = [];
+    await continuity.dispatchOutbox({
+      now: at, env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async (message) => { sent.push(message); return { delivered: true }; } }
+    });
+    await continuityRecipient.exchangeAccessToken(sent[0].text.match(/[?&]token=([^\s]+)/)[1], { now: at });
     const { createBackup } = require('../lib/backup');
     const backup = await createBackup({ encrypted: false });
     const extracted = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-c2-backup-'));
@@ -315,9 +449,13 @@ describe('Phase C2 recipient grants and manifests', () => {
       const database = JSON.parse(fs.readFileSync(path.join(extracted, root, 'database.json'), 'utf8'));
       assert.equal(database.continuity_delivery_grants.length, 2);
       assert.equal(database.continuity_delivery_items.length, 3);
-      assert.equal(database.continuity_delivery_tokens.length, 2);
+      assert.equal(database.continuity_delivery_tokens.length, 4);
+      assert.equal(database.continuity_delivery_tokens.filter((row) => row.replaced_at === null && row.consumed_at === null).length, 1);
       assert.equal(database.continuity_delivery_tokens.every((row) => /^[a-f0-9]{64}$/.test(row.token_hash)), true);
       assert.equal(database.continuity_delivery_tokens.every((row) => !Object.hasOwn(row, 'token')), true);
+      assert.equal(database.continuity_delivery_sessions.length, 1);
+      assert.equal(/^[a-f0-9]{64}$/.test(database.continuity_delivery_sessions[0].bearer_hash), true);
+      assert.equal(Object.hasOwn(database.continuity_delivery_sessions[0], 'bearer'), false);
     } finally {
       fs.rmSync(extracted, { recursive: true, force: true });
     }

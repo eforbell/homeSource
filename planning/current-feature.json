@@ -1,7 +1,7 @@
 {
-  "currentFeature": "Feature #13: Continuity & Inheritance — Phase C (Conditional Delivery)",
-  "status": "phase_b_operator_acceptance_deferred_phase_c_c2_implemented_c3_next",
-  "branch": "feat/feature-13-phase-c-c2-recipient-delivery",
+  "currentFeature": "Feature #13: Continuity & Inheritance \u2014 Phase C (Conditional Delivery)",
+  "status": "phase_b_operator_acceptance_deferred_phase_c_c4_lifecycle_implemented_operations_in_progress",
+  "branch": "main",
   "prdPath": "planning/features/feature-13-phase-c-conditional-delivery.md",
   "implementationPlanPath": "planning/features/feature-13-phase-c-implementation-plan.md",
   "testSpecPath": "planning/features/feature-13-phase-c-test-spec.md",

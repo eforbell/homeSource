@@ -2,9 +2,19 @@
 
 Phase B reminders target only the switch owner. Phase C1 may contact designated witness
 trustees after escalation. Phase C2 creates immutable recipient grants and durable recipient
-outbox rows in the explicit `deferred` state. The outbox dispatcher cannot claim those rows
-until C3 promotes them after the scoped recipient doorway exists; this increment sends no
-beneficiary access link and does not count the deferred rows as stuck operator mail.
+outbox rows in the explicit `deferred` state. C3 is the only dispatcher path allowed to claim
+those rows: it replaces the staged hash with a fresh seven-day recipient link while claiming
+and sends the live scoped doorway. Owner-check-in and trustee dispatchers never claim a
+recipient-delivery row.
+
+## Recipient link replacement and expiry
+
+A recipient who still possesses a previous link may request a replacement from the private
+doorway. The request is deliberately enumeration-safe and is delivered only to the immutable,
+verified email stored with that exact grant; it never accepts a replacement address or extends
+the original one-year grant deadline. The daily state job terminally expires due grants,
+revokes recipient sessions, invalidates remaining links, supersedes unsent recipient mail, and
+records a token-free event visible to the owning parent through the continuity timeline API.
 
 ## Required configuration
 

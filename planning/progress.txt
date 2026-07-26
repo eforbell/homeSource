@@ -420,3 +420,39 @@
   outside recipient delivery metadata.
 - Verified the 22-migration chain, fresh `db/schema.sql`, focused C1/C2/security suites, and the
   full 386-test regression suite.
+
+## 2026-07-26 — Phase C C3 scoped recipient doorway implemented
+
+- Added migration 023 for hashed, grant-scoped recipient browser sessions with immutable
+  identity, bounded activity, and a grant-expiry ceiling.
+- Promoted deferred recipient outbox rows only in the C3 dispatcher: claim-time promotion
+  replaces the C2 staged token hash with a new seven-day delivery link, while retries replace
+  prior usable material instead of reusing it.
+- Added one-time token exchange, exact grant-item metadata/ciphertext APIs, and serve-time
+  canonical revalidation of the active grant, envelope-v2 sealed holder, designation, key,
+  fingerprint, immutable file record, and ciphertext hash.
+- Added the navigation-free recipient page. Before local unlock it labels items solely as
+  `Private document N`; passphrase and WebAuthn PRF flows unwrap the recipient private key and
+  DEK only in the browser.
+- Extended repeatable-read backups with hashed recipient-session state and added regression
+  coverage for promotion, replay, session expiry, metadata minimization, canonical drift, and
+  hash-only backup state.
+- Reconciled planning metadata to `main`, removed the stale C2 branch reference, and verified
+  migration/schema parity plus the full 389-test regression suite. Production arming remains
+  disabled pending C4 and operator acceptance.
+
+## 2026-07-26 — Phase C C4 recipient lifecycle and audit operations implemented
+
+- Added migration 024 so the immutable recipient-session trigger permits only terminal
+  revocation after a grant expires; session identity and lifetime stay immutable.
+- Added enumeration-safe recipient-initiated reissue: a prior hashed link invalidates all
+  usable links for its exact grant and requeues mail solely to the immutable verified recipient
+  snapshot without extending the one-year lifetime.
+- Added scheduler terminal expiry for active grants: it expires grants, revokes sessions,
+  invalidates remaining links, supersedes outstanding recipient outbox rows, completes exhausted
+  runs, and writes token-free lifecycle events exposed through the parent-authorized timeline.
+- Added recipient attempt rate limiting, C4 regression coverage for cross-state reissue, exact
+  expiry, session revocation, destination preservation, event secrecy, and timeline ownership.
+- Verified the 24-migration chain, fresh `db/schema.sql`, and the full 390-test regression
+  suite. C4 operator acceptance (real SMTP/browser/systemd and production-like
+  backup/restore) remains outstanding; production arming stays disabled.
