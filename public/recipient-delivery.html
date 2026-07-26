@@ -111,7 +111,12 @@
       showItems(exchanged.items);
     } catch (error) {
       bearer = null; sessionStorage.removeItem(recipientBearerStorageKey);
-      summary.textContent = error.message; reissueButton.hidden = false;
+      if (token) {
+        summary.textContent = error.message; reissueButton.hidden = false;
+      } else {
+        summary.textContent = 'This private delivery session has expired. Re-open the original link from your email to request a replacement.';
+        reissueButton.hidden = true;
+      }
     }
   }
   reissueButton.addEventListener('click', async () => {

@@ -454,6 +454,6 @@
 - Added separate recipient resend/redemption rate-limit budgets, trustee passkey assertion
   support, and C4 regression coverage for cross-state reissue, exact expiry, session revocation,
   destination preservation, event secrecy, and timeline ownership.
-- Verified the 24-migration chain, fresh `db/schema.sql`, and the full 390-test regression
+- Verified the 24-migration chain, fresh `db/schema.sql`, and the full 392-test regression
   suite. C4 operator acceptance (real SMTP/browser/systemd and production-like
   backup/restore) remains outstanding; production arming stays disabled.

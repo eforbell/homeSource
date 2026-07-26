@@ -408,7 +408,13 @@ describe('Phase C2 recipient grants and manifests', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: replacementToken })
     });
     assert.equal(revokeSessionReissue.status, 202);
-    await assert.rejects(() => continuityRecipient.getRecipientManifest(session.bearer), /private delivery/i);
+    const { rows: revokedSession } = await pool.query(
+      'SELECT revoked_at FROM continuity_delivery_sessions WHERE bearer_hash = $1', [continuityDelivery.tokenHash(session.bearer)]
+    );
+    assert.ok(revokedSession[0].revoked_at, 'reissue revokes a live recipient bearer immediately');
+    await assert.rejects(
+      () => continuityRecipient.getRecipientManifest(session.bearer, { now: dispatchedAt }), /private delivery/i
+    );
     const { rows: thirdAttempt } = await pool.query(
       `SELECT next_attempt_at FROM continuity_notification_outbox
        WHERE notification_type = 'recipient_delivery' ORDER BY id LIMIT 1`
