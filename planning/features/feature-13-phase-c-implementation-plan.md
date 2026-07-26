@@ -1,7 +1,7 @@
 # Feature #13 Phase C — Implementation Plan
 
 Date: 2026-07-19
-Status: C0.1–C2 implemented through automated verification; C3 scoped doorway next
+Status: C0.1–C3 implemented; C4 recipient lifecycle and audit operations implemented through automated verification; production acceptance remains
 PRD: `planning/features/feature-13-phase-c-conditional-delivery.md`
 Test specification: `planning/features/feature-13-phase-c-test-spec.md`
 
@@ -133,25 +133,37 @@ Stop condition met by automated verification: delivery-time posture is revalidat
 decrypting, each recipient receives one immutable complete manifest or one blocked grant,
 healthy recipients activate independently, the first active grant fixes the owner-recovery
 cutoff, scheduler replay creates no duplicate durable state, and repeatable-read backup retains
-only hashed bearer material. Recipient outbox rows remain deliberately unclaimed until C3 adds
-the exact-item doorway; C2 cannot accidentally send a check-in link in their place.
+only hashed bearer material. Recipient outbox rows remain deliberately unclaimed by the owner check-in and trustee pathways;
+C3 alone promotes them through its scoped recipient doorway.
 
-## C3 — Scoped recipient doorway
+## C3 — Scoped recipient doorway — implemented
 
-- Exchange a seven-day link for a hashed 60-minute recipient-scoped session.
+- Promote deferred recipient outbox rows by atomically replacing their staged token and
+  constructing the seven-day delivery link only at claim time.
+- Exchange a seven-day link once for a hashed 60-minute recipient-scoped session.
 - Serve only the exact encrypted artifact and holder-local wrapped DEK named by an active
-  grant item.
+  grant item after canonical envelope, designation, key, and file revalidation.
 - Show only `Private document N` before local unlock.
 - Reuse existing passphrase/WebAuthn client primitives; the server never receives plaintext
   private keys, DEKs, or documents.
 
-## C4 — Operations and completion
+Stop condition met by automated verification: the scoped dispatcher replaces unusable staged
+material, links cannot replay into another grant, session expiry is bounded to 60 minutes,
+recipient responses disclose only generic ordinals before local unlock, and canonical holder
+or key drift fails closed.
 
-- Add retry, replacement-link, one-year grant expiry, audit timeline, and safe blocked-state
-  recovery.
-- Extend scheduler/outbox crash recovery, backup/restore, rate limits, and enumeration tests.
-- Run full regression, hostile API/browser scenarios, real SMTP, browser key ceremonies,
-  Linux systemd verification, and production-like backup/restore inspection.
+## C4 — Operations and completion — in progress
+
+- Implemented recipient-initiated replacement requests using only a prior hashed access token:
+  they replace all usable grant links, queue delivery only to the immutable verified destination,
+  retain the original one-year deadline, and return an enumeration-safe public response.
+- Implemented scheduler-driven terminal grant expiry: it expires grants, revokes recipient
+  sessions, replaces any remaining usable links, supersedes recipient outbox work, completes
+  fully exhausted runs, and records owner-visible token-free lifecycle events.
+- Implemented the parent-authorized delivery timeline endpoint and recipient endpoint rate
+  limiting. Existing owner outbox retry remains the safe blocked-state recovery path.
+- Remaining: extend restart/backup-restore and hostile browser/SMTP/systemd acceptance coverage,
+  then perform the production-like operator ceremony. Production arming stays disabled.
 
 ## Commit boundaries
 
