@@ -10,6 +10,5 @@ it('resumes a live recipient session but never promises reissue without the orig
   assert.match(source, /sessionStorage\.getItem\(recipientBearerStorageKey\)/);
   assert.match(source, /api\('api\/continuity\/recipient\/manifest'\)/);
   assert.match(source, /if \(token\) \{[\s\S]*reissueButton\.hidden = false;/);
-  assert.match(source, /Re-open the original link from your email to request a replacement\./);
-  assert.match(source, /reissueButton\.hidden = true;/);
+  assert.match(source, /else \{\s*summary\.textContent = 'This private delivery session has expired\. Re-open the original link from your email to request a replacement\.';\s*reissueButton\.hidden = true;/);
 });
