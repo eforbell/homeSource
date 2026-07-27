@@ -183,6 +183,7 @@ For the full break-glass operator workflow, see:
 - [docs/recovery-runbook.md](docs/recovery-runbook.md)
 - [docs/trustee-invitation-runbook.md](docs/trustee-invitation-runbook.md)
 - [docs/continuity-runbook.md](docs/continuity-runbook.md)
+- [docs/continuity-phase-c-acceptance-runbook.md](docs/continuity-phase-c-acceptance-runbook.md)
 
 ### Manual Decryption of Encrypted Document Files from Backup
 

@@ -1,5 +1,8 @@
 # Continuity switch operations
 
+For a complete isolated Homebase test-machine rehearsal through Feature 13 Phase C, use
+[the Phase C operator acceptance runbook](continuity-phase-c-acceptance-runbook.md).
+
 Phase B reminders target only the switch owner. Phase C1 may contact designated witness
 trustees after escalation. Phase C2 creates immutable recipient grants and durable recipient
 outbox rows in the explicit `deferred` state. C3 is the only dispatcher path allowed to claim
