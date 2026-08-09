@@ -6,15 +6,15 @@ Home Source is a local-first family document vault and continuity system. It may
 
 Home Source has the highest confidentiality and recovery requirements in this suite. The security objective is to keep plaintext and keys private, preserve client-side cryptographic boundaries, prevent unauthorized capability use, and ensure that encrypted data remains recoverable by authorized holders.
 
-This root policy summarizes the canonical detailed guidance in:
+This root policy summarizes the detailed guidance in:
 
-- `docs/security-capabilities.md`
+- `docs/security-capabilities.md` (canonical source for shipped controls)
 - `docs/recovery-runbook.md`
 - `docs/continuity-runbook.md`
 - `docs/trustee-invitation-runbook.md`
-- `planning/features/feature-11-threat-model.md`
+- `planning/features/feature-11-threat-model.md` (historical/planning context only)
 
-Those documents remain required reading for deployment, recovery, and continuity changes.
+Those documents remain required reading for deployment, recovery, and continuity changes. Where the historical threat model differs from shipped documentation, the shipped capabilities document controls. The current holder model is 1-of-M; no threshold or quorum protection is implemented.
 
 ## Trust model
 
@@ -67,7 +67,7 @@ Never send keys, passphrases, bearer URLs, database dumps, or unnecessary identi
 
 ## Backups and continuity
 
-Backups must include PostgreSQL state and app-owned document storage in a consistent window. Encrypt off-host archives, verify retention and permissions, and run periodic restore drills using the recovery runbook. Continuity timers and grants must be tested without leaking live tokens or triggering unintended release.
+Backups must include PostgreSQL state and app-owned document storage in the closest practical window, but they are not atomically locked together. Consistency depends on restricting storage writes to the Home Source service account, preserving/verifying file hashes, and running restore drills. Encrypt off-host archives, verify retention and permissions, and test continuity timers/grants without leaking live tokens or triggering unintended release.
 
 Before removing a member/key or arming continuity, verify alternate holders, recovery wraps, notification delivery, and a documented break-glass path.
 
