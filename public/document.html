@@ -20,7 +20,13 @@
         <a href="documents.html" class="text-dim text-sm">&larr; Back to Documents</a>
         <h1 id="doc-title" style="margin-top:0.25rem;">Loading...</h1>
       </div>
-      <div class="btn-group" id="doc-actions"></div>
+      <div class="document-header-actions">
+        <div class="btn-group" id="doc-actions"></div>
+        <button class="btn btn-sm document-sidebar-toggle" id="document-sidebar-toggle"
+                type="button" aria-controls="document-sidebar" aria-expanded="true">
+          Hide details
+        </button>
+      </div>
     </div>
 
     <div class="doc-layout">
@@ -52,7 +58,7 @@
       </div>
 
       <!-- Sidebar -->
-      <div>
+      <aside id="document-sidebar" class="document-sidebar" aria-label="Document details">
         <!-- Metadata -->
         <div class="card">
           <div class="card-header"><span class="card-title">Details</span></div>
@@ -93,7 +99,7 @@
           </div>
           <div id="links-list"></div>
         </div>
-      </div>
+      </aside>
     </div>
   </div>
 
@@ -491,6 +497,30 @@
     let availableTrustees = [];
     let trusteeKeyCache = new Map();
     let unlockedFiles = new Map();
+
+    const documentLayout = document.querySelector('.doc-layout');
+    const documentSidebarToggle = document.getElementById('document-sidebar-toggle');
+    const documentSidebarPreferenceKey = 'homeSource.documentSidebarCollapsed';
+    const documentDesktopMedia = window.matchMedia('(min-width: 769px)');
+    let documentSidebarPreferredCollapsed = false;
+
+    function renderDocumentSidebarState() {
+      const collapsed = documentDesktopMedia.matches && documentSidebarPreferredCollapsed;
+      documentLayout.classList.toggle('sidebar-collapsed', collapsed);
+      documentSidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+      documentSidebarToggle.textContent = collapsed ? 'Show details' : 'Hide details';
+      documentSidebarToggle.setAttribute('aria-label', collapsed ? 'Show document details' : 'Hide document details');
+    }
+
+    documentSidebarToggle.addEventListener('click', () => {
+      documentSidebarPreferredCollapsed = !documentSidebarPreferredCollapsed;
+      try { localStorage.setItem(documentSidebarPreferenceKey, String(documentSidebarPreferredCollapsed)); } catch (_) { /* storage may be unavailable */ }
+      renderDocumentSidebarState();
+    });
+
+    try { documentSidebarPreferredCollapsed = localStorage.getItem(documentSidebarPreferenceKey) === 'true'; } catch (_) { /* use default */ }
+    documentDesktopMedia.addEventListener('change', renderDocumentSidebarState);
+    renderDocumentSidebarState();
 
     function isEncryptedDoc(doc) {
       return !!(doc && (doc.is_encrypted || (doc.encryption_mode && doc.encryption_mode !== 'plaintext')));
