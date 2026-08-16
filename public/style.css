@@ -152,6 +152,18 @@ h3 { font-size: 1.1rem; }
 
 .doc-layout { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; }
 .doc-layout > * { min-width: 0; }
+.document-header-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.document-sidebar-toggle {
+  white-space: nowrap;
+}
+.doc-layout.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
+.doc-layout.sidebar-collapsed .document-sidebar { display: none; }
 .doc-meta-table {
   width: 100%;
   table-layout: fixed;
@@ -192,6 +204,8 @@ h3 { font-size: 1.1rem; }
 
 @media (max-width: 768px) {
   .doc-layout { grid-template-columns: 1fr; }
+  .doc-layout.sidebar-collapsed .document-sidebar { display: block; }
+  .document-sidebar-toggle { display: none; }
   .doc-preview-frame { height: 50vh; min-height: 280px; }
   .doc-preview-wrap { max-height: 60vh; }
 }
