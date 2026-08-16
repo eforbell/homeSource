@@ -501,24 +501,26 @@
     const documentLayout = document.querySelector('.doc-layout');
     const documentSidebarToggle = document.getElementById('document-sidebar-toggle');
     const documentSidebarPreferenceKey = 'homeSource.documentSidebarCollapsed';
+    const documentDesktopMedia = window.matchMedia('(min-width: 769px)');
+    let documentSidebarPreferredCollapsed = false;
 
-    function setDocumentSidebarCollapsed(collapsed, persist = true) {
+    function renderDocumentSidebarState() {
+      const collapsed = documentDesktopMedia.matches && documentSidebarPreferredCollapsed;
       documentLayout.classList.toggle('sidebar-collapsed', collapsed);
       documentSidebarToggle.setAttribute('aria-expanded', String(!collapsed));
       documentSidebarToggle.textContent = collapsed ? 'Show details' : 'Hide details';
       documentSidebarToggle.setAttribute('aria-label', collapsed ? 'Show document details' : 'Hide document details');
-      if (persist) {
-        try { localStorage.setItem(documentSidebarPreferenceKey, String(collapsed)); } catch (_) { /* storage may be unavailable */ }
-      }
     }
 
     documentSidebarToggle.addEventListener('click', () => {
-      setDocumentSidebarCollapsed(!documentLayout.classList.contains('sidebar-collapsed'));
+      documentSidebarPreferredCollapsed = !documentSidebarPreferredCollapsed;
+      try { localStorage.setItem(documentSidebarPreferenceKey, String(documentSidebarPreferredCollapsed)); } catch (_) { /* storage may be unavailable */ }
+      renderDocumentSidebarState();
     });
 
-    let documentSidebarStartsCollapsed = false;
-    try { documentSidebarStartsCollapsed = localStorage.getItem(documentSidebarPreferenceKey) === 'true'; } catch (_) { /* use default */ }
-    setDocumentSidebarCollapsed(documentSidebarStartsCollapsed, false);
+    try { documentSidebarPreferredCollapsed = localStorage.getItem(documentSidebarPreferenceKey) === 'true'; } catch (_) { /* use default */ }
+    documentDesktopMedia.addEventListener('change', renderDocumentSidebarState);
+    renderDocumentSidebarState();
 
     function isEncryptedDoc(doc) {
       return !!(doc && (doc.is_encrypted || (doc.encryption_mode && doc.encryption_mode !== 'plaintext')));
