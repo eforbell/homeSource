@@ -2248,7 +2248,7 @@
               <div>
                 <a href="document.html?id=${link.related_document_id}" style="font-weight:600;">${esc(link.related_document_title)}</a><br>
                 <span class="badge badge-muted">${esc(linkTypeLabel(link))}</span>
-                <span class="text-xs text-dim">${Math.round(Number(link.confidence || 0) * 100)}%</span>
+                <span class="text-xs text-dim">${link.created_by === 'agent' ? `rule score ${Math.round(Number(link.confidence || 0) * 100)}%` : 'manually added'}</span>
                 ${link.status === 'suggested' ? `<span class="badge badge-warn">suggested</span>` : ''}
               </div>
               <div class="btn-group">
