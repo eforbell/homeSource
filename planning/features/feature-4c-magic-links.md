@@ -5,6 +5,10 @@ Parent feature: `feature-4-magic-insight.md`
 Depends on: Feature #4A MagicInsight Foundation, Feature #4B Quality + Amount Normalization
 Status: Revised after 4B real-vault evals
 
+Correction (2026-09-16): Later statements for different periods are separate historical records, not superseding versions. The scanner now requires the same account and statement period plus an explicit correction/revision marker before suggesting statement supersession. Legacy MagicIndex facts without canonical `key` fields are normalized at scan time so existing documents can still link by VIN, policy, and account identifiers.
+
+An OCR VIN with one extra character can still support a reviewable vehicle-registration suggestion when both sources were OCR, the plate matches exactly, and the registration dates advance. The lower rule score is a heuristic priority for review, not a calibrated probability; the reasoning tells the reviewer to verify both original VINs before accepting.
+
 ## Executive direction
 
 Do **not** start MagicLinks as a generic "ask the LLM which documents are related" feature.
@@ -26,7 +30,7 @@ Examples:
 - current vehicle registration supersedes prior registration
 - amended return supersedes original return
 - revised estimate supersedes earlier estimate
-- later statement supersedes prior statement period
+- corrected statement supersedes an earlier version for the same period
 
 This is the most explainable and lowest-risk first link type for the current local model and current data quality.
 
@@ -35,7 +39,7 @@ This is the most explainable and lowest-risk first link type for the current loc
 Compared with general relatedness, superseding has stronger signals:
 
 - same stable identifier
-- later effective / issue / statement period
+- later effective / issue date within the same record or coverage lineage
 - explicit words like `renewal`, `amended`, `revised`, `updated`, `replacement`, `reprint`
 - same asset / same account / same filer / same policy
 
@@ -66,7 +70,7 @@ Use deterministic rules such as:
 - same policy number + later term
 - same VIN + later registration dates
 - same tax year + amended filing markers
-- same account/provider + later statement period
+- same account and statement period + explicit correction wording + later issue date
 - same project/order number + revised estimate language
 
 ### LLM later
@@ -305,12 +309,13 @@ Confidence:
 
 - 0.95 explicit amended form + same year + same filers
 
-### Rule group 4 — newer statement supersedes prior statement
+### Rule group 4 — corrected statement supersedes the original for the same period
 
 Candidate when:
 
-- same provider / same account number
-- later statement date or later statement period
+- same account number
+- same statement period
+- explicit corrected/revised wording on the later-issued document
 
 Output:
 
@@ -318,8 +323,7 @@ Output:
 
 Confidence:
 
-- 0.9 exact account + later period
-- 0.75 same provider + owner + strong statement wording
+- 0.9 exact account + same period + explicit correction wording
 
 ### Rule group 5 — revised estimate / invoice supersedes prior version
 

@@ -160,6 +160,65 @@ describe('magic links API and deterministic scan', () => {
     assert.ok(suggestedLinks.some((link) => link.link_type === 'supersedes'));
   });
 
+  it('surfaces shared vehicles from legacy MagicIndex facts without inventing chronology', async () => {
+    const metadata = { magicindex: { suggestions: { key_facts: [
+      { label: 'vin_number', value: 'TEST-LEGACY-VIN-4480', confidence: 0.95 },
+      { label: 'plate_number', value: 'TEST-PLATE', confidence: 0.95 }
+    ] } } };
+    const first = await createTestDocument(parent.id, {
+      title: 'Florida Vehicle Registration', document_type: 'vehicle',
+      issued_date: '2022-04-01', expiry_date: '2026-10-28', metadata
+    });
+    const second = await createTestDocument(parent.id, {
+      title: 'Florida Vehicle Registration', document_type: 'vehicle',
+      issued_date: '2022-04-01', expiry_date: '2026-10-28', metadata
+    });
+
+    const scan = await authedPost('api/links/scan', parentCookie, {});
+    assert.equal(scan.status, 200);
+    const links = await (await authedGet(`api/documents/${first.id}/links`, parentCookie)).json();
+    assert.ok(links.some((link) => link.link_type === 'same_asset' && link.related_document_id === second.id));
+    assert.equal(links.some((link) =>
+      ['supersedes', 'renews'].includes(link.link_type) && link.related_document_id === second.id
+    ), false);
+  });
+
+  it('suggests reviewable supersession for a newer OCR registration with one extra VIN character', async () => {
+    const oldDoc = await createTestDocument(parent.id, {
+      title: 'Florida Vehicle Registration', document_type: 'vehicle',
+      issued_date: '2022-04-01', expiry_date: '2026-10-28',
+      metadata: { magicindex: { suggestions: {
+        key_facts: [
+          { label: 'vin_number', value: '123456789ABCDEFGH' },
+          { label: 'plate_number', value: 'TEST-PLATE-195' }
+        ],
+        extraction_evidence: { source: 'pdf_ocr_preview' }
+      } } }
+    });
+    const newDoc = await createTestDocument(parent.id, {
+      title: 'Florida Vehicle Registration', document_type: 'vehicle',
+      issued_date: '2026-08-21', expiry_date: '2027-10-28',
+      metadata: { magicindex: { suggestions: {
+        key_facts: [
+          { key: 'vin', label: 'VIN', value: '1234556789ABCDEFGH' },
+          { key: 'plate_number', label: 'Plate Number', value: 'TEST-PLATE-195' }
+        ],
+        extraction_evidence: { source: 'image_ocr_preview' }
+      } } }
+    });
+
+    const scan = await authedPost('api/links/scan', parentCookie, {});
+    assert.equal(scan.status, 200);
+    const links = await (await authedGet(`api/documents/${newDoc.id}/links`, parentCookie)).json();
+    const suggestion = links.find((link) =>
+      link.link_type === 'supersedes' && link.related_document_id === oldDoc.id
+    );
+    assert.ok(suggestion);
+    assert.equal(suggestion.status, 'suggested');
+    assert.equal(Number(suggestion.confidence), 0.75);
+    assert.match(suggestion.reasoning, /Verify the VIN/);
+  });
+
   it('accepts suggested links and exposes archive suggestion context for accepted superseding links', async () => {
     const links = await (await authedGet(`api/documents/${newRegistration.id}/links`, parentCookie)).json();
     const supersede = links.find((link) => link.link_type === 'supersedes' && link.related_document_id === oldRegistration.id);
