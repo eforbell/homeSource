@@ -1,6 +1,7 @@
 {
   "name": "home-source",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "Sovereign family document vault — store, organize, and protect household records",
   "main": "server.js",
   "scripts": {
