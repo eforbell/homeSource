@@ -318,14 +318,21 @@ describe('Phase C2 recipient grants and manifests', () => {
       env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
       mailer: { sendMail: async () => ({ delivered: false, retryable: false, reason: 'smtp_rejected' }) }
     });
-    const failed = await continuity.getOperationsStatus(pool);
-    assert.equal(failed.channels.recipient_delivery.failed, 2);
-    assert.equal(failed.outbox.failed, 2, 'failed recipient links must surface the Retry notifications control');
+    assert.equal((await continuity.getOperationsStatus(pool)).channels.recipient_delivery.failed, 2);
+    assert.equal((await continuity.getSwitchForOwner(parent.id)).failed_outbox_count, 2,
+      'failed recipient links must surface the Retry notifications control on their switch');
+    // Retry acts on one switch, so another parent's switch must not offer it for these rows.
+    const otherParent = await createMember('Grant Other Parent', 'parent', 'other-pass');
+    await continuity.saveDraft({
+      ownerId: otherParent.id, reminderEmail: 'other@family.test', intervalDays: 30,
+      gracePeriodDays: 14, recipients: [{ member_id: kidTwo.id }], operationKey: 'other-parent-draft'
+    });
+    assert.equal((await continuity.getSwitchForOwner(otherParent.id)).failed_outbox_count, 0);
     const retried = await continuity.retryOutboxForOwner({
       ownerId: parent.id, switchId: fixture.item.id, now: new Date('2026-04-01T12:02:00Z')
     });
     assert.equal(retried, 2);
-    assert.equal((await continuity.getOperationsStatus(pool)).outbox.failed, 0);
+    assert.equal((await continuity.getSwitchForOwner(parent.id)).failed_outbox_count, 0);
   });
 
   it('exchanges a replaceable recipient link into a one-hour exact-grant session without document semantics', async () => {

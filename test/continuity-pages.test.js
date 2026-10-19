@@ -24,3 +24,9 @@ it('encrypts the Letter file metadata in the browser', () => {
   assert.match(encryptLetter, /encrypted_file_meta:\{ iv_b64:PKICrypto\.toBase64\(metaIv\), payload_b64:PKICrypto\.toBase64\(encryptedMeta\) \}/);
   assert.doesNotMatch(encryptLetter, /encrypted_file_meta:\{ original_filename/);
 });
+
+it('offers Retry notifications only for failed rows on the shown switch', () => {
+  const source = read('continuity.html');
+  assert.match(source, /const failedCount = Number\(item\?\.failed_outbox_count \|\| 0\);/);
+  assert.doesNotMatch(source, /failedCount = \(operations\?\.outbox/);
+});

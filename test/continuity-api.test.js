@@ -210,10 +210,21 @@ describe('continuity switch API', () => {
         ] } }
       }
     });
-    const plaintextMeta = await stage({ original_filename: 'the-letter.txt', mime_type: 'text/plain' }, 'stage-meta-plain');
-    assert.equal(plaintextMeta.status, 400);
-    assert.match((await plaintextMeta.json()).error, /file metadata must be encrypted/);
-    const encryptedMeta = await stage({ iv_b64: 'bWV0YS1pdg==', payload_b64: 'bWV0YS1wYXlsb2Fk' }, 'stage-meta-encrypted');
+    const iv = Buffer.alloc(12, 1).toString('base64');
+    const payload = Buffer.alloc(64, 2).toString('base64');
+    const rejected = {
+      plaintext: { original_filename: 'the-letter.txt', mime_type: 'text/plain' },
+      'not base64': { iv_b64: '!!!!', payload_b64: payload },
+      'short IV': { iv_b64: Buffer.alloc(7).toString('base64'), payload_b64: payload },
+      'payload without a GCM tag': { iv_b64: iv, payload_b64: Buffer.alloc(16).toString('base64') },
+      'extra field': { iv_b64: iv, payload_b64: payload, original_filename: 'the-letter.txt' }
+    };
+    for (const [label, meta] of Object.entries(rejected)) {
+      const res = await stage(meta, `stage-meta-${label.replace(/\W+/g, '-')}`);
+      assert.equal(res.status, 400, label);
+      assert.match((await res.json()).error, /file metadata must be encrypted/, label);
+    }
+    const encryptedMeta = await stage({ iv_b64: iv, payload_b64: payload }, 'stage-meta-encrypted');
     assert.equal(encryptedMeta.status, 201);
   });
 

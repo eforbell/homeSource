@@ -148,7 +148,8 @@
       const runs = operations?.runs || [];
       const advance = runs.find(run => run.job_type === 'state_advance');
       const dispatch = runs.find(run => run.job_type === 'outbox_dispatch');
-      const failedCount = (operations?.outbox?.failed || 0) + (operations?.outbox?.blocked || 0);
+      // Retry acts on this switch only, so only this switch's failed or blocked rows may offer it.
+      const failedCount = Number(item?.failed_outbox_count || 0);
       const emailAttempts = operations?.channels?.email || {};
       const brrrAttempts = operations?.channels?.brrr || {};
       const deferredDeliveries = Number(operations?.channels?.recipient_delivery?.deferred || 0);
