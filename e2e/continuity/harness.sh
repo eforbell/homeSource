@@ -61,7 +61,7 @@ cmd_up() {
 }
 
 cmd_install() {
-  [ -n "$HOMEBASE_DIR" ] && [ -d "$HOMEBASE_DIR/.git" ] || die "set HOMEBASE_DIR to a homeBase checkout"
+  [ -n "$HOMEBASE_DIR" ] && git -C "$HOMEBASE_DIR" rev-parse --git-dir >/dev/null 2>&1 || die "set HOMEBASE_DIR to a homeBase checkout or worktree"
   mkdir -p "$STATE"
   log "snapshotting homeBase ($(git -C "$HOMEBASE_DIR" rev-parse --short HEAD))"
   (cd "$HOMEBASE_DIR" && git archive --format=tar.gz --prefix=homeBase/ -o "$STATE/homeBase.tgz" HEAD)
