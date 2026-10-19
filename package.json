@@ -18,7 +18,8 @@
     "worker:import": "node bin/import-worker.js",
     "worker:import:once": "node bin/import-worker.js --once",
     "continuity:check": "node bin/deadman-check.js --once",
-    "continuity:outbox": "node bin/continuity-outbox.js --once"
+    "continuity:outbox": "node bin/continuity-outbox.js --once",
+    "e2e:continuity": "node e2e/continuity/acceptance.mjs"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.0",
