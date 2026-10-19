@@ -1,0 +1,8 @@
+# Fresh systemd Ubuntu 24.04 host, matching the Homebase executor container harness.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus curl git ca-certificates python3 sudo openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

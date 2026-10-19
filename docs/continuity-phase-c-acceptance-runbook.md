@@ -5,6 +5,9 @@ C4) on a **new, isolated Homebase-managed test machine**. It is an operator acce
 not a production-arming procedure. Use only invented documents, test accounts, a disposable
 PostgreSQL database, and mailboxes controlled by the test operator.
 
+An automated version of this drill (everything except the tailnet checks) lives in
+[e2e/continuity/](../e2e/continuity/README.md).
+
 > **Do not use a production database, production storage directory, family documents, family
 > mailboxes, or production SMTP credentials.** The test run intentionally sends one-time links,
 > advances delivery state, creates grants, and can invalidate recipient access.
