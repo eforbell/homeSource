@@ -192,6 +192,42 @@ describe('continuity switch API', () => {
     }
   });
 
+  it('stages only letters whose file metadata is encrypted, the shape recipient delivery accepts', async () => {
+    const ownerKey = await keyFor({ memberId: parent.id, fingerprint: 'meta-owner' });
+    const kidKey = await keyFor({ memberId: kid.id, fingerprint: 'meta-kid' });
+    const item = await (await authedPost('api/continuity/switch/draft', parentCookie, {
+      reminder_email: 'owner@family.test', interval_days: 30, grace_period_days: 14,
+      recipients: [{ member_id: kid.id }], operation_key: 'draft-api-meta'
+    })).json();
+    const stage = (encryptedFileMeta, operationKey) => authedPost(`api/continuity/switch/${item.id}/letter/stage`, parentCookie, {
+      recipients: [{ member_id: kid.id }], operation_key: operationKey,
+      payload_b64: Buffer.from('encrypted').toString('base64'),
+      encryption_metadata: {
+        version: 2, mode: 'pki', policy: { access_model: 'any_one_holder', threshold: 1 },
+        files: { upload: { cipher: 'aes-256-gcm', iv_b64: 'aXY=', tag_length_bits: 128, encrypted_file_meta: encryptedFileMeta, holders: [
+          { member_id: parent.id, encryption_key_id: ownerKey.id, key_fingerprint: ownerKey.key_fingerprint, role: 'owner', wrapped_dek: wrap('owner') },
+          { member_id: kid.id, encryption_key_id: kidKey.id, key_fingerprint: kidKey.key_fingerprint, role: 'beneficiary', sealed: true, sealed_until: 'deadman_trigger', wrapped_dek: wrap('kid') }
+        ] } }
+      }
+    });
+    const iv = Buffer.alloc(12, 1).toString('base64');
+    const payload = Buffer.alloc(64, 2).toString('base64');
+    const rejected = {
+      plaintext: { original_filename: 'the-letter.txt', mime_type: 'text/plain' },
+      'not base64': { iv_b64: '!!!!', payload_b64: payload },
+      'short IV': { iv_b64: Buffer.alloc(7).toString('base64'), payload_b64: payload },
+      'payload without a GCM tag': { iv_b64: iv, payload_b64: Buffer.alloc(16).toString('base64') },
+      'extra field': { iv_b64: iv, payload_b64: payload, original_filename: 'the-letter.txt' }
+    };
+    for (const [label, meta] of Object.entries(rejected)) {
+      const res = await stage(meta, `stage-meta-${label.replace(/\W+/g, '-')}`);
+      assert.equal(res.status, 400, label);
+      assert.match((await res.json()).error, /file metadata must be encrypted/, label);
+    }
+    const encryptedMeta = await stage({ iv_b64: iv, payload_b64: payload }, 'stage-meta-encrypted');
+    assert.equal(encryptedMeta.status, 201);
+  });
+
   it('rejects kid access, mismatched envelopes, and destructive actions without the owner passphrase', async () => {
     const kidDraft = await authedPost('api/continuity/switch/draft', kidCookie, {
       reminder_email: 'kid@family.test', interval_days: 30, grace_period_days: 14,

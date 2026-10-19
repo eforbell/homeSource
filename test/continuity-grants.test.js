@@ -280,6 +280,61 @@ describe('Phase C2 recipient grants and manifests', () => {
     assert.equal(operations.outbox.deferred, 0);
   });
 
+  it('delivers a letter with encrypted file metadata and blocks one with plaintext metadata', async () => {
+    const fixture = await createReleasedPacket();
+    const meta = { iv_b64: 'bWV0YS1pdg==', payload_b64: 'bWV0YS1wYXlsb2Fk' };
+    await pool.query(
+      `UPDATE documents SET encryption_metadata = jsonb_set(encryption_metadata, '{files,upload,encrypted_file_meta}', $2::jsonb)
+       WHERE id = $1`, [fixture.letter.document.id, JSON.stringify(meta)]
+    );
+    const result = await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
+    assert.equal(result.active_grants, 2);
+    const { rows: letterItems } = await pool.query(
+      "SELECT artifact_metadata FROM continuity_delivery_items WHERE item_kind = 'letter' AND eligibility_status = 'ready'"
+    );
+    assert.equal(letterItems.length, 2);
+    for (const row of letterItems) assert.deepEqual(row.artifact_metadata.encrypted_file_meta, meta);
+
+    await resetDatabase();
+    parent = await createMember('Grant Meta Parent', 'parent', 'parent-pass');
+    kidOne = await createMember('Grant Meta Kid One', 'kid', 'kid-one-pass');
+    kidTwo = await createMember('Grant Meta Kid Two', 'kid', 'kid-two-pass');
+    const plain = await createReleasedPacket();
+    await pool.query(
+      `UPDATE documents SET encryption_metadata = jsonb_set(encryption_metadata, '{files,upload,encrypted_file_meta}', $2::jsonb)
+       WHERE id = $1`, [plain.letter.document.id, JSON.stringify({ original_filename: 'the-letter.txt', mime_type: 'text/plain' })]
+    );
+    const blocked = await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
+    assert.equal(blocked.blocked_grants, 2);
+    const { rows: grants } = await pool.query('SELECT blocked_reason_class FROM continuity_delivery_grants');
+    assert.deepEqual(grants.map((row) => row.blocked_reason_class), ['envelope_invalid', 'envelope_invalid']);
+  });
+
+  it('counts a failed recipient delivery in the parent retry totals and retries it', async () => {
+    const fixture = await createReleasedPacket();
+    await continuity.advanceDueSwitches({ now: new Date('2026-04-01T12:00:00Z') });
+    await continuity.dispatchOutbox({
+      now: new Date('2026-04-01T12:01:00Z'),
+      env: { MAIL_TRANSPORT: 'file', SMTP_FROM: 'Home Source <home@family.test>', APP_URL: 'https://home.family.test' },
+      mailer: { sendMail: async () => ({ delivered: false, retryable: false, reason: 'smtp_rejected' }) }
+    });
+    assert.equal((await continuity.getOperationsStatus(pool)).channels.recipient_delivery.failed, 2);
+    assert.equal((await continuity.getSwitchForOwner(parent.id)).failed_outbox_count, 2,
+      'failed recipient links must surface the Retry notifications control on their switch');
+    // Retry acts on one switch, so another parent's switch must not offer it for these rows.
+    const otherParent = await createMember('Grant Other Parent', 'parent', 'other-pass');
+    await continuity.saveDraft({
+      ownerId: otherParent.id, reminderEmail: 'other@family.test', intervalDays: 30,
+      gracePeriodDays: 14, recipients: [{ member_id: kidTwo.id }], operationKey: 'other-parent-draft'
+    });
+    assert.equal((await continuity.getSwitchForOwner(otherParent.id)).failed_outbox_count, 0);
+    const retried = await continuity.retryOutboxForOwner({
+      ownerId: parent.id, switchId: fixture.item.id, now: new Date('2026-04-01T12:02:00Z')
+    });
+    assert.equal(retried, 2);
+    assert.equal((await continuity.getSwitchForOwner(parent.id)).failed_outbox_count, 0);
+  });
+
   it('exchanges a replaceable recipient link into a one-hour exact-grant session without document semantics', async () => {
     await createReleasedPacket();
     const at = new Date('2026-04-01T12:00:00Z');

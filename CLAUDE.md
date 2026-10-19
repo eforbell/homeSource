@@ -11,7 +11,7 @@ Local-first storage with offline backup to USB/media.
 
 ```bash
 npm install            # first time
-npm run dev            # node --watch (Node 18+)
+npm run dev            # node --watch (Node 22+)
 npm start              # production
 
 # Database (Docker)

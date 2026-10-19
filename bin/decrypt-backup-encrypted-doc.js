@@ -190,7 +190,10 @@ async function decryptPassphraseMode({ doc, originalFile, backupRoot, args }) {
 
 async function decryptPkiMode({ doc, originalFile, backupRoot, db, args }) {
   const uploadMeta = doc.encryption_metadata?.files?.upload;
-  if (!uploadMeta?.wrapped_dek || !uploadMeta.iv_b64) {
+  // Multi-holder envelopes keep a wrapped DEK per holder; legacy ones keep a single top-level one.
+  const holder = (uploadMeta?.holders || []).find((entry) => Number(entry.encryption_key_id) === Number(doc.encryption_key_id));
+  const wrappedDek = holder?.wrapped_dek || uploadMeta?.wrapped_dek;
+  if (!wrappedDek || !uploadMeta.iv_b64) {
     throw new Error('Missing encryption metadata: files.upload');
   }
   const encryptedPath = resolveEncryptedPathInsideBackupRoot(backupRoot, originalFile.stored_filename);
@@ -198,9 +201,9 @@ async function decryptPkiMode({ doc, originalFile, backupRoot, db, args }) {
 
   const privateKey = await resolveOwnerPrivateKey({ doc, db, args });
   const contentKey = await PKICrypto.unwrapDekAsOwner(
-    PKICrypto.fromBase64(uploadMeta.wrapped_dek.wrapped_dek_b64),
-    PKICrypto.fromBase64(uploadMeta.wrapped_dek.ephemeral_public_key_b64),
-    PKICrypto.fromBase64(uploadMeta.wrapped_dek.hkdf_salt_b64),
+    PKICrypto.fromBase64(wrappedDek.wrapped_dek_b64),
+    PKICrypto.fromBase64(wrappedDek.ephemeral_public_key_b64),
+    PKICrypto.fromBase64(wrappedDek.hkdf_salt_b64),
     privateKey
   );
   const encryptedBytes = fs.readFileSync(encryptedPath);

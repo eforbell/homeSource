@@ -1,3 +1,6 @@
+/* Component display rules (e.g. .btn) must not defeat the hidden attribute. */
+[hidden] { display: none !important; }
+
 /* HomeSource — Sovereign Document Vault */
 /* Amber accent: #d97706 */
 
