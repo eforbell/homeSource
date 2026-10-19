@@ -99,7 +99,14 @@ describe('backup export with encrypted documents', () => {
     } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
   });
 
-  async function createRealPkiFixture(title) {
+  // A second, unrelated holder of the same DEK, as a sealed designation adds one.
+  async function otherHolder(dek) {
+    const other = await PKICrypto.generateMemberKeypair();
+    const wrapped = await PKICrypto.wrapDekForOwner(dek, await PKICrypto.importMemberPublicKey(other.publicKeyRaw));
+    return { memberId: parent.id, encryptionKeyId: 999999, keyFingerprint: 'other-holder', role: 'beneficiary', ...wrapped };
+  }
+
+  async function createRealPkiFixture(title, { multiHolder = false } = {}) {
     const plaintext = Buffer.from(`Highly sensitive content for ${title}`, 'utf8');
     const keypair = await PKICrypto.generateMemberKeypair();
     const ownerPublicKey = await PKICrypto.importMemberPublicKey(keypair.publicKeyRaw);
@@ -184,7 +191,12 @@ describe('backup export with encrypted documents', () => {
         encryptedFileMeta: {
           iv_b64: PKICrypto.toBase64(metaIv),
           payload_b64: PKICrypto.toBase64(new Uint8Array(encryptedMeta))
-        }
+        },
+        // public/upload.html writes per-holder wrapped DEKs; the owner is deliberately not first.
+        holders: multiHolder ? [
+          await otherHolder(dek),
+          { memberId: parent.id, encryptionKeyId: key.id, keyFingerprint: key.key_fingerprint, role: 'owner', ...wrappedDek }
+        ] : undefined
       }),
       created_by: parent.id
     }, [parent.id]);
@@ -385,6 +397,38 @@ describe('backup export with encrypted documents', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       fs.rmSync(outRecovery, { recursive: true, force: true });
       fs.rmSync(outPrivateKey, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a multi-holder PKI envelope from the backup using the owner holder, not the first one', async () => {
+    const fixture = await createRealPkiFixture('PKI Multi Holder Fixture', { multiHolder: true });
+    const exportRes = await authedPost('api/backup/export', parentCookie, { encrypted: false });
+    assert.equal(exportRes.status, 200);
+    const payload = await exportRes.json();
+    const backupPath = path.join(process.cwd(), 'data', 'test', 'exports', payload.file);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-pki-multi-'));
+    const outRecovery = fs.mkdtempSync(path.join(os.tmpdir(), 'homesource-backup-pki-multi-out-'));
+    try {
+      execFileSync('tar', ['-xzf', backupPath, '-C', tmpDir], { stdio: 'pipe' });
+      const backupRoot = path.join(tmpDir, fs.readdirSync(tmpDir)[0]);
+      const dbPath = path.join(backupRoot, 'database.json');
+      const exported = JSON.parse(fs.readFileSync(dbPath, 'utf8')).documents.find((row) => Number(row.id) === Number(fixture.doc.id));
+      assert.equal(exported.encryption_metadata.files.upload.wrapped_dek, undefined, 'fixture must use only holder-local wrapped DEKs');
+      execFileSync(process.execPath, [
+        'bin/decrypt-backup-encrypted-doc.js',
+        '--database', dbPath,
+        '--backup-root', backupRoot,
+        '--mode', 'pki',
+        '--recovery-code', fixture.mnemonic,
+        '--doc-id', String(fixture.doc.id),
+        '--out-dir', outRecovery
+      ], { cwd: process.cwd(), stdio: 'pipe' });
+      const recoveryFiles = fs.readdirSync(outRecovery);
+      assert.deepEqual(recoveryFiles, ['PKI Multi Holder Fixture.txt']);
+      assert.deepEqual(fs.readFileSync(path.join(outRecovery, recoveryFiles[0])), fixture.plaintext);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(outRecovery, { recursive: true, force: true });
     }
   });
 

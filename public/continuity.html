@@ -177,7 +177,9 @@
           wrapped_dek: { kind:'pki_x25519', ephemeral_public_key_b64:PKICrypto.toBase64(wrapped.ephemeralPublicKey), hkdf_salt_b64:PKICrypto.toBase64(wrapped.salt), wrapped_dek_b64:PKICrypto.toBase64(wrapped.wrappedDek) }
         });
       }
-      return { payload_b64: PKICrypto.toBase64(ciphertext), encryption_metadata: { version:2, mode:'pki', policy:{ plaintext_metadata:'minimal', server_plaintext_processing:false, access_model:'any_one_holder', threshold:1 }, files:{ upload:{ cipher:'aes-256-gcm', iv_b64:PKICrypto.toBase64(iv), tag_length_bits:128, encrypted_file_meta:{ original_filename:'the-letter.txt', mime_type:'text/plain' }, holders } } } };
+      const metaIv = crypto.getRandomValues(new Uint8Array(12));
+      const encryptedMeta = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv:metaIv, tagLength:128 }, dek, new TextEncoder().encode(JSON.stringify({ original_filename:'the-letter.txt', mime_type:'text/plain' }))));
+      return { payload_b64: PKICrypto.toBase64(ciphertext), encryption_metadata: { version:2, mode:'pki', policy:{ plaintext_metadata:'minimal', server_plaintext_processing:false, access_model:'any_one_holder', threshold:1 }, files:{ upload:{ cipher:'aes-256-gcm', iv_b64:PKICrypto.toBase64(iv), tag_length_bits:128, encrypted_file_meta:{ iv_b64:PKICrypto.toBase64(metaIv), payload_b64:PKICrypto.toBase64(encryptedMeta) }, holders } } } };
     }
 
     async function loadSwitch() {
