@@ -38,12 +38,10 @@ const continuityAuthorization = require('./lib/continuity-authorization');
 const continuityRecipient = require('./lib/continuity-recipient');
 const brrr = require('./lib/brrr');
 const { buildAppUrl, tryBuildAppUrl } = require('./lib/app-url');
+const { listen, describe: describeListen } = require('./lib/listen');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
-// Loopback unless HOST says otherwise: under Home Base only nginx should reach the app, never the tailnet
-// directly (Feature-10 SID-002). Set HOST=0.0.0.0 to expose it on purpose.
-const LISTEN_HOST = process.env.HOST || '127.0.0.1';
 const DEFAULT_SOVEREIGN_FONT_SANS_CSS_URL = 'https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap';
 const DEFAULT_SOVEREIGN_FONT_MONO_CSS_URL = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap';
 
@@ -3205,8 +3203,9 @@ if (process.env.NODE_ENV === 'test') _cleanupInterval.unref();
 // ── Start ───────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
-  app.listen(PORT, LISTEN_HOST, () => {
-    console.log(`Home Source listening on http://${LISTEN_HOST}:${PORT}`);
+  // Loopback unless HOST says otherwise, or Home Base's socket (Feature-10 SID-002); see lib/listen.js.
+  listen(app, { defaultPort: PORT }, (target) => {
+    console.log(`Home Source listening on ${describeListen(target)}`);
   });
 }
 
