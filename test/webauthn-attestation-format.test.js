@@ -18,7 +18,7 @@ x509.cryptoProvider.set(crypto.webcrypto);
 const ECDSA = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' };
 const sha256 = (data) => crypto.createHash('sha256').update(data).digest();
 
-// A certificate whose CRL distribution point is the test's own listener.
+// A certificate whose CRL distribution point is the test's own listener, and its key.
 async function certificateFetching(crlUrl) {
   const keys = await crypto.webcrypto.subtle.generateKey(ECDSA, true, ['sign', 'verify']);
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
@@ -30,11 +30,12 @@ async function certificateFetching(crlUrl) {
     keys,
     extensions: [new x509.CRLDistributionPointsExtension([crlUrl])],
   });
-  return Buffer.from(cert.rawData);
+  return { der: Buffer.from(cert.rawData), key: crypto.KeyObject.from(keys.privateKey) };
 }
 
-// What a browser would send for these options, with the attestation statement the test chooses.
-function registrationResponse(options, { origin, fmt, attStmt = new Map() }) {
+// What a browser would send for these options, with the attestation statement the test chooses. A packed
+// statement is self-attested unless attestation gives { x5c, key }.
+function registrationResponse(options, { origin, fmt, attStmt = new Map(), attestation = null }) {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const jwk = publicKey.export({ format: 'jwk' });
   const coseKey = isoCBOR.encode(new Map([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x, 'base64url')], [-3, Buffer.from(jwk.y, 'base64url')]]));
@@ -45,7 +46,8 @@ function registrationResponse(options, { origin, fmt, attStmt = new Map() }) {
     Buffer.alloc(16), Buffer.from([0, rawId.length]), rawId, Buffer.from(coseKey),
   ]);
   if (fmt === 'packed') {
-    attStmt = new Map([['alg', -7], ['sig', crypto.sign('sha256', Buffer.concat([authData, sha256(clientDataJSON)]), privateKey)]]);
+    attStmt = new Map([['alg', -7], ['sig', crypto.sign('sha256', Buffer.concat([authData, sha256(clientDataJSON)]), attestation?.key || privateKey)]]);
+    if (attestation) attStmt.set('x5c', attestation.x5c);
   }
   const attestationObject = isoCBOR.encode(new Map([['fmt', fmt], ['attStmt', attStmt], ['authData', authData]]));
   const id = isoBase64URL.fromBuffer(rawId);
@@ -86,34 +88,42 @@ describe('WebAuthn registration attestation formats', () => {
   });
 
   const origin = () => new URL(url('')).origin;
-  const certificateStatement = () => new Map([['alg', -7], ['sig', Buffer.alloc(64)], ['x5c', [crlCert]]]);
+  const certificateStatement = () => new Map([['alg', -7], ['sig', Buffer.alloc(64)], ['x5c', [crlCert.der]]]);
 
-  async function memberRegistration(fmt, attStmt) {
+  async function memberRegistration(fmt, extra = {}) {
     const started = await authedPost(`api/members/${parent.id}/keys/webauthn/options`, parentCookie, { requested_method: 'security_key' });
     const { options } = await started.json();
     return authedPost(`api/members/${parent.id}/keys/webauthn/complete`, parentCookie, {
-      registration_response: registrationResponse(options, { origin: origin(), fmt, attStmt }),
+      registration_response: registrationResponse(options, { origin: origin(), fmt, ...extra }),
     });
   }
 
-  async function trusteeRegistration(fmt, attStmt) {
+  async function trusteeRegistration(fmt, extra = {}) {
     const trustee = await trustees.createTrustee({ name: `Trustee ${fmt}`, email: `${fmt}@family.test`, createdBy: parent.id });
     const invitation = await trustees.createTrusteeInvitation({ trusteeId: trustee.id });
     const post = (path, body) => fetch(url(`api/trustee-invitations/${invitation.token}/webauthn/${path}`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const { options } = await (await post('options', { requested_method: 'security_key' })).json();
-    return post('complete', { registration_response: registrationResponse(options, { origin: origin(), fmt, attStmt }) });
+    return post('complete', { registration_response: registrationResponse(options, { origin: origin(), fmt, ...extra }) });
   }
 
   for (const [route, register] of [['member', memberRegistration], ['trustee', trusteeRegistration]]) {
     it(`refuses other attestation formats on the ${route} route without fetching anything`, async () => {
       for (const fmt of ['apple', 'android-key', 'android-safetynet', 'tpm', 'fido-u2f']) {
-        const res = await register(fmt, certificateStatement());
+        const res = await register(fmt, { attStmt: certificateStatement() });
         assert.equal(res.status, 400, fmt);
         assert.match((await res.json()).error, /Unsupported attestation format/, fmt);
       }
       assert.deepEqual(fetched, []);
+    });
+
+    // Safe only while no packed roots are set and MetadataService stays off (lib/webauthn.js): either would
+    // send this chain through the same CRL fetch.
+    it(`registers a signed packed certificate chain on the ${route} route without fetching anything`, async () => {
+      const res = await register('packed', { attestation: { x5c: [crlCert.der], key: crlCert.key } });
+      assert.deepEqual(fetched, []);
+      assert.equal(res.status, 201, JSON.stringify(await res.clone().json()));
     });
 
     it(`still registers none and packed keys on the ${route} route`, async () => {
