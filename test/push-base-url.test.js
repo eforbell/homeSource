@@ -47,3 +47,19 @@ test('a malformed PUSH_BASE_URL fails the send and never falls back to brrr', as
   }
   assert.equal(called, false);
 });
+
+test('a blank or delimiter-ended PUSH_BASE_URL is malformed too, but an empty one means unset', () => {
+  for (const bad of ['   ', 'https://gateway.example.test/#', 'https://gateway.example.test/?']) {
+    process.env.PUSH_BASE_URL = bad;
+    assert.throws(() => brrr.normalizeBrrrTarget('hp_secret-value-1234'), /PUSH_BASE_URL/, JSON.stringify(bad));
+  }
+  process.env.PUSH_BASE_URL = '';
+  assert.equal(brrr.normalizeBrrrTarget('secret-value-1234'), BRRR_TARGET);
+});
+
+test('a value that is neither a secret nor a clean URL is refused without being echoed', () => {
+  delete process.env.PUSH_BASE_URL;
+  for (const target of ['https:\n//old.example.test/v1/oldsecret123456', 'old secret123456', '../oldsecret123456']) {
+    assert.throws(() => brrr.normalizeBrrrTarget(target), (err) => err instanceof TypeError && !err.message.includes('oldsecret'), JSON.stringify(target));
+  }
+});
