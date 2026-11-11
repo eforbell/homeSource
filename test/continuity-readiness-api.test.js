@@ -93,6 +93,35 @@ describe('continuity operator reachability readiness', () => {
     assert.match(rows[0].target_fingerprint, /^[a-f0-9]{64}$/);
   });
 
+  it('stops trusting a target saved for a previous push service, but still lets its owner see and disable it', async () => {
+    const original = process.env.PUSH_BASE_URL;
+    delete process.env.PUSH_BASE_URL;
+    try {
+      await readinessDomain.saveBrrrChannel({ ownerId: parent.id, secret: 'readiness-secret-switchover', enabled: true });
+      await readinessDomain.recordBrrrTransport({ ownerId: parent.id, accepted: true });
+      let readiness = await readinessDomain.getReadiness({ ownerId: parent.id, switchId: switchItem.id });
+      assert.equal(readiness.channels.brrr.transport_tested, true);
+
+      process.env.PUSH_BASE_URL = 'http://127.0.0.1:3014';
+      readiness = await readinessDomain.getReadiness({ ownerId: parent.id, switchId: switchItem.id });
+      assert.equal(readiness.channels.brrr.transport_tested, false);
+      assert.equal(readiness.ready_to_arm, false);
+      assert.match(readiness.channels.brrr.target_mask, /over$/);
+
+      const disabled = await readinessDomain.saveBrrrChannel({ ownerId: parent.id, enabled: false });
+      assert.equal(disabled.enabled, false);
+      assert.equal(disabled.has_secret, true);
+
+      const replaced = await readinessDomain.saveBrrrChannel({ ownerId: parent.id, secret: 'hp_secret-value-1234', enabled: true });
+      assert.equal(replaced.transport_tested, false);
+      const { rows } = await pool.query('SELECT target_secret FROM member_notification_channels WHERE member_id = $1', [parent.id]);
+      assert.equal(rows[0].target_secret, 'http://127.0.0.1:3014/v1/hp_secret-value-1234');
+    } finally {
+      if (original === undefined) delete process.env.PUSH_BASE_URL;
+      else process.env.PUSH_BASE_URL = original;
+    }
+  });
+
   it('keeps transport acceptance distinct from authenticated reachability acknowledgement', async () => {
     await authedPut('api/continuity/notification-channels/brrr', parentCookie, {
       enabled: true, secret: 'readiness-secret-abcdef'
