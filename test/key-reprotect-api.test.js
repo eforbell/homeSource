@@ -219,6 +219,18 @@ describe('Re-protecting a member key with its recovery words', () => {
     assert.equal((await start(key.id, otherCookie, other.id)).status, 404);
   });
 
+  it('starts only over HTTPS (or on this machine)', async () => {
+    const { key } = await memberKeyWithRecovery(parent.id);
+    const res = await fetch(url(`api/members/${parent.id}/keys/${key.id}/reprotect/start`), {
+      method: 'POST',
+      headers: { Cookie: parentCookie, 'Content-Type': 'application/json', 'X-Forwarded-Host': 'vault.example.test', 'X-Forwarded-Proto': 'http' },
+      body: '{}',
+    });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /HTTPS/);
+    assert.equal(keyPossession._pending.size, 0);
+  });
+
   it('refuses a key without recovery words, and a revoked key', async () => {
     const { key: bare } = await memberKeyWithRecovery(parent.id, { recovery: false });
     const res = await start(bare.id);
@@ -265,13 +277,14 @@ describe('Re-protecting a member key with its recovery words', () => {
     const { key, words } = await memberKeyWithRecovery(parent.id);
     const before = await keyRow(key.id);
     for (const makeWrap of [
-      async (privateKey) => JSON.stringify({ kind: 'passphrase_pbkdf2_v1', wrapped_private_key_b64: 'AAAA' }),
+      // Another kind of wrap, even one naming this credential's salt.
+      async (privateKey, prfSalt) => JSON.stringify({ ...JSON.parse((await prfWrap(privateKey, prfSalt)).wrap), kind: 'passphrase_pbkdf2_v1' }),
       async (privateKey) => (await prfWrap(privateKey, 'some-other-salt')).wrap,
       async () => 'not json',
     ]) {
       const { privateKey, proof } = await unlockWithWords(await (await start(key.id)).json(), words);
       const fresh = await newCredential();
-      const res = await post(`api/members/${parent.id}/keys/${key.id}/reprotect/finish`, { possession_proof: proof, assertion_response: fresh.assertion, encrypted_private_key: await makeWrap(privateKey) });
+      const res = await post(`api/members/${parent.id}/keys/${key.id}/reprotect/finish`, { possession_proof: proof, assertion_response: fresh.assertion, encrypted_private_key: await makeWrap(privateKey, fresh.prfSalt) });
       assert.equal(res.status, 400);
       assert.deepEqual(await keyRow(key.id), before);
     }
