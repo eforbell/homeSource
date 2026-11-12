@@ -202,6 +202,23 @@ describe('Re-protecting a member key with its recovery words', () => {
     await unlockWithWords(again, words);
   });
 
+  it('reports success once the key is saved, even if recording it fails', async (t) => {
+    const audit = require('../lib/audit');
+    const realLog = audit.log;
+    t.mock.method(audit, 'log', async (action, ...rest) => {
+      if (action === 'key.reprotected') throw new Error('audit is down');
+      return realLog.call(audit, action, ...rest);
+    });
+    t.mock.method(console, 'error', () => {});
+    const { key, words } = await memberKeyWithRecovery(parent.id);
+    const { privateKey, proof } = await unlockWithWords(await (await start(key.id)).json(), words);
+    const fresh = await newCredential();
+    const res = await post(`api/members/${parent.id}/keys/${key.id}/reprotect/finish`, { possession_proof: proof, assertion_response: fresh.assertion, encrypted_private_key: (await prfWrap(privateKey, fresh.prfSalt)).wrap });
+    assert.equal(res.status, 200);
+    assert.equal((await keyRow(key.id)).credential_id, fresh.credentialId);
+    assert.match(console.error.mock.calls[0].arguments[0], /re-protected, but recording it failed/);
+  });
+
   it('accepts a passkey as the new protection', async () => {
     const { key, words } = await memberKeyWithRecovery(parent.id);
     const { privateKey, proof } = await unlockWithWords(await (await start(key.id)).json(), words);

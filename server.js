@@ -1672,19 +1672,25 @@ app.post('/api/members/:id/keys/:keyId/reprotect/finish', requireAuth, async (re
     if (!member) return res.status(404).json({ error: 'Member not found' });
     keyPossession.consume(memberId, keyId, req.body?.possession_proof);
     const result = await webauthn.reprotectMemberKey(req, member, keyId, req.body || {});
-    await audit.log('key.reprotected', 'encryption_key', keyId, req.member.id, {
-      member_id: memberId,
-      protection_tier: result.key.protection_tier,
-      previous_credential_id: result.previous_credential_id,
-      credential_id: result.key.credential_id,
-      verification_method: 'webauthn'
-    });
-    await keyNotificationDispatcher.dispatch({
-      event: 'key.reprotected',
-      memberId,
-      memberName: req.member.name,
-      actorId: req.member.id
-    });
+    // The key is saved. A failed audit write or notice is logged, not reported as a failed re-register: the
+    // page would tell the member nothing changed when it had.
+    try {
+      await audit.log('key.reprotected', 'encryption_key', keyId, req.member.id, {
+        member_id: memberId,
+        protection_tier: result.key.protection_tier,
+        previous_credential_id: result.previous_credential_id,
+        credential_id: result.key.credential_id,
+        verification_method: 'webauthn'
+      });
+      await keyNotificationDispatcher.dispatch({
+        event: 'key.reprotected',
+        memberId,
+        memberName: req.member.name,
+        actorId: req.member.id
+      });
+    } catch (err) {
+      console.error(`[key.reprotected] key ${keyId} was re-protected, but recording it failed: ${err.message}`);
+    }
     res.json({ key: result.key, verification: result.verification });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
