@@ -27,6 +27,7 @@ const { isEncryptedDocument, normalizeEncryptionInput } = require('./lib/encrypt
 const audit = require('./lib/audit');
 const pki = require('./lib/pki');
 const webauthn = require('./lib/webauthn');
+const keyPossession = require('./lib/key-possession');
 const { notifyKeyEvent } = require('./lib/notifications');
 const { createKeyNotificationDispatcher } = require('./lib/key-notification-dispatcher');
 const { getMailerConfig, sendMail } = require('./lib/mailer');
@@ -1625,6 +1626,76 @@ app.post('/api/members/:id/keys/:keyId/recovery', requireAuth, async (req, res) 
       recovery_type: recovery_type || 'mnemonic_bip39'
     });
     res.json(updated);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Re-protect a key with its recovery words (docs/key-move-drill.md): a key registered at another address,
+// or on a lost security key, moves to a security key or passkey registered here. The keypair doesn't change,
+// so the documents it holds don't either. Start hands the browser the recovery wrap and a check only the
+// private key can answer; the browser then registers a credential the usual way (webauthn/options, complete,
+// assertion-options) and finishes here.
+app.post('/api/members/:id/keys/:keyId/reprotect/start', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only re-protect your own keys' });
+    }
+    if (!webauthn.isSecureWebAuthnContext(req)) {
+      return res.status(400).json({ error: 'WebAuthn requires HTTPS or localhost' });
+    }
+    const key = await pki.getMemberKeyRecoveryWrap(keyId, memberId);
+    if (!key) return res.status(404).json({ error: 'Key not found' });
+    if (!key.recovery_wrapped_private_key) {
+      return res.status(409).json({ error: 'This key has no recovery words, so it can only be used where it was registered.', code: 'PKI_KEY_NO_RECOVERY' });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      key_id: key.id,
+      public_key: key.public_key,
+      key_fingerprint: key.key_fingerprint,
+      recovery_wrapped_private_key: key.recovery_wrapped_private_key,
+      recovery_type: key.recovery_type,
+      possession: await keyPossession.issue(memberId, keyId, key.public_key),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/members/:id/keys/:keyId/reprotect/finish', requireAuth, async (req, res) => {
+  try {
+    const memberId = Number(req.params.id);
+    const keyId = Number(req.params.keyId);
+    if (req.member.id !== memberId) {
+      return res.status(403).json({ error: 'Can only re-protect your own keys' });
+    }
+    const member = await getMember(memberId);
+    if (!member) return res.status(404).json({ error: 'Member not found' });
+    keyPossession.consume(memberId, keyId, req.body?.possession_proof);
+    const result = await webauthn.reprotectMemberKey(req, member, keyId, req.body || {});
+    // The key is saved. A failed audit write or notice is logged, not reported as a failed re-register (the
+    // page would tell the member nothing changed when it had), and one failing doesn't skip the other.
+    try {
+      await audit.log('key.reprotected', 'encryption_key', keyId, req.member.id, {
+        member_id: memberId,
+        protection_tier: result.key.protection_tier,
+        previous_credential_id: result.previous_credential_id,
+        credential_id: result.key.credential_id,
+        verification_method: 'webauthn'
+      });
+    } catch (err) {
+      console.error(`[key.reprotected] key ${keyId} was re-protected, but recording it failed: ${err.message}`);
+    }
+    try {
+      await keyNotificationDispatcher.dispatch({
+        event: 'key.reprotected',
+        memberId,
+        memberName: req.member.name,
+        actorId: req.member.id
+      });
+    } catch (err) {
+      console.error(`[key.reprotected] key ${keyId} was re-protected, but its notice failed: ${err.message}`);
+    }
+    res.json({ key: result.key, verification: result.verification });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
