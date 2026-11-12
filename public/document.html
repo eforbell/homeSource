@@ -1886,6 +1886,28 @@
       });
     }
 
+    // The PDF is fetched and framed from memory. Framing its address directly is refused wherever the server in
+    // front of Home Source forbids framing its pages at all, which it does on the household's own hostname.
+    let pdfPreviewUrl = null;
+    let pdfPreviewRun = 0;
+    async function showPdfPreview(preview, file) {
+      const run = ++pdfPreviewRun;
+      const address = `api/documents/${docId}/files/${file.id}/download`;
+      preview.innerHTML = '<div class="flex-center text-dim" style="padding:2rem;">Loading preview…</div>';
+      try {
+        const res = await fetch(address, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`preview answered ${res.status}`);
+        const blob = new Blob([await res.blob()], { type: 'application/pdf' });
+        if (run !== pdfPreviewRun) return;
+        if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+        pdfPreviewUrl = URL.createObjectURL(blob);
+        preview.innerHTML = `<iframe src="${pdfPreviewUrl}" class="doc-preview-frame"></iframe>`;
+      } catch (err) {
+        if (run !== pdfPreviewRun) return;
+        preview.innerHTML = `<div class="flex-center" style="padding:2rem;"><a class="btn btn-primary" href="${address}" download>Download to view</a></div>`;
+      }
+    }
+
     function renderUnlockedFilePreview(unlocked) {
       const preview = document.getElementById('file-preview');
       if ((unlocked.mime || '').startsWith('image/')) {
@@ -1947,7 +1969,7 @@
         const preview = document.getElementById('file-preview');
         if (!encryptedDoc && previewFile) {
           if (!isMobile && previewFile.mime_type === 'application/pdf') {
-            preview.innerHTML = `<iframe src="api/documents/${docId}/files/${previewFile.id}/download" class="doc-preview-frame"></iframe>`;
+            showPdfPreview(preview, previewFile);
           } else if (previewFile.mime_type.startsWith('image/') || (isMobile && thumbnail)) {
             const imgFile = previewFile.mime_type.startsWith('image/') ? previewFile : thumbnail;
             const downloadFile = pdfFile || files.find(f => f.file_type === 'original');
@@ -2579,7 +2601,7 @@
       const isMobile = window.innerWidth <= 768;
 
       if (!isMobile && file.mime_type === 'application/pdf') {
-        preview.innerHTML = `<iframe src="api/documents/${docId}/files/${file.id}/download" class="doc-preview-frame"></iframe>`;
+        showPdfPreview(preview, file);
       } else if (file.mime_type.startsWith('image/')) {
         const downloadFile = (currentDoc.files || []).find(f => f.file_type === 'processed' || (f.file_type === 'original' && f.mime_type === 'application/pdf')) || file;
         preview.innerHTML = `
