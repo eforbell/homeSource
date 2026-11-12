@@ -63,8 +63,18 @@
   <script>
     'use strict';
 
+    // In tailnet mode a kid's view of Home Source is their documents only: the dashboard's counts and search aren't theirs.
+    const kidInTailnet = API.get('api/auth/me').then((me) => me?.tailnet === true && me.role === 'kid', () => false);
+
+    function showKidDashboard() {
+      document.getElementById('stats-row').style.display = 'none';
+      document.querySelector('.page-header .btn-primary').style.display = 'none';
+      document.getElementById('recent-docs').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📁</div><div class="empty-state-title">The dashboard isn\'t available to kids here</div><p class="text-dim">Your documents, and the ones shared with you, are under My Docs.</p></div>';
+    }
+
     async function loadDashboard() {
       try {
+        if (await kidInTailnet) return showKidDashboard();
         const stats = await API.get('api/stats');
 
         document.getElementById('stat-total').textContent = stats.total_documents;

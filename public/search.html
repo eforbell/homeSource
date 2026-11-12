@@ -71,7 +71,18 @@
   <script>
     'use strict';
 
+    // In tailnet mode a kid's view of Home Source is their documents only: the dashboard's counts and search aren't theirs.
+    const kidInTailnet = API.get('api/auth/me').then((me) => me?.tailnet === true && me.role === 'kid', () => false);
+
+    function showKidSearch() {
+      document.querySelector('.page-content > .card').style.display = 'none';
+      const initial = document.getElementById('search-initial');
+      initial.querySelector('.empty-state-title').textContent = 'Search isn\'t available to kids here';
+      initial.querySelector('p').textContent = 'Your documents, and the ones shared with you, are under My Docs.';
+    }
+
     async function loadFilters() {
+      if (await kidInTailnet) return showKidSearch();
       try {
         const [members, tags] = await Promise.all([API.get('api/members'), API.get('api/tags')]);
         const ownerSelect = document.getElementById('search-owner');
@@ -144,7 +155,7 @@
     const urlQ = new URLSearchParams(location.search).get('q');
     if (urlQ) {
       document.getElementById('search-input').value = urlQ;
-      doSearch();
+      kidInTailnet.then((kid) => { if (!kid) doSearch(); });
     }
 
     loadFilters();

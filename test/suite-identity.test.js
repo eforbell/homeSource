@@ -180,7 +180,7 @@ describe('Suite identity (tailnet mode)', () => {
     // Setup is theirs while there's no household; it refuses once there is one, and says nothing about its size.
     const setup = await get('/api/bootstrap', parent);
     assert.equal(setup.status, 200);
-    assert.deepEqual(Object.keys(await setup.json()).sort(), ['app', 'bootstrap', 'status', 'version'], 'whether setup is needed, and no member count');
+    assert.deepEqual(Object.keys(await setup.json()).sort(), ['app', 'bootstrap', 'status', 'tailnet', 'version'], 'whether setup is needed, and no member count');
     const household = await send('POST', '/api/bootstrap/household', { ...as(NEW_PARENT), ...JSON_WRITE }, JSON.stringify({ members: [{ name: 'x', role: 'parent' }] }));
     assert.equal(household.status, 409);
     const setupPage = await get('/setup', { ...as(NEW_PARENT), ...NAVIGATION });
@@ -200,7 +200,7 @@ describe('Suite identity (tailnet mode)', () => {
     assert.equal(stranger.status, 403);
     assert.equal(await code(stranger), 'not_member');
     const kid = await get('/api/auth/me', { ...as(KID), ...cookie, ...OWN_PAGE });
-    assert.notEqual((await kid.json()).id, parentRow.id, 'a kid with a parent\'s cookie is not that parent');
+    assert.equal((await kid.json()).id, kidRow.id, 'a kid with a parent\'s cookie is still that kid');
     const { rows } = await pool.query('SELECT 1 FROM sessions WHERE token = $1', [token]);
     assert.equal(rows.length, 1, 'and the session is kept for a return to local mode');
   });
@@ -406,6 +406,190 @@ describe('Suite identity (tailnet mode)', () => {
     assert.equal((await send('POST', '/style.css', { ...JSON_WRITE }, '{}')).status, 403, 'and an asset is open to reads only');
   });
 
+  describe('the directory\'s role', () => {
+    let parentDoc;
+    let kidDoc;
+    let sharedDoc;
+    let kidKey;
+
+    before(async () => {
+      parentDoc = await createTestDocument(parentRow.id, { title: 'Parent Only' });
+      kidDoc = await createTestDocument(kidRow.id, { title: 'Kid Own' });
+      sharedDoc = await createTestDocument(parentRow.id, { title: 'Shared With Kid', owner_ids: [parentRow.id, kidRow.id] });
+      ({ rows: [kidKey] } = await pool.query(
+        `INSERT INTO encryption_keys (key_type, member_id, public_key, encrypted_private_key, key_fingerprint, label)
+         VALUES ('member', $1, 'pk', 'epk', 'fp-kid', 'Kid key') RETURNING id`, [kidRow.id]));
+    });
+
+    it('a kid reads their own and shared documents, each answer scoped to them', async () => {
+      tailnet();
+      const kid = { ...as(KID), ...OWN_PAGE };
+      const me = await (await get('/api/auth/me', kid)).json();
+      assert.deepEqual([me.id, me.role, me.tailnet], [kidRow.id, 'kid', true]);
+      const { documents } = await (await get('/api/documents', kid)).json();
+      assert.deepEqual(documents.map((doc) => doc.id).sort(), [kidDoc.id, sharedDoc.id].sort());
+      for (const doc of [kidDoc, sharedDoc]) {
+        for (const path of ['', '/magicindex-status', '/links']) assert.equal((await get(`/api/documents/${doc.id}${path}`, kid)).status, 200, `${doc.title}${path}`);
+      }
+      // Reachable, and the route itself answers for this kid only.
+      assert.equal((await get(`/api/documents/${parentDoc.id}`, kid)).status, 403, 'a parent\'s document');
+      assert.equal((await get(`/api/documents/${parentDoc.id}/files/1/download`, kid)).status, 403);
+      assert.equal((await get(`/api/documents/${kidDoc.id}/files/999999/download`, kid)).status, 404);
+      assert.equal((await get(`/api/documents/${kidDoc.id}/key-info`, kid)).status, 200);
+      assert.equal((await get(`/api/documents/${parentDoc.id}/key-info`, kid)).status, 403);
+      assert.equal((await get(`/api/members/${kidRow.id}/keys`, kid)).status, 200);
+      assert.equal((await get(`/api/members/${parentRow.id}/keys`, kid)).status, 403, 'only their own keys');
+      assert.equal((await get(`/api/members/${kidRow.id}/keys/${kidKey.id}/material`, kid)).status, 200);
+      assert.equal((await get(`/api/members/${parentRow.id}/keys/${kidKey.id}/material`, kid)).status, 403);
+      const unlock = await send('POST', `/api/members/${parentRow.id}/keys/webauthn/assertion-options`, { ...as(KID), ...JSON_WRITE }, '{}');
+      assert.equal(unlock.status, 403, 'unlocking only their own key');
+      assert.notEqual((await (await send('POST', `/api/members/${kidRow.id}/keys/webauthn/assertion-options`, { ...as(KID), ...JSON_WRITE }, '{}')).json()).code, 'parent_only');
+    });
+
+    it('a document a sealed designation hides stays hidden on every read a kid may use', async () => {
+      tailnet();
+      const sealed = await createTestDocument(parentRow.id, { title: 'Sealed For Later', owner_ids: [parentRow.id, kidRow.id] });
+      await pool.query(`INSERT INTO document_designations (document_id, member_id, role, sealed) VALUES ($1, $2, 'beneficiary', TRUE)`, [sealed.id, kidRow.id]);
+      const kid = { ...as(KID), ...OWN_PAGE };
+      const list = await (await get('/api/documents', kid)).json();
+      assert.ok(!list.documents.some((doc) => doc.id === sealed.id));
+      assert.equal(list.total, 2, 'nor is it counted');
+      assert.ok(!(await (await get('/api/documents?q=Sealed', kid)).json()).documents.length, 'nor found by the list\'s search');
+      for (const path of ['', '/key-info', '/magicindex-status', '/links', '/files/1/download']) {
+        assert.equal((await get(`/api/documents/${sealed.id}${path}`, kid)).status, 403, path || 'the document');
+      }
+      await pool.query('DELETE FROM documents WHERE id = $1', [sealed.id]);
+    });
+
+    it('everything else is refused to a kid, however it is spelled', async () => {
+      tailnet();
+      const kid = { ...as(KID), ...OWN_PAGE };
+      // Search, the dashboard's counts and key posture count documents a sealed designation hides from the kid.
+      const refusedReads = ['/api/stats', '/api/search', '/api/search?q=Kid', '/api/pki/posture', '/api/members', '/api/tags', `/api/documents/${kidDoc.id}/shares`, '/api/thumbnails/x.jpg', '/api/backup/status',
+        '/api/audit', '/api/continuity/switch', '/api/trustees', '/api/insights', '/api/links', '/api/import/batches', '/api/bootstrap', '/api/suite/links',
+        `/api/members/${kidRow.id}/keys/${kidKey.id}/dependencies`, '/API/documents', '/api/documents/', '/api/auth/me/', '/Api/Stats',
+        `/api/documents/0${kidDoc.id}`, `/api/documents/${kidDoc.id}/`, `/API/members/${kidRow.id}/keys`];
+      for (const path of refusedReads) {
+        const answer = await get(path, kid);
+        assert.equal(answer.status, 403, path);
+        assert.equal(await code(answer), 'parent_only', path);
+      }
+      assert.equal((await send('HEAD', '/api/documents', kid)).status, 403, 'a HEAD is not the GET on the list');
+      const writes = [
+        ['POST', `/api/members/${kidRow.id}/keys`], ['POST', `/api/members/${kidRow.id}/keys/webauthn/options`],
+        ['POST', `/api/members/${kidRow.id}/keys/webauthn/complete`], ['POST', `/api/members/${kidRow.id}/keys/webauthn/finalize`],
+        ['POST', `/api/members/${kidRow.id}/keys/${kidKey.id}/recovery`], ['POST', `/api/members/${kidRow.id}/keys/${kidKey.id}/tested`],
+        ['POST', `/api/members/${kidRow.id}/keys/${kidKey.id}/verify-fingerprint`], ['DELETE', `/api/members/${kidRow.id}/keys/${kidKey.id}`],
+        ['POST', `/api/members/${kidRow.id}/keys/webauthn/assertion-options/`], ['POST', `/API/members/${kidRow.id}/keys/webauthn/assertion-options`],
+        ['PUT', `/api/documents/${kidDoc.id}`], ['PUT', `/api/documents/${kidDoc.id}/tags`], ['DELETE', `/api/documents/${kidDoc.id}`],
+        ['POST', `/api/documents/${kidDoc.id}/share`], ['POST', '/api/tags'], ['POST', '/api/members'], ['PUT', `/api/members/${kidRow.id}`],
+      ];
+      for (const [method, path] of writes) {
+        const answer = await send(method, path, { ...as(KID), ...JSON_WRITE }, method === 'DELETE' ? undefined : '{}');
+        assert.equal(answer.status, 403, `${method} ${path}`);
+        assert.equal(await code(answer), 'parent_only', `${method} ${path}`);
+      }
+      const pageWrite = await send('POST', '/documents.html', { ...as(KID), ...JSON_WRITE }, '{}');
+      assert.equal(await code(pageWrite), 'parent_only', 'a write to a page path is refused, not redirected');
+      const upload = await send('POST', '/api/documents', { ...as(KID), ...OWN_PAGE, origin: ORIGIN, 'content-type': 'multipart/form-data; boundary=x' }, '--x--\r\n');
+      assert.equal(await code(upload), 'parent_only', 'a kid uploads nothing');
+      const { rows: [key] } = await pool.query('SELECT revoked_at FROM encryption_keys WHERE id = $1', [kidKey.id]);
+      assert.equal(key.revoked_at, null);
+    });
+
+    it('a kid\'s pages are the dashboard, their documents, search and settings; any other page sends them home', async () => {
+      tailnet();
+      const page = { ...as(KID), ...NAVIGATION };
+      for (const path of ['/', '/index.html', '/documents.html', `/document.html`, '/search.html', '/settings.html']) {
+        assert.equal((await get(path, page)).status, 200, path);
+      }
+      for (const path of ['/upload.html', '/backup.html', '/continuity.html', '/tags.html', '/import.html', '/insights.html', '/link', '/link.html',
+        '/login', '/login.html', '/setup', '/setup.html', '/Documents.html', '/documents.html/', '/bip39-english.txt']) {
+        const answer = await get(path, page);
+        assert.equal(answer.status, 303, path);
+        assert.equal(answer.headers.get('location'), '/source/', path);
+      }
+    });
+
+    it('the directory decides the role, never the row', async () => {
+      // The row says kid, the directory parent: a parent.
+      tailnet([{ ...KID, role: 'parent' }]);
+      const promoted = { ...as(KID), ...OWN_PAGE };
+      assert.equal((await (await get('/api/auth/me', promoted)).json()).role, 'parent');
+      assert.equal((await get('/api/members', promoted)).status, 200);
+      assert.equal((await get('/api/audit', promoted)).status, 200, 'a route that checks the role itself sees the directory\'s');
+      // The row says parent, the directory kid: refused outright (stale_link, above), never the parent's documents.
+      tailnet([{ ...PARENT, role: 'kid' }]);
+      assert.equal(await code(await get('/api/documents', { ...as(PARENT), ...OWN_PAGE })), 'stale_link');
+    });
+
+    it('a linked parent gets everything a parent does, with no passphrase, and the login page sends them to the app', async () => {
+      tailnet();
+      const parent = { ...as(PARENT), ...OWN_PAGE };
+      const me = await (await get('/api/auth/me', parent)).json();
+      assert.deepEqual([me.id, me.role, me.tailnet], [parentRow.id, 'parent', true], 'so pages drop sign-out and passphrases');
+      for (const path of ['/api/members', '/api/tags', '/api/audit', '/api/backup/status', '/api/continuity/switch', `/api/documents/${parentDoc.id}`]) {
+        assert.equal((await get(path, parent)).status, 200, path);
+      }
+      const { documents } = await (await get('/api/documents', parent)).json();
+      assert.ok(documents.some((doc) => doc.id === parentDoc.id));
+      for (const path of ['/documents.html', '/settings.html', '/backup.html', '/']) {
+        assert.equal((await get(path, { ...as(PARENT), ...NAVIGATION })).status, 200, path);
+      }
+      for (const path of ['/login', '/login.html', '/LOGIN.HTML', '/login/']) {
+        const login = await get(path, { ...as(PARENT), ...NAVIGATION });
+        assert.equal(login.status, 303, path);
+        assert.equal(login.headers.get('location'), '/source/', path);
+      }
+      const bootstrap = await (await get('/api/bootstrap', parent)).json();
+      assert.equal(bootstrap.counts.family_members > 0, true, 'a linked parent still sees the counts');
+    });
+
+    it('local sign-in means nothing: login, passphrase changes and sign-out are refused, and nothing stored is deleted', async () => {
+      const { token } = await createSession(parentRow.id);
+      tailnet();
+      const before = (await pool.query('SELECT passphrase_hash FROM family_members WHERE id = $1', [parentRow.id])).rows[0].passphrase_hash;
+      for (const member of [PARENT, KID]) {
+        for (const path of ['/api/auth/login', '/API/auth/login', '/api/AUTH/LOGIN', '/api/auth/login/', '/api/auth/passphrase', '/Api/Auth/Passphrase/',
+          '/api/auth/logout', '/API/auth/logout/']) {
+          const body = JSON.stringify({ name: 'Suite Parent', passphrase: 'parent-passphrase', current_passphrase: 'parent-passphrase', new_passphrase: 'a-new-passphrase' });
+          const answer = await send('POST', path, { ...as(member), ...JSON_WRITE, cookie: `hs_session=${token}` }, body);
+          assert.equal(answer.status, 409, `${member.name} ${path}`);
+          assert.equal(await code(answer), 'tailnet_mode', path);
+          assert.equal(answer.headers.get('set-cookie'), null, 'no session cookie set or cleared');
+        }
+      }
+      const after = (await pool.query('SELECT passphrase_hash FROM family_members WHERE id = $1', [parentRow.id])).rows[0].passphrase_hash;
+      assert.equal(after, before, 'the stored passphrase is kept');
+      assert.equal((await pool.query('SELECT 1 FROM sessions WHERE token = $1', [token])).rows.length, 1, 'and so is the session');
+    });
+
+    it('members are added and edited without passphrases', async () => {
+      tailnet();
+      const write = (method, path, body) => send(method, path, { ...as(PARENT), ...JSON_WRITE }, JSON.stringify(body));
+      const refused = await write('POST', '/api/members', { name: 'With Passphrase', role: 'kid', passphrase: 'a-passphrase' });
+      assert.equal(refused.status, 409);
+      assert.equal(await code(refused), 'tailnet_mode');
+      assert.equal((await pool.query("SELECT 1 FROM family_members WHERE name = 'With Passphrase'")).rows.length, 0);
+      const added = await write('POST', '/api/members', { name: 'Without Passphrase', role: 'kid' });
+      assert.equal(added.status, 201);
+      const { id } = await added.json();
+      assert.equal((await write('PUT', `/api/members/${id}`, { passphrase: 'a-passphrase' })).status, 409);
+      assert.equal((await write('PUT', `/api/members/${id}`, { name: 'Renamed Kid' })).status, 200);
+      const { rows: [row] } = await pool.query('SELECT name, passphrase_hash FROM family_members WHERE id = $1', [id]);
+      assert.deepEqual(row, { name: 'Renamed Kid', passphrase_hash: null });
+      await pool.query('DELETE FROM family_members WHERE id = $1', [id]);
+      // Local mode keeps its passphrases.
+      app.setSuiteIdentityForTests({});
+      const { token } = await createSession(parentRow.id);
+      const local = await send('POST', '/api/members', { cookie: `hs_session=${token}`, 'content-type': 'application/json' }, JSON.stringify({ name: 'Local Kid', passphrase: 'a-passphrase' }));
+      assert.equal(local.status, 201);
+      const { rows: [saved] } = await pool.query("SELECT passphrase_hash FROM family_members WHERE name = 'Local Kid'");
+      assert.ok(saved.passphrase_hash);
+      await pool.query("DELETE FROM family_members WHERE name = 'Local Kid'");
+    });
+  });
+
   describe('outsiders\' token pages', () => {
     let shareToken;
     const OUTSIDER_PAGES = ['/share.html', '/trustee-invite.html', '/trustee-action', '/trustee-action.html', '/trustee-contact', '/trustee-contact.html',
@@ -516,5 +700,23 @@ describe('Suite identity (tailnet mode)', () => {
         assert.equal((await send('POST', '/api/continuity/check-in', { ...as(member), ...JSON_WRITE }, '{}')).status, 404);
       }
     });
+  });
+
+  // Last: it starts the household over.
+  it('a parent nobody has linked sets up a new household, without passphrases, then links themselves', async () => {
+    await resetDatabase();
+    tailnet();
+    const parent = { ...as(NEW_PARENT), ...OWN_PAGE };
+    const state = await (await get('/api/bootstrap', parent)).json();
+    assert.deepEqual([state.bootstrap.needs_household, state.tailnet], [true, true]);
+    assert.equal((await get('/setup', { ...as(NEW_PARENT), ...NAVIGATION })).status, 200);
+    const create = (members) => send('POST', '/api/bootstrap/household', { ...as(NEW_PARENT), ...JSON_WRITE }, JSON.stringify({ members }));
+    const refused = await create([{ name: 'First Parent', role: 'parent', passphrase: 'a-passphrase' }]);
+    assert.equal(refused.status, 409);
+    assert.equal(await code(refused), 'tailnet_mode');
+    assert.equal((await pool.query('SELECT 1 FROM family_members')).rows.length, 0);
+    assert.equal((await create([{ name: 'First Parent', role: 'parent' }])).status, 201);
+    const page = await get('/', { ...as(NEW_PARENT), ...NAVIGATION });
+    assert.equal(page.headers.get('location'), '/source/link', 'and is sent to link themselves');
   });
 });

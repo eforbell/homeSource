@@ -360,12 +360,13 @@ app.get('/api/ready', async (_req, res) => {
 app.get('/api/bootstrap', async (req, res) => {
   try {
     const state = await bootstrapState();
-    // A parent nobody has linked yet may learn whether setup is needed, not how many members the household has.
+    // A parent nobody has linked yet may learn whether setup is needed, not how many members the household has. In
+    // tailnet mode setup asks for no passphrases.
     if (suite.tailnet && !req.member) {
       const { status, app: appName, version, bootstrap } = state;
-      return res.json({ status, app: appName, version, bootstrap });
+      return res.json({ status, app: appName, version, bootstrap, tailnet: true });
     }
-    res.json(state);
+    res.json(suite.tailnet ? { ...state, tailnet: true } : state);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -380,6 +381,7 @@ app.post('/api/bootstrap/household', async (req, res) => {
     if (!Array.isArray(members) || !members.length) {
       return res.status(400).json({ error: 'At least one member required' });
     }
+    if (members.some((m) => m?.passphrase) && refuseTailnetPassphrase(res)) return;
 
     const { withTransaction } = require('./lib/db');
     const created = await withTransaction(async (client) => {
@@ -436,7 +438,8 @@ app.post('/api/auth/logout', async (req, res) => {
 
 app.get('/api/auth/me', (req, res) => {
   if (!req.member) return res.status(401).json({ error: 'Not authenticated' });
-  res.json(req.member);
+  // In tailnet mode the pages hide signing out and passphrases: the household account says who this is.
+  res.json(suite.tailnet ? { ...req.member, tailnet: true } : req.member);
 });
 
 app.post('/api/auth/passphrase', requireAuth, async (req, res) => {
@@ -480,6 +483,14 @@ app.post('/api/auth/passphrase', requireAuth, async (req, res) => {
 // Tailnet mode: a parent links each member to their household account (lib/suite-links.js).
 app.use(createSuiteLinks(() => suite));
 
+// In tailnet mode nobody signs in with a passphrase, so a new one would only wait for a return to local mode, set by
+// someone other than the member it signs in. Members are created and edited without one; stored ones are kept.
+function refuseTailnetPassphrase(res) {
+  if (!suite.tailnet) return false;
+  res.status(409).json({ error: 'Home Source signs in through your household account here, so members have no passphrase to set.', code: 'tailnet_mode' });
+  return true;
+}
+
 app.get('/api/members', async (_req, res) => {
   try { res.json(await listMembers()); }
   catch (err) { res.status(500).json({ error: err.message }); }
@@ -488,6 +499,7 @@ app.get('/api/members', async (_req, res) => {
 app.post('/api/members', requireAuth, requireParent, async (req, res) => {
   try {
     const { name, role, avatar_emoji, color, passphrase } = req.body;
+    if (passphrase && refuseTailnetPassphrase(res)) return;
     if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
     const passHash = passphrase ? hashPassphrase(passphrase) : null;
     const { rows } = await pool.query(
@@ -501,6 +513,7 @@ app.post('/api/members', requireAuth, requireParent, async (req, res) => {
 app.put('/api/members/:id', requireAuth, requireParent, async (req, res) => {
   try {
     const { name, role, avatar_emoji, color, passphrase } = req.body;
+    if (passphrase && refuseTailnetPassphrase(res)) return;
     const fields = [];
     const params = [];
     let idx = 1;

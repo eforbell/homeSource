@@ -126,6 +126,7 @@
     let currentOffset = 0;
 
     async function loadDocuments() {
+      const noThumbnails = await kidInTailnet;
       const params = new URLSearchParams();
       const q = document.getElementById('filter-search').value.trim();
       const type = document.getElementById('filter-type').value;
@@ -154,7 +155,7 @@
 
         empty.style.display = 'none';
         grid.innerHTML = documents.map(d => {
-          const thumb = d.thumbnail ? `<img src="api/thumbnails/${d.thumbnail.stored_filename.split('/').pop()}" alt="">` : `<div class="doc-placeholder">📄</div>`;
+          const thumb = d.thumbnail && !noThumbnails ? `<img src="api/thumbnails/${d.thumbnail.stored_filename.split('/').pop()}" alt="">` : `<div class="doc-placeholder">📄</div>`;
           const owners = (d.owners || []).map(o => `<span class="avatar" title="${esc(o.name)}">${o.avatar_emoji}</span>`).join('');
           const tags = (d.tags || []).map(t =>
             `<span class="tag browse-link" data-browse="tag" data-id="${t.id}" style="background:${t.color}22; color:${t.color}; cursor:pointer;">${esc(t.name)}</span>`
@@ -214,11 +215,16 @@
       }
     }
 
+    // In tailnet mode a kid's view of Home Source is their documents only: the dashboard's counts and search aren't theirs.
+    const kidInTailnet = API.get('api/auth/me').then((me) => me?.tailnet === true && me.role === 'kid', () => false);
+
     async function loadFilters() {
       try {
+        // A kid in tailnet mode reads neither the household's member list nor its tags.
+        const kid = await kidInTailnet;
         const [members, tags, { documents }] = await Promise.all([
-          API.get('api/members'),
-          API.get('api/tags'),
+          kid ? [] : API.get('api/members'),
+          kid ? [] : API.get('api/tags'),
           API.get('api/documents?limit=200')
         ]);
         const ownerSelect = document.getElementById('filter-owner');
