@@ -217,6 +217,9 @@ describe('Re-protecting a member key with its recovery words', () => {
     assert.equal(res.status, 200);
     assert.equal((await keyRow(key.id)).credential_id, fresh.credentialId);
     assert.match(console.error.mock.calls[0].arguments[0], /re-protected, but recording it failed/);
+    // The notice is still sent: the dispatcher records that it queued one.
+    const queued = await pool.query("SELECT details FROM audit_log WHERE action = 'notification.key_event_queued'");
+    assert.deepEqual(queued.rows.map((row) => row.details.event), ['key.reprotected']);
   });
 
   it('accepts a passkey as the new protection', async () => {
