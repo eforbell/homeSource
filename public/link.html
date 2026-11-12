@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Home Source — Household Members</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="sovereign-fonts.css">
+  <link rel="stylesheet" href="sovereign-chassis.css">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="source-skin.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <style>
+    .link-box { max-width: 560px; margin: 3rem auto; padding: 1.5rem 1rem; box-sizing: border-box; }
+    #link-status { min-height: 1.2em; margin-bottom: 0.75rem; }
+    #link-status.link-error { color: var(--danger); }
+    .link-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem 0.75rem; padding: 0.75rem 0; border-top: 1px solid var(--border); }
+    .link-who { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+    .link-name { font-weight: 600; overflow-wrap: anywhere; }
+    .link-row select { flex: 1 1 14rem; min-width: 0; max-width: 100%; width: auto; font-size: 16px; }
+    .link-note { flex-basis: 100%; margin: 0; }
+    @media (max-width: 480px) { .link-row { flex-direction: column; align-items: stretch; } .link-row select { flex: none; width: 100%; } }
+    .link-actions { display: flex; justify-content: flex-end; padding-top: 1rem; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <main class="link-box">
+    <h1>Household Members</h1>
+    <p class="text-dim" style="margin:0.25rem 0 1.25rem;">Home Source knows people by their household account in Home Base. Match each Home Source member to the person they are. Anyone you leave unlinked is asked to find a parent.</p>
+    <div class="card">
+      <div id="link-status" class="text-sm text-dim">Loading household members…</div>
+      <div id="link-rows"></div>
+      <div class="link-actions">
+        <a href="./" class="btn btn-primary hidden" id="link-done">Open Home Source</a>
+      </div>
+    </div>
+  </main>
+  <script>
+    'use strict';
+
+    let linkState = null;
+
+    function setLinkStatus(message, isError = false) {
+      const el = document.getElementById('link-status');
+      el.textContent = message;
+      el.classList.toggle('link-error', isError);
+    }
+
+    async function loadLinks() {
+      try {
+        const res = await fetch('api/suite/links', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not load household members');
+        linkState = data;
+        renderLinks();
+      } catch (err) {
+        setLinkStatus(err.message, true);
+      }
+    }
+
+    function note(text) {
+      const p = document.createElement('p');
+      p.className = 'link-note text-xs text-dim';
+      p.textContent = text;
+      return p;
+    }
+
+    function renderLinks() {
+      const { you, directory, members } = linkState;
+      const rows = document.getElementById('link-rows');
+      rows.replaceChildren();
+      const linked = new Map(members.filter((m) => m.suite_member_id).map((m) => [m.suite_member_id, m.id]));
+
+      for (const member of members) {
+        const row = document.createElement('div');
+        row.className = 'link-row';
+
+        const who = document.createElement('span');
+        who.className = 'link-who';
+        const avatar = document.createElement('span');
+        avatar.textContent = member.avatar_emoji || '👤';
+        const name = document.createElement('span');
+        name.className = 'link-name';
+        name.textContent = member.name;
+        const role = document.createElement('span');
+        role.className = 'text-sm text-dim';
+        role.textContent = member.role === 'parent' ? 'parent' : 'kid';
+        who.append(avatar, name, role);
+
+        const select = document.createElement('select');
+        select.className = 'form-select';
+        select.setAttribute('aria-label', `Household account for ${member.name}`);
+        select.append(new Option('Not linked', ''));
+        for (const person of directory) {
+          const takenBy = linked.get(person.memberId);
+          if (takenBy && takenBy !== member.id) continue;
+          // A kid's account can't take a parent's row, but one that became a kid's since it was linked still shows here.
+          if (member.role === 'parent' && person.role !== 'parent' && person.memberId !== member.suite_member_id) continue;
+          const label = `${person.name} (${person.role}${person.memberId === you ? ', you' : ''})`;
+          select.append(new Option(label, person.memberId, false, person.memberId === member.suite_member_id));
+        }
+        select.addEventListener('change', () => saveLink(member, select));
+        row.append(who, select);
+
+        const account = directory.find((person) => person.memberId === member.suite_member_id);
+        if (member.suite_member_id && !account) {
+          row.append(note('Linked to a household account that no longer has access to Home Source.'));
+        } else if (account && member.role === 'parent' && account.role !== 'parent') {
+          row.append(note(`Home Base now lists ${account.name} as a ${account.role}, so they can't open Home Source until they're linked to a kid here.`));
+        } else if (account && account.role !== member.role) {
+          row.append(note(`Home Base lists ${account.name} as a ${account.role}, so that's what they are here.`));
+        }
+        rows.append(row);
+      }
+
+      const youLinked = linked.has(you);
+      const done = document.getElementById('link-done');
+      done.classList.toggle('hidden', !youLinked && members.length > 0);
+      if (!members.length) {
+        done.textContent = 'Set up the household';
+        done.href = 'setup';
+        setLinkStatus('Home Source has no members yet. Set up the household first.');
+      } else if (!youLinked) {
+        setLinkStatus('Start with yourself: pick which Home Source member you are.');
+      } else {
+        setLinkStatus('Changes save as you pick them.');
+      }
+    }
+
+    async function saveLink(member, select) {
+      select.disabled = true;
+      try {
+        const res = await fetch(`api/suite/links/${member.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ suite_member_id: select.value || null }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not save');
+        await loadLinks();
+      } catch (err) {
+        setLinkStatus(err.message, true);
+        select.disabled = false;
+      }
+    }
+
+    loadLinks();
+  </script>
+</body>
+</html>
