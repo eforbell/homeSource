@@ -37,7 +37,8 @@ window.API = {
   },
 
   async del(path) {
-    const res = await fetch(path, { method: 'DELETE' });
+    // Every write says it is JSON, even with no body: in tailnet mode a write without it is refused.
+    const res = await fetch(path, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || res.statusText);
