@@ -656,6 +656,12 @@
     const wordsEl = document.getElementById('reprotect-words');
     const method = document.querySelector('input[name="reprotect-method"]:checked')?.value === 'passkey' ? 'passkey' : 'security_key';
     const base = `api/members/${job.memberId}/keys`;
+    // Closing the dialog cancels: it aborts a pending browser prompt, and nothing is saved once this run is
+    // no longer the dialog's (checked again right before saving).
+    job.abort = new AbortController();
+    const stillOpen = () => {
+      if (state.reprotect !== job) throw new Error('Cancelled. Nothing was changed.');
+    };
     runBtn.disabled = true;
     let privateKey = null;
     try {
@@ -680,7 +686,8 @@
         ? 'Touch or insert your security key when your browser asks.'
         : 'Confirm with this device when your browser asks.';
       const options = await API.post(`${base}/webauthn/options`, { requested_method: method });
-      const credential = await navigator.credentials.create({ publicKey: toPublicKeyCreationOptions(options.options) });
+      stillOpen();
+      const credential = await navigator.credentials.create({ publicKey: toPublicKeyCreationOptions(options.options), signal: job.abort.signal });
       if (!credential) throw new Error('The browser prompt was cancelled');
       const registered = await API.post(`${base}/webauthn/complete`, {
         registration_response: credentialToJSON(credential),
@@ -690,7 +697,8 @@
 
       statusEl.textContent = 'One more touch, to wrap the key with it.';
       const assertionOptions = await API.post(`${base}/webauthn/assertion-options`, { credential_id: registered.verification.credential_id });
-      const assertion = await navigator.credentials.get({ publicKey: PKICrypto.toPublicKeyRequestOptions(assertionOptions.options) });
+      stillOpen();
+      const assertion = await navigator.credentials.get({ publicKey: PKICrypto.toPublicKeyRequestOptions(assertionOptions.options), signal: job.abort.signal });
       if (!assertion) throw new Error('The browser prompt was cancelled');
       const prfResult = assertion.getClientExtensionResults?.()?.prf?.results?.first;
       if (!prfResult) throw new Error('This security key or passkey can\'t protect encryption keys (no PRF). Try another one or another browser.');
@@ -703,6 +711,7 @@
         throw new Error('The new wrap did not open to this key. Nothing was changed.');
       }
 
+      stillOpen();
       statusEl.textContent = 'Saving…';
       const finished = await API.post(`${base}/${job.keyId}/reprotect/finish`, {
         possession_proof: proof,
@@ -721,6 +730,7 @@
       await loadMembersAndKeys();
       if (state.me.role === 'parent') await loadAudit();
     } catch (err) {
+      if (state.reprotect !== job) return; // closed: the dialog is gone, and nothing was saved
       const message = err?.name === 'NotAllowedError'
         ? 'The browser prompt was cancelled or timed out. Nothing was changed.'
         : (err.message || 'Re-registering failed. Nothing was changed.');
@@ -1436,6 +1446,7 @@
       state.passphraseMember = null;
     }
     if (id === 'reprotect-modal') {
+      state.reprotect?.abort?.abort();
       state.reprotect = null;
       const wordsInput = document.getElementById('reprotect-words');
       if (wordsInput) wordsInput.value = '';

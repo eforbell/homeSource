@@ -45,7 +45,9 @@ Each person, signed in as themselves, for each of their keys:
 If the words are refused, the message says why: a misspelled word, words out of order, or words belonging to
 another key. Nothing changes until the last step succeeds.
 
-Each re-registration is recorded in the activity log (`key.reprotected`) and sends the same notice as a new key.
+Each re-registration is recorded in the activity log (`key.reprotected`) and sends the same notice as a new key,
+when mail is set up. Both are best effort: if either fails, the re-registration still stands and the server logs
+the failure.
 
 ## 3. Trustees
 
@@ -65,8 +67,17 @@ Trustees have no Re-register yet, and a registered trustee can't be invited agai
 
 ## If a key has no recovery words
 
-It can only be used at the address it was registered on. Either open Home Source at that address once more and
-use the key there to add a holder to each document it protects (**Add Backup Key** on the document), or recover
-the documents offline from a backup ([recovery-runbook.md](recovery-runbook.md)) and upload them again under a key
-that has recovery words. Then generate recovery words for every key you keep: a key gets them when it's
-registered.
+Recovery words are optional when a key is registered, and Home Source can only make them right after registering a
+key, while it is still unlocked. A key registered without them can't be re-registered, and a backup alone can't
+open its documents: the offline tool ([recovery-runbook.md](recovery-runbook.md)) needs the key's recovery words or
+an exported private key.
+
+So the only way to reach its documents is the address it was registered on. Before that address goes away (or, if
+it already has, by serving Home Source there once more):
+
+- [ ] **Settings → Keys → Register Key** for a new key, and **Generate Recovery Code** before you press **Done**.
+      Write the words down.
+- [ ] Still at the old address, open each document the old key protects and **Add Backup Key** with the new key.
+- [ ] Revoke the old key once no document depends on it alone.
+
+Do this for every key without recovery words while it still works, not after a move.
