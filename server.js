@@ -2005,7 +2005,32 @@ app.post('/api/documents/:id/encrypt', requireAuth, requireParent, async (req, r
   }
 });
 
-app.put('/api/documents/:id', requireAuth, async (req, res) => {
+// An edit can do what the document DELETE routes do, which need a recent passkey check in tailnet mode: change the
+// document's status (archive, hide or restore it), or remove or change anything its metadata already holds (the
+// MagicIndex analysis among it). Adding new metadata keys, and every other field, is an ordinary edit. Values compare
+// by content, key order aside.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  return JSON.stringify(value) ?? 'undefined';
+}
+function editRemovesDocumentState(doc, body) {
+  if (body?.status !== undefined && body.status !== doc.status) return true;
+  if (body?.metadata === undefined) return false;
+  // A missing key reads as undefined, which never matches a stored value.
+  const next = body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
+  return Object.entries(doc.metadata || {}).some(([key, value]) => canonicalJson(next[key]) !== canonicalJson(value));
+}
+async function requireRecentForDocumentRemoval(req, res, next) {
+  if (!suite.tailnet || req.member?.role !== 'parent') return next();
+  try {
+    const doc = await getDocument(req.params.id);
+    if (doc && editRemovesDocumentState(doc, req.body) && !(await suite.requireRecent(req, res, 'export-data'))) return undefined;
+    return next();
+  } catch (err) { return next(err); }
+}
+
+app.put('/api/documents/:id', requireAuth, requireRecentForDocumentRemoval, async (req, res) => {
   try {
     if (req.member.role === 'kid') return res.status(403).json({ error: 'Parent access required' });
     const authorization = await requireDocumentAuthorization(req, res, 'administer');

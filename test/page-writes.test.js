@@ -12,10 +12,11 @@ const PUBLIC = path.join(__dirname, '..', 'public');
 const sources = fs.readdirSync(PUBLIC).filter((name) => /\.(?:js|html)$/.test(name));
 const read = (name) => fs.readFileSync(path.join(PUBLIC, name), 'utf8');
 
-// Each fetch(...) call that names a writing method, with its whole argument list (they span lines).
+// Each fetch(...) call that names a writing method, with its whole argument list (they span lines). api.js sends
+// through send(...), which runs a passkey check when tailnet mode asks for one.
 function writes(source) {
   const found = [];
-  for (const match of source.matchAll(/\bfetch\(/g)) {
+  for (const match of source.matchAll(/\b(?:fetch|send)\(/g)) {
     let depth = 0;
     let end = match.index + match[0].length - 1;
     for (; end < source.length; end += 1) {
