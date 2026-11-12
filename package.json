@@ -29,7 +29,8 @@
     "nodemailer": "^9.0.3",
     "pdf-lib": "^1.17.1",
     "pg": "^8.13.0",
-    "sharp": "^0.33.0"
+    "sharp": "^0.33.0",
+    "sovereign-auth": "github:eforbell/sovereignAuth#0f8bbe9cdab2adab46de0c6eaab33d06dad35c0f"
   },
   "engines": {
     "node": ">=22"

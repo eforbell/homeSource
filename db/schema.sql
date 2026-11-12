@@ -1411,6 +1411,7 @@ CREATE TABLE public.family_members (
     color text,
     passphrase_hash text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    suite_member_id text,
     CONSTRAINT family_members_role_check CHECK ((role = ANY (ARRAY['parent'::text, 'kid'::text])))
 );
 
@@ -2921,6 +2922,14 @@ ALTER TABLE ONLY public.family_members
 
 ALTER TABLE ONLY public.family_members
     ADD CONSTRAINT family_members_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: family_members family_members_suite_member_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.family_members
+    ADD CONSTRAINT family_members_suite_member_id_key UNIQUE (suite_member_id);
 
 
 --

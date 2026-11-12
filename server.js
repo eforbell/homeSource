@@ -42,6 +42,8 @@ const continuityRecipient = require('./lib/continuity-recipient');
 const brrr = require('./lib/brrr');
 const { buildAppUrl, tryBuildAppUrl } = require('./lib/app-url');
 const { listen, describe: describeListen } = require('./lib/listen');
+const { createSuiteIdentity } = require('./lib/suite-identity');
+const { createSuiteLinks } = require('./lib/suite-links');
 
 const app = express();
 const PORT = Number(process.env.PORT || '3008');
@@ -154,14 +156,27 @@ app.use((req, res, next) => {
   next();
 });
 
+// Which sign-in Home Source trusts (lib/suite-identity.js); a bad configuration refuses to start. In tailnet mode
+// these run before the body parser, so a write is checked before anything reads it, and every request but the probes,
+// the assets and the outsiders' token pages is a household member's.
+async function findLinkedMember(suiteMemberId) {
+  const { rows } = await pool.query('SELECT id, name, role, avatar_emoji FROM family_members WHERE suite_member_id = $1', [suiteMemberId]);
+  return rows[0] || null;
+}
+let suite = createSuiteIdentity(process.env, { findLinked: findLinkedMember });
+app.use((req, res, next) => suite.guard(req, res, next));
+app.use((req, res, next) => suite.requireMember(req, res, next));
+
 app.use((req, res, next) => {
   if (req.headers['content-type']?.startsWith('multipart/')) return next();
   express.json({ limit: '1mb' })(req, res, next);
 });
 
 // ── Session middleware ──────────────────────────────────────────────────────
+// In tailnet mode sessions mean nothing: the household member is who is asking. They stay stored for local mode.
 
 app.use(async (req, res, next) => {
+  if (suite.tailnet) return next();
   try {
     const token = parseCookie(req.headers.cookie, 'hs_session');
     if (token) {
@@ -342,9 +357,15 @@ app.get('/api/ready', async (_req, res) => {
   }
 });
 
-app.get('/api/bootstrap', async (_req, res) => {
+app.get('/api/bootstrap', async (req, res) => {
   try {
-    res.json(await bootstrapState());
+    const state = await bootstrapState();
+    // A parent nobody has linked yet may learn whether setup is needed, not how many members the household has.
+    if (suite.tailnet && !req.member) {
+      const { status, app: appName, version, bootstrap } = state;
+      return res.json({ status, app: appName, version, bootstrap });
+    }
+    res.json(state);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -455,6 +476,9 @@ app.post('/api/auth/passphrase', requireAuth, async (req, res) => {
 });
 
 // ── Members ─────────────────────────────────────────────────────────────────
+
+// Tailnet mode: a parent links each member to their household account (lib/suite-links.js).
+app.use(createSuiteLinks(() => suite));
 
 app.get('/api/members', async (_req, res) => {
   try { res.json(await listMembers()); }
@@ -3295,4 +3319,11 @@ if (require.main === module) {
   });
 }
 
+// Tests switch the sign-in the way a restart with Home Base's env would.
+function setSuiteIdentityForTests(env, options = {}) {
+  suite = createSuiteIdentity(env, { findLinked: findLinkedMember, ...options });
+  return suite;
+}
+
 module.exports = app;
+module.exports.setSuiteIdentityForTests = setSuiteIdentityForTests;
