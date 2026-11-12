@@ -37,6 +37,7 @@
       </div>
     </div>
   </main>
+  <script src="passkey.js"></script>
   <script>
     'use strict';
 
@@ -50,7 +51,7 @@
 
     async function loadLinks() {
       try {
-        const res = await fetch('api/suite/links', { cache: 'no-store' });
+        const res = await window.SourcePasskey.fetch('api/suite/links', { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Could not load household members');
         linkState = data;
@@ -132,7 +133,7 @@
     async function saveLink(member, select) {
       select.disabled = true;
       try {
-        const res = await fetch(`api/suite/links/${member.id}`, {
+        const res = await window.SourcePasskey.fetch(`api/suite/links/${member.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ suite_member_id: select.value || null }),

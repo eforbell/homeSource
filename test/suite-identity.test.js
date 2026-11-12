@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const express = require('express');
+const { signToken } = require('sovereign-auth');
 const { startServer, stopServer, resetDatabase, createMember, createTestDocument, getPool } = require('./helpers');
 const app = require('../server');
 const { createSuiteIdentity, publicPath } = require('../lib/suite-identity');
@@ -39,8 +40,15 @@ const NEW_KID = { userId: 'u-new-kid', memberId: 'm_new_kid', login: 'new-kid@ex
 const NO_ACCESS = { userId: 'u-other', memberId: 'm_other', login: 'other@example.com', name: 'No Access', apps: ['family-plan'] };
 const DIRECTORY = [PARENT, KID, NEW_PARENT, NEW_KID, NO_ACCESS];
 
-// Who nginx says is asking.
-const as = (member) => ({ 'x-sovereign-user-id': member.userId, 'x-sovereign-login': member.login });
+// The cookie Home Base's passkey check sets on this hostname (wire contract, section 7), from a check `age` seconds ago.
+function passkeyCookie(member, { age = 0, name = '__Host-sv_assurance', ...claims } = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { typ: 'assurance', kid: 'test-key', household: HOUSEHOLD, aud: HOST, sub: member.userId, sid: 's1', cred: 'c1', kind: 'synced', epoch: 1, global_epoch: 1, auth_time: now - age, iat: now - age, exp: now - age + 31 * 86400, ...claims };
+  return `${name}=${signToken(payload, SIGNING.privateKey)}`;
+}
+// Who nginx says is asking. A parent also carries a passkey check from just now, as they would in a browser: what
+// happens without one is tested on its own below. Kids have no passkeys.
+const as = (member, cookie = member.role === 'kid' ? null : passkeyCookie(member)) => ({ 'x-sovereign-user-id': member.userId, 'x-sovereign-login': member.login, ...(cookie ? { cookie } : {}) });
 // What a browser sends for a page's own fetch, a link opened from an email or typed in, and a sibling hostname's fetch.
 const OWN_PAGE = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' };
 const NAVIGATION = { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
@@ -514,7 +522,8 @@ describe('Suite identity (tailnet mode)', () => {
     it('the directory decides the role, never the row', async () => {
       // The row says kid, the directory parent: a parent.
       tailnet([{ ...KID, role: 'parent' }]);
-      const promoted = { ...as(KID), ...OWN_PAGE };
+      assert.equal((await get('/api/auth/me', { ...as(KID), ...OWN_PAGE })).status, 401, 'a parent now, who opens Home Source with a passkey');
+      const promoted = { ...as(KID, passkeyCookie(KID)), ...OWN_PAGE };
       assert.equal((await (await get('/api/auth/me', promoted)).json()).role, 'parent');
       assert.equal((await get('/api/members', promoted)).status, 200);
       assert.equal((await get('/api/audit', promoted)).status, 200, 'a route that checks the role itself sees the directory\'s');
@@ -586,6 +595,217 @@ describe('Suite identity (tailnet mode)', () => {
       assert.equal(local.status, 201);
       const { rows: [saved] } = await pool.query("SELECT passphrase_hash FROM family_members WHERE name = 'Local Kid'");
       assert.ok(saved.passphrase_hash);
+      await pool.query("DELETE FROM family_members WHERE name = 'Local Kid'");
+    });
+  });
+
+  describe('passkeys', () => {
+    const stepUp = async (answer, policy, label) => {
+      assert.equal(answer.status, 401, label);
+      assert.equal(answer.headers.get('cache-control'), 'no-store', label);
+      assert.deepEqual(await answer.json(), { error: 'step_up_required', policy, level: policy === 'open-documents' ? 'session' : 'recent', kind: 'any' }, label);
+    };
+    const NAV = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+
+    it('a parent opens Home Source with a passkey check: a page asks for one, the API answers with the step-up', async () => {
+      tailnet();
+      for (const cookie of [null, '__Host-sv_assurance=x', passkeyCookie(PARENT, { name: 'sv_assurance' }), passkeyCookie(PARENT, { name: '__HOST-sv_assurance' })]) {
+        const page = await get('/documents.html', { ...as(PARENT, cookie), ...NAV });
+        assert.equal(page.status, 401, String(cookie));
+        assert.equal(page.headers.get('cache-control'), 'no-store');
+        const html = await page.text();
+        assert.match(html, /<script src="\/source\/passkey\.js"><\/script>/, 'the check runs from the app\'s own address');
+        assert.match(html, /data-step-up="\{&quot;error&quot;:&quot;step_up_required&quot;,&quot;policy&quot;:&quot;open-documents&quot;/);
+        assert.doesNotMatch(html, /Suite Parent|Shared Document|Parent Only/, 'and shows no data');
+        await stepUp(await get('/api/documents', { ...as(PARENT, cookie), ...OWN_PAGE }), 'open-documents', String(cookie));
+      }
+      // Every page, the link page included, and a HEAD as much as a GET.
+      for (const path of ['/', '/settings.html', '/document.html', '/link', '/Documents.html']) {
+        assert.equal((await get(path, { ...as(PARENT, null), ...NAV })).status, 401, path);
+        const head = await send('HEAD', path, { ...as(PARENT, null), ...NAV });
+        assert.equal(head.status, 401, `HEAD ${path}`);
+        assert.match(head.headers.get('content-type'), /html/, `HEAD ${path} answers as the page would`);
+      }
+      // A parent nobody has linked yet needs one too, before the link page shows them the household.
+      assert.equal((await get('/link', { ...as(NEW_PARENT, null), ...NAV })).status, 401);
+      await stepUp(await get('/api/suite/links', { ...as(NEW_PARENT, null), ...OWN_PAGE }), 'open-documents', 'unlinked parent');
+      await stepUp(await get('/api/bootstrap', { ...as(NEW_PARENT, null), ...OWN_PAGE }), 'open-documents', 'unlinked parent setup');
+      await stepUp(await send('POST', '/api/tags', { ...as(PARENT, null), ...JSON_WRITE }, '{"name":"x"}'), 'open-documents', 'a write');
+      await stepUp(await send('POST', '/api/documents', { ...as(PARENT, null), ...OWN_PAGE, origin: ORIGIN, 'content-type': 'multipart/form-data; boundary=x' }, '--x--\r\n'), 'open-documents', 'an upload');
+      assert.equal((await get('/documents.html', { ...as(PARENT), ...NAV })).status, 200, 'and with one, it opens');
+    });
+
+    it('a check counts for 30 days, for this member, on this hostname, until Home Base changes their access', async () => {
+      tailnet();
+      const day = 86400;
+      assert.equal((await get('/api/documents', { ...as(PARENT, passkeyCookie(PARENT, { age: 29 * day })), ...OWN_PAGE })).status, 200);
+      const refusals = {
+        'older than 30 days': passkeyCookie(PARENT, { age: 30 * day + 60 }),
+        'another member\'s': passkeyCookie(NEW_PARENT),
+        'another hostname\'s': passkeyCookie(PARENT, { aud: 'smith-pulse.example-tailnet.ts.net' }),
+        'another household\'s': passkeyCookie(PARENT, { household: 'elsewhere' }),
+        'from before Home Base changed their access': passkeyCookie(PARENT, { epoch: 0 }),
+        'from before Home Base revoked everything': passkeyCookie(PARENT, { global_epoch: 0 }),
+        'two of them': `${passkeyCookie(PARENT)}; ${passkeyCookie(PARENT)}`,
+        'not signed by Home Base': passkeyCookie(PARENT).replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')),
+      };
+      for (const [label, cookie] of Object.entries(refusals)) await stepUp(await get('/api/documents', { ...as(PARENT, cookie), ...OWN_PAGE }), 'open-documents', label);
+    });
+
+    it('kids never meet a passkey check (D7), and outsiders\' token pages ask nobody', async () => {
+      tailnet();
+      assert.equal((await get('/api/auth/me', { ...as(KID, null), ...OWN_PAGE })).status, 200);
+      assert.equal((await get('/api/documents', { ...as(KID, null), ...OWN_PAGE })).status, 200);
+      assert.equal((await get('/documents.html', { ...as(KID, null), ...NAV })).status, 200);
+      assert.equal((await get('/check-in', { ...as(PARENT, null), ...NAVIGATION })).status, 200);
+      assert.equal((await get('/api/share/not-a-token', { ...as(PARENT, null), ...OWN_PAGE })).status, 404);
+      assert.equal((await send('POST', '/api/continuity/check-in', { ...as(PARENT, null), ...JSON_WRITE }, '{}')).status, 404);
+    });
+
+    it('changes to who can reach the documents, deleting them, and changes to members need a check in the last five minutes', async () => {
+      tailnet();
+      const older = passkeyCookie(PARENT, { age: 6 * 60 });
+      // As the pages send them: a DELETE has no body.
+      const write = (method, path, headers = JSON_WRITE) => send(method, path, { ...as(PARENT, older), ...headers }, method === 'DELETE' ? undefined : '{}');
+      assert.equal((await get('/api/documents', { ...as(PARENT, older), ...OWN_PAGE })).status, 200, 'it still opens Home Source');
+      const m = parentRow.id;
+      const recent = [
+        ['POST', `/api/members/${m}/keys`, 'export-data'],
+        ['POST', `/api/members/${m}/keys/webauthn/options`, 'export-data'],
+        ['POST', `/api/members/${m}/keys/webauthn/complete`, 'export-data'],
+        ['POST', `/api/members/${m}/keys/webauthn/finalize`, 'export-data'],
+        ['POST', `/api/members/${m}/keys/1/recovery`, 'export-data'],
+        ['DELETE', `/api/members/${m}/keys/1`, 'export-data'],
+        ['DELETE', `/API/Members/${m}/Keys/1/`, 'export-data'],
+        ['POST', `/api/members/${m}/keys/webauthn/assertion-options/x`, 'export-data'],
+        ['POST', '/api/members', 'change-role'],
+        ['PUT', `/api/members/${m}`, 'change-role'],
+        ['PUT', `/Api/Members/${m}/`, 'change-role'],
+        ['PUT', `/api/suite/links/${kidRow.id}`, 'change-role'],
+        ['PUT', `/API/Suite/Links/${kidRow.id}/`, 'change-role'],
+        ['POST', '/api/documents/1/pki-holders/add', 'export-data'],
+        ['POST', '/api/documents/1/pki-holders/replace', 'export-data'],
+        ['POST', '/api/documents/1/pki-holders/remove', 'export-data'],
+        ['POST', '/api/documents/1/designations/seal', 'export-data'],
+        ['POST', '/api/documents/1/designations/2/unseal', 'export-data'],
+        ['POST', '/API/Documents/1/Designations/Seal/', 'export-data'],
+        ['POST', '/api/documents/1/owners', 'export-data'],
+        ['DELETE', '/api/documents/1/owners/2', 'export-data'],
+        ['POST', '/api/documents/1/share', 'export-data'],
+        ['DELETE', '/api/documents/1', 'export-data'],
+        ['DELETE', '/api/documents/1?permanent=true', 'export-data'],
+        ['DELETE', '/API/Documents/1/?permanent=true', 'export-data'],
+        ['DELETE', '/api/documents/1/magicindex', 'export-data'],
+        ['DELETE', '/Api/Documents/1/MagicIndex/', 'export-data'],
+        ['POST', '/api/trustees', 'export-data'],
+        ['POST', '/api/trustees/1/invitations/resend', 'export-data'],
+        ['DELETE', '/api/trustees/1', 'export-data'],
+        ['POST', '/api/trustees/1/contacts/email', 'export-data'],
+        ['POST', '/api/trustees/1/contacts/2/resend', 'export-data'],
+        ['DELETE', '/api/trustees/1/contacts/2', 'export-data'],
+        ['POST', '/api/continuity/switch/draft', 'export-data'],
+        ['POST', '/api/continuity/switch/1/letter/stage', 'export-data'],
+        ['POST', '/api/continuity/switch/1/letter/commit', 'export-data'],
+        ['POST', '/api/continuity/switch/1/packet/stage', 'export-data'],
+        ['POST', '/api/continuity/switch/1/outbox/retry', 'export-data'],
+        ['POST', '/api/continuity/switch/1/pause', 'export-data'],
+        ['POST', '/api/continuity/switch/1/resume', 'export-data'],
+        ['POST', '/api/continuity/switch/1/cancel', 'export-data'],
+        ['POST', '/api/continuity/switch/1/recover', 'export-data'],
+        ['POST', '/Api/Continuity/Switch/1/Cancel/', 'export-data'],
+        ['POST', '/api/continuity/switch/1/contacts/members/2/email', 'export-data'],
+        ['DELETE', '/api/continuity/switch/1/contacts/2', 'export-data'],
+        ['PUT', '/api/continuity/notification-channels/brrr', 'export-data'],
+        ['DELETE', '/api/continuity/notification-channels/brrr', 'export-data'],
+        ['POST', '/api/backup/export', 'export-data'],
+        ['POST', '/API/backup/export/', 'export-data'],
+      ];
+      for (const [method, path, policy] of recent) await stepUp(await write(method, path), policy, `${method} ${path}`);
+      await stepUp(await write('POST', '/api/documents/1/encrypt', { ...OWN_PAGE, origin: ORIGIN, 'content-type': 'multipart/form-data; boundary=x' }), 'export-data', 'encrypt, an upload');
+      await stepUp(await get('/api/backup/download/x.tar.gz', { ...as(PARENT, older), ...OWN_PAGE }), 'export-data', 'a backup download');
+      // These only use or confirm what is already set, so the session is enough.
+      const sessionOnly = [
+        ['POST', `/api/members/${m}/keys/webauthn/assertion-options`], ['POST', `/api/members/${m}/keys/1/tested`],
+        ['POST', `/api/members/${m}/keys/1/verify-fingerprint`],
+        ['POST', '/api/continuity/switch/1/check-in'], ['POST', '/api/continuity/switch/1/readiness/email/challenge'],
+        ['POST', '/api/continuity/switch/1/readiness/email/acknowledge'], ['POST', '/api/continuity/switch/1/contacts/2/resend'],
+        ['POST', '/api/continuity/notification-channels/brrr/test'], ['POST', '/api/continuity/notification-channels/brrr/check'],
+        ['PUT', '/api/backup/policy'],
+        ['POST', '/api/tags'], ['PUT', '/api/documents/1'], ['DELETE', '/api/shares/1'],
+      ];
+      for (const [method, path] of sessionOnly) assert.notEqual((await write(method, path)).status, 401, `${method} ${path}`);
+      for (const path of [`/api/members/${m}/keys`, '/api/continuity/switch', '/api/trustees', '/api/backup/status']) {
+        assert.equal((await get(path, { ...as(PARENT, older), ...OWN_PAGE })).status, 200, `reading ${path}`);
+      }
+      // With a check just now, the change goes through to its route.
+      assert.equal((await send('PUT', `/api/suite/links/${kidRow.id}`, { ...as(PARENT), ...JSON_WRITE }, JSON.stringify({ suite_member_id: KID.memberId }))).status, 200);
+    });
+
+    it('an edit that archives, hides, restores or strips a document needs a recent check; an ordinary edit doesn\'t', async () => {
+      tailnet();
+      const doc = await createTestDocument(parentRow.id, { title: 'Edited Doc' });
+      const analysis = { state: 'done', summary: 'an analysis', fields: { a: 1, b: [1, 2] } };
+      await pool.query('UPDATE documents SET metadata = $1 WHERE id = $2', [JSON.stringify({ magicindex: analysis, note: 'keep' }), doc.id]);
+      const older = passkeyCookie(PARENT, { age: 6 * 60 });
+      const edit = (body, cookie = older, path = `/api/documents/${doc.id}`) => send('PUT', path, { ...as(PARENT, cookie), ...JSON_WRITE }, JSON.stringify(body));
+      const stored = async () => (await pool.query('SELECT title, status, metadata FROM documents WHERE id = $1', [doc.id])).rows[0];
+
+      // Ordinary edits: other fields, the status it has now, the same metadata in another key order, or a new key.
+      assert.equal((await edit({ title: 'Renamed Doc', description: 'x', expiry_date: null })).status, 200);
+      assert.equal((await edit({ status: 'active' })).status, 200, 'the status it already has');
+      assert.equal((await edit({ metadata: { note: 'keep', magicindex: { fields: { b: [1, 2], a: 1 }, summary: 'an analysis', state: 'done' } } })).status, 200);
+      assert.equal((await edit({ metadata: { magicindex: analysis, note: 'keep', added: true } })).status, 200, 'adding a key');
+      assert.equal((await stored()).title, 'Renamed Doc');
+
+      // What the DELETE routes do, by another way: the library's 401, and nothing changed.
+      const before = await stored();
+      const removals = [
+        [{ status: 'archived' }, `/api/documents/${doc.id}`],
+        [{ status: 'staged' }, `/api/documents/${doc.id}`],
+        [{ status: 'archived', title: 'x' }, `/API/Documents/${doc.id}/`],
+        [{ status: 'archived' }, `/api/documents/0${doc.id}`],
+        [{ metadata: { note: 'keep', added: true } }, `/api/documents/${doc.id}`],
+        [{ metadata: { magicindex: { state: 'done' }, note: 'keep', added: true } }, `/api/documents/${doc.id}`],
+        [{ metadata: {} }, `/Api/Documents/${doc.id}`],
+        [{ metadata: null }, `/api/documents/${doc.id}`],
+        [{ metadata: [] }, `/api/documents/${doc.id}`],
+        [{ metadata: 'none' }, `/api/documents/${doc.id}`],
+      ];
+      for (const [body, path] of removals) await stepUp(await edit(body, older, path), 'export-data', `${path} ${JSON.stringify(body)}`);
+      assert.deepEqual(await stored(), before, 'nothing changed');
+
+      // With a check just now they go through, and restoring an archived document is the same kind of change.
+      assert.equal((await edit({ metadata: { note: 'keep' } }, passkeyCookie(PARENT))).status, 200);
+      assert.deepEqual((await stored()).metadata, { note: 'keep' });
+      assert.equal((await edit({ status: 'archived' }, passkeyCookie(PARENT))).status, 200);
+      await stepUp(await edit({ status: 'active' }), 'export-data', 'restoring');
+      assert.equal((await edit({ status: 'active' }, passkeyCookie(PARENT))).status, 200);
+      assert.equal((await stored()).status, 'active');
+    });
+
+    it('in local mode an edit asks for no check', async () => {
+      const doc = await createTestDocument(parentRow.id, { title: 'Local Edit' });
+      const { token } = await createSession(parentRow.id);
+      const local = { cookie: `hs_session=${token}`, 'content-type': 'application/json' };
+      assert.equal((await send('PUT', `/api/documents/${doc.id}`, local, JSON.stringify({ status: 'archived', metadata: {} }))).status, 200);
+      assert.equal((await pool.query('SELECT status FROM documents WHERE id = $1', [doc.id])).rows[0].status, 'archived');
+    });
+
+    it('a download a page links to gets a page that runs the check, then the file', async () => {
+      tailnet();
+      const opened = await get('/api/backup/download/x.tar.gz', { ...as(PARENT, passkeyCookie(PARENT, { age: 6 * 60 })), ...NAV });
+      assert.equal(opened.status, 401);
+      assert.match(await opened.text(), /&quot;policy&quot;:&quot;export-data&quot;/);
+      const file = await get('/api/documents/999999/files/1/download', { ...as(PARENT, null), ...NAV, 'sec-fetch-dest': 'iframe' });
+      assert.equal(file.status, 401);
+      assert.match(await file.text(), /passkey\.js/);
+      assert.equal((await get('/api/backup/download/x.tar.gz', { ...as(PARENT), ...NAV })).status, 404, 'with a recent check it reaches the route');
+    });
+
+    it('local mode asks for no passkey', async () => {
+      const { token } = await createSession(parentRow.id);
+      assert.equal((await get('/api/members', { cookie: `hs_session=${token}`, ...OWN_PAGE })).status, 200);
+      assert.equal((await send('POST', '/api/members', { cookie: `hs_session=${token}`, 'content-type': 'application/json' }, JSON.stringify({ name: 'Local Kid' }))).status, 201);
       await pool.query("DELETE FROM family_members WHERE name = 'Local Kid'");
     });
   });
