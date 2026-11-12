@@ -1390,12 +1390,13 @@
     };
   }
 
+  // Only whether PRF is on goes to the server. The PRF result is the key that unwraps the member's private key,
+  // so it never leaves this page: with it and the wrap, anyone reading the request could open the key.
   function normalizeExtensionResults(results) {
     const normalized = {};
     if (results?.prf) {
       normalized.prf = {};
       if (typeof results.prf.enabled === 'boolean') normalized.prf.enabled = results.prf.enabled;
-      if (results.prf.results?.first) normalized.prf.results = { first: bufferToBase64url(results.prf.results.first) };
     }
     return normalized;
   }
