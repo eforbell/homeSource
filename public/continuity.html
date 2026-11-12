@@ -44,7 +44,7 @@
             <div class="form-group" style="flex:1; min-width:13rem;"><label class="form-label" for="brrr-secret">Optional brrr target</label><input id="brrr-secret" class="form-input" type="password" autocomplete="off" placeholder="Paste a secret or api.brrr.now URL"></div>
             <div class="form-group" style="flex:1; min-width:10rem;"><label class="form-label" for="brrr-label">Label</label><input id="brrr-label" class="form-input" maxlength="80" autocomplete="off" placeholder="My phone"></div>
             <label style="display:flex; gap:.4rem; align-items:center; margin-bottom:1rem;"><input id="brrr-enabled" type="checkbox"> Enabled</label>
-            <button class="btn btn-sm" type="submit">Save brrr</button><button id="brrr-test" class="btn btn-sm" type="button">Test</button><button id="brrr-clear" class="btn btn-sm btn-danger" type="button">Clear</button>
+            <button class="btn btn-sm" type="submit">Save brrr</button><button id="brrr-check" class="btn btn-sm" type="button">Verify saved secret (no push)</button><button id="brrr-test" class="btn btn-sm" type="button">Test</button><button id="brrr-clear" class="btn btn-sm btn-danger" type="button">Clear</button>
           </div>
         </form>
       </section>
@@ -70,6 +70,7 @@
     'use strict';
     const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
     let currentMember = null;
+    let pushRegistrationRequest;
     let currentSwitch = null;
     let keyOptions = [];
     let operations = null;
@@ -466,19 +467,35 @@
     });
     document.getElementById('brrr-form').addEventListener('submit', async event => {
       event.preventDefault();
+      const verificationRequest = Symbol();
+      pushRegistrationRequest = verificationRequest;
       const button = event.currentTarget.querySelector('button[type="submit"]');
       button.disabled = true;
       try {
         const secret = document.getElementById('brrr-secret').value.trim();
-        await API.put('api/continuity/notification-channels/brrr', {
+        const saved = await API.put('api/continuity/notification-channels/brrr', {
           enabled:document.getElementById('brrr-enabled').checked,
           label:document.getElementById('brrr-label').value,
           ...(secret ? { secret } : {})
         });
+        if (pushRegistrationRequest !== verificationRequest) return;
         document.getElementById('brrr-secret').value = '';
-        setSwitchMessage('brrr configuration saved; changed targets require a new receipt acknowledgement.');
+        setSwitchMessage(`Saved. ${saved.verification.message} Changed targets still require a new receipt acknowledgement.`);
         await loadReadiness();
-      } catch (error) { setSwitchMessage(error.message, true); }
+      } catch (error) { if (pushRegistrationRequest === verificationRequest) setSwitchMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('brrr-check').addEventListener('click', async event => {
+      const verificationRequest = Symbol();
+      pushRegistrationRequest = verificationRequest;
+      const button = event.currentTarget;
+      button.disabled = true;
+      setSwitchMessage('Checking saved secret (no notification)…');
+      try {
+        const data = await API.post('api/continuity/notification-channels/brrr/check', {});
+        if (pushRegistrationRequest !== verificationRequest) return;
+        setSwitchMessage(data.message, data.status === 'failed');
+      } catch (error) { if (pushRegistrationRequest === verificationRequest) setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
     });
     document.getElementById('brrr-test').addEventListener('click', async event => {
@@ -489,6 +506,7 @@
     });
     document.getElementById('brrr-clear').addEventListener('click', async () => {
       if (!window.confirm('Clear the saved brrr target?')) return;
+      pushRegistrationRequest = Symbol();
       try { await API.del('api/continuity/notification-channels/brrr'); setSwitchMessage('brrr target cleared.'); await loadReadiness(); }
       catch (error) { setSwitchMessage(error.message, true); }
     });

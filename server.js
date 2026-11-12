@@ -1,5 +1,7 @@
 'use strict';
 
+const { checkPushSecret } = require('./lib/push-check');
+
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
@@ -717,6 +719,13 @@ app.delete('/api/continuity/switch/:id/contacts/:contactId', requireAuth, requir
   }
 });
 
+app.post('/api/continuity/notification-channels/brrr/check', requireAuth, requireParent, async (req, res) => {
+  try {
+    const channel = await continuityReadiness.getBrrrChannel(req.member.id);
+    res.set('Cache-Control', 'no-store').json(await checkPushSecret(channel?.target_secret));
+  } catch { res.status(500).json({ error: 'Could not check saved push registration' }); }
+});
+
 app.put('/api/continuity/notification-channels/brrr', requireAuth, requireParent, async (req, res) => {
   try {
     const channel = await continuityReadiness.saveBrrrChannel({
@@ -729,7 +738,8 @@ app.put('/api/continuity/notification-channels/brrr', requireAuth, requireParent
       enabled: channel.enabled, has_secret: channel.has_secret,
       target_mask: channel.secret_mask, config_version: channel.config_version
     });
-    res.json(channel);
+    const saved = await continuityReadiness.getBrrrChannel(req.member.id);
+    res.json({ ...channel, verification: await checkPushSecret(saved?.target_secret) });
   } catch (err) { res.status(err.statusCode || 400).json({ error: err.message }); }
 });
 
