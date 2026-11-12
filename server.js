@@ -12,7 +12,7 @@ const { listDocuments, getDocument, createDocument, encryptDocumentInPlace, upda
 const { storeFile, processImageToPdf, generateThumbnail, saveFileRecord, getFilePath, isImageMime, ensureDirs, ALLOWED_MIME, MAX_FILE_SIZE } = require('./lib/files');
 const { fullTextSearch } = require('./lib/search');
 const { listTags, createTag, updateTag, deleteTag, setDocumentTags, mergeTags } = require('./lib/tags');
-const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink } = require('./lib/share');
+const { createShareLink, getShareLink, validateSharePin, incrementUseCount, listShareLinks, revokeShareLink, createDownloadProof, hasDownloadProof } = require('./lib/share');
 const { createBackup, getBackupStatus, getBackupLog } = require('./lib/backup');
 const { importFromUrl, processUpload, processMultiPageScanUpload, queueDocumentMagicIndexReanalysis, pickDocumentMagicIndexFile, normalizeUserHint } = require('./lib/import');
 const importBatches = require('./lib/import-batches');
@@ -2871,7 +2871,8 @@ app.post('/api/share/:token/verify', async (req, res) => {
     if (!link) return res.status(404).json({ error: 'Share link not found or expired' });
 
     const doc = await getDocument(link.document_id);
-    res.json({ document: doc, access_level: link.access_level });
+    // A PIN-protected link's files open only with this (lib/share.js).
+    res.json({ document: doc, access_level: link.access_level, ...(link.pin_hash ? { download_proof: createDownloadProof(link) } : {}) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2881,6 +2882,10 @@ app.get('/api/share/:token/files/:fileId/download', async (req, res) => {
   try {
     const link = await getShareLink(req.params.token);
     if (!link) return res.status(404).json({ error: 'Share link not found or expired' });
+    if (!hasDownloadProof(link, req.query.proof)) {
+      return res.status(403).set('Cache-Control', 'no-store').json({ error: 'Enter the PIN for this link first' });
+    }
+    if (link.pin_hash) res.setHeader('Cache-Control', 'no-store');
 
     const { rows } = await pool.query(
       'SELECT * FROM document_files WHERE id = $1 AND document_id = $2',

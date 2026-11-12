@@ -76,6 +76,9 @@
     if (!token) showNotFound();
 
     let shareData = null;
+    // A PIN-protected link's files open with the proof the PIN check returned; the PIN itself is never sent again.
+    let downloadProof = null;
+    const fileUrl = (id) => `${basePath}api/share/${token}/files/${id}/download${downloadProof ? `?proof=${encodeURIComponent(downloadProof)}` : ''}`;
 
     async function loadShare() {
       try {
@@ -95,6 +98,7 @@
 
     function showDocument(data) {
       shareData = data;
+      downloadProof = data.download_proof || null;
       const doc = data.document;
 
       document.getElementById('doc-view').style.display = 'block';
@@ -111,16 +115,16 @@
       const preview = document.getElementById('share-file-preview');
       if (previewFile) {
         if (previewFile.mime_type === 'application/pdf') {
-          preview.innerHTML = `<iframe src="${basePath}api/share/${token}/files/${previewFile.id}/download" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
+          preview.innerHTML = `<iframe src="${fileUrl(previewFile.id)}" style="width:100%;height:600px;border:none;border-radius:8px;"></iframe>`;
         } else if (previewFile.mime_type.startsWith('image/')) {
-          preview.innerHTML = `<img src="${basePath}api/share/${token}/files/${previewFile.id}/download" style="max-width:100%;border-radius:8px;">`;
+          preview.innerHTML = `<img src="${fileUrl(previewFile.id)}" style="max-width:100%;border-radius:8px;">`;
         } else {
           preview.innerHTML = '<div class="text-dim" style="font-size:4rem;">📄</div>';
         }
       } else {
         const thumbFile = files.find(f => f.file_type === 'thumbnail');
         if (thumbFile) {
-          preview.innerHTML = `<img src="${basePath}api/share/${token}/files/${thumbFile.id}/download" style="max-width:300px;border-radius:8px;">`;
+          preview.innerHTML = `<img src="${fileUrl(thumbFile.id)}" style="max-width:300px;border-radius:8px;">`;
         } else {
           preview.innerHTML = '<div class="text-dim" style="font-size:4rem;">📄</div>';
         }
@@ -133,7 +137,7 @@
           `<tr>
             <td>${esc(f.original_filename)}</td>
             <td class="text-sm text-dim">${formatBytes(f.file_size_bytes)}</td>
-            <td><a href="${basePath}api/share/${token}/files/${f.id}/download" class="btn btn-sm btn-primary" download>Download</a></td>
+            <td><a href="${fileUrl(f.id)}" class="btn btn-sm btn-primary" download>Download</a></td>
           </tr>`
         ).join('');
       }
