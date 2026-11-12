@@ -70,6 +70,7 @@
     'use strict';
     const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
     let currentMember = null;
+    let pushRegistrationRequest;
     let currentSwitch = null;
     let keyOptions = [];
     let operations = null;
@@ -466,6 +467,8 @@
     });
     document.getElementById('brrr-form').addEventListener('submit', async event => {
       event.preventDefault();
+      const verificationRequest = Symbol();
+      pushRegistrationRequest = verificationRequest;
       const button = event.currentTarget.querySelector('button[type="submit"]');
       button.disabled = true;
       try {
@@ -475,20 +478,24 @@
           label:document.getElementById('brrr-label').value,
           ...(secret ? { secret } : {})
         });
+        if (pushRegistrationRequest !== verificationRequest) return;
         document.getElementById('brrr-secret').value = '';
         setSwitchMessage(`Saved. ${saved.verification.message} Changed targets still require a new receipt acknowledgement.`);
         await loadReadiness();
-      } catch (error) { setSwitchMessage(error.message, true); }
+      } catch (error) { if (pushRegistrationRequest === verificationRequest) setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
     });
     document.getElementById('brrr-check').addEventListener('click', async event => {
+      const verificationRequest = Symbol();
+      pushRegistrationRequest = verificationRequest;
       const button = event.currentTarget;
       button.disabled = true;
       setSwitchMessage('Checking saved secret (no notification)…');
       try {
         const data = await API.post('api/continuity/notification-channels/brrr/check', {});
+        if (pushRegistrationRequest !== verificationRequest) return;
         setSwitchMessage(data.message, data.status === 'failed');
-      } catch (error) { setSwitchMessage(error.message, true); }
+      } catch (error) { if (pushRegistrationRequest === verificationRequest) setSwitchMessage(error.message, true); }
       finally { button.disabled = false; }
     });
     document.getElementById('brrr-test').addEventListener('click', async event => {
@@ -499,6 +506,7 @@
     });
     document.getElementById('brrr-clear').addEventListener('click', async () => {
       if (!window.confirm('Clear the saved brrr target?')) return;
+      pushRegistrationRequest = Symbol();
       try { await API.del('api/continuity/notification-channels/brrr'); setSwitchMessage('brrr target cleared.'); await loadReadiness(); }
       catch (error) { setSwitchMessage(error.message, true); }
     });
