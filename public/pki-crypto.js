@@ -113,10 +113,11 @@
     return new Uint8Array(wrapped);
   }
 
-  async function unwrapPrivateKey(wrappedKeyBytes, kek) {
+  // extractable: only when the key is about to be wrapped again (re-protecting it with its recovery words).
+  async function unwrapPrivateKey(wrappedKeyBytes, kek, extractable) {
     return crypto.subtle.unwrapKey(
       'pkcs8', wrappedKeyBytes, kek, 'AES-KW',
-      { name: 'X25519' }, false, ['deriveBits']
+      { name: 'X25519' }, extractable === true, ['deriveBits']
     );
   }
 
@@ -181,6 +182,19 @@
       'raw', wrappedDekBytes, wrappingKey, 'AES-KW',
       { name: 'AES-GCM', length: 256 }, extractable === true, ['encrypt', 'decrypt']
     );
+  }
+
+  // Answers Home Source's possession check (lib/key-possession.js): a secret wrapped to this key's public key
+  // the way a document key is. Only the private key opens it.
+  async function answerPossessionCheck(possession, privateKey) {
+    const secret = await unwrapDekAsOwner(
+      fromBase64(possession.wrapped_dek_b64),
+      fromBase64(possession.ephemeral_public_key_b64),
+      fromBase64(possession.hkdf_salt_b64),
+      privateKey,
+      true
+    );
+    return toBase64(new Uint8Array(await crypto.subtle.exportKey('raw', secret)));
   }
 
   // ── Base64 helpers ──
@@ -355,6 +369,7 @@
     importMemberPublicKey: importMemberPublicKey,
     wrapDekForOwner: wrapDekForOwner,
     unwrapDekAsOwner: unwrapDekAsOwner,
+    answerPossessionCheck: answerPossessionCheck,
     generateRecoveryMnemonic: generateRecoveryMnemonic,
     deriveKekFromMnemonic: deriveKekFromMnemonic,
     buildPkiEnvelope: buildPkiEnvelope,

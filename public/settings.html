@@ -200,6 +200,37 @@
     </div>
   </div>
 
+  <!-- Re-register a key with its recovery words -->
+  <div class="modal-backdrop hidden" id="reprotect-modal">
+    <div class="modal" style="max-width:560px; width:min(100%, 560px);">
+      <div class="modal-head" style="margin-bottom:1rem;">
+        <div>
+          <h2 id="reprotect-title">Re-register with recovery words</h2>
+          <div class="modal-sub">For a key whose security key or passkey no longer works here: Home Source moved to a new address, or the device is lost. It stays the same key, so your documents don't change.</div>
+        </div>
+        <button class="modal-close" data-close-modal="reprotect-modal" aria-label="Close re-register">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="reprotect-words">This key's 12 recovery words</label>
+          <textarea id="reprotect-words" class="form-textarea" rows="3" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word word word …"></textarea>
+          <div class="form-hint">They stay in this browser. Home Source never receives them.</div>
+        </div>
+        <div class="form-group">
+          <span class="form-label">Protect it with</span>
+          <label class="checkbox-inline"><input type="radio" name="reprotect-method" value="security_key" checked> <span>A security key (recommended)</span></label>
+          <label class="checkbox-inline"><input type="radio" name="reprotect-method" value="passkey"> <span>A passkey on this device</span></label>
+        </div>
+        <div class="form-hint">Afterwards this key opens with the new security key or passkey, at this address only. The recovery words keep working.</div>
+        <div id="reprotect-status" class="form-hint" role="status" aria-live="polite" style="margin-top:0.75rem;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close-modal="reprotect-modal">Cancel</button>
+        <button class="btn btn-primary" id="reprotect-run-btn">Re-register</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toasts"></div>
 
   <script src="api.js"></script>

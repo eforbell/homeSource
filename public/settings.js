@@ -10,6 +10,7 @@
     registration: null,
     passphraseMember: null,
     testUnlock: null,
+    reprotect: null,
   };
 
   const themeSelect = document.getElementById('theme-select');
@@ -78,6 +79,7 @@
   });
 
   document.getElementById('test-unlock-run-btn')?.addEventListener('click', testSelectedKeyUnlock);
+  document.getElementById('reprotect-run-btn')?.addEventListener('click', runReprotect);
 
   document.getElementById('logout-btn').addEventListener('click', async () => {
     await API.post('api/auth/logout', {});
@@ -250,6 +252,13 @@
       button.addEventListener('click', () => openProtectedDocumentsModal(Number(button.getAttribute('data-view-key-docs'))));
     });
 
+    document.querySelectorAll('[data-reprotect-key]').forEach((button) => {
+      button.addEventListener('click', () => openReprotectModal(
+        Number(button.getAttribute('data-member-id')),
+        Number(button.getAttribute('data-reprotect-key'))
+      ));
+    });
+
     document.querySelectorAll('[data-test-unlock-key]').forEach((button) => {
       button.addEventListener('click', () => openTestUnlockModal(
         Number(button.getAttribute('data-member-id')),
@@ -275,6 +284,7 @@
     const actionButtons = [
       documentCount > 0 ? `<button class="btn btn-sm" data-view-key-docs="${key.id}">View Protected Documents</button>` : '',
       (!isRevoked && state.me.id === member.id) ? `<button class="btn btn-sm" data-test-unlock-key="${key.id}" data-member-id="${member.id}">Test Unlock</button>` : '',
+      (!isRevoked && state.me.id === member.id && key.recovery_enabled) ? `<button class="btn btn-sm" data-reprotect-key="${key.id}" data-member-id="${member.id}">Re-register</button>` : '',
       !isRevoked ? `<button class="btn btn-sm" data-verify-key="${key.id}" data-member-id="${member.id}">Verify</button>` : '',
       (state.me.id === member.id)
         ? (!isRevoked ? `<button class="btn btn-sm btn-danger" data-revoke-key="${key.id}" data-member-id="${member.id}">Revoke</button>` : '')
@@ -592,9 +602,133 @@
       await loadMembersAndKeys();
       if (state.me.role === 'parent') await loadAudit();
     } catch (err) {
-      statusEl.textContent = err.message || 'Key test failed';
-      toast(err.message || 'Key test failed', 'error');
+      // A browser answers a key it has nothing for here (registered at another address) as it answers a
+      // cancelled prompt, so the hint names both.
+      const message = err?.name === 'NotAllowedError'
+        ? 'The browser didn\'t get an answer from this key: the prompt was cancelled, or this browser has no such key for this address.'
+          + (test.key?.recovery_enabled
+            ? ' A key registered at another address (or on a lost device) doesn\'t work here. Use Re-register with its recovery words.'
+            : '')
+        : (err.message || 'Key test failed');
+      statusEl.textContent = message;
+      toast(err?.name === 'NotAllowedError' ? 'This key didn\'t answer here' : message, 'error');
       runBtn.disabled = false;
+    }
+  }
+
+  // ── Re-register a key with its recovery words ──
+  // The words unlock the private key in this browser (they never leave it), the server checks the browser
+  // holds that key, and a credential registered here wraps it again. Same keypair, so documents don't change.
+
+  function recoveryWordsProblem(err) {
+    const text = String(err?.message || '');
+    const unknown = /Unknown recovery word: "(.*)"/.exec(text);
+    if (unknown) return `"${unknown[1]}" isn't a recovery word. Check its spelling.`;
+    if (/12 words/.test(text)) return 'Enter all 12 recovery words, in order.';
+    if (/checksum/.test(text)) return 'One of the words is wrong, or they are out of order. Check them against the ones written down.';
+    return text || 'Those recovery words could not be read.';
+  }
+
+  function openReprotectModal(memberId, keyId) {
+    if (memberId !== state.me.id) {
+      toast('You can only re-register your own keys', 'error');
+      return;
+    }
+    const key = (state.keysByMember.get(memberId) || []).find((entry) => Number(entry.id) === Number(keyId));
+    if (!key || key.revoked_at || !key.recovery_enabled) {
+      toast('This key has no recovery words to re-register it with', 'error');
+      return;
+    }
+    state.reprotect = { memberId, keyId, key };
+    document.getElementById('reprotect-title').textContent = `Re-register ${key.label || 'this key'}`;
+    document.getElementById('reprotect-words').value = '';
+    document.getElementById('reprotect-status').textContent = '';
+    document.getElementById('reprotect-run-btn').disabled = false;
+    document.getElementById('reprotect-modal').classList.remove('hidden');
+    document.getElementById('reprotect-words').focus();
+  }
+
+  async function runReprotect() {
+    const job = state.reprotect;
+    if (!job) return;
+    const runBtn = document.getElementById('reprotect-run-btn');
+    const statusEl = document.getElementById('reprotect-status');
+    const wordsEl = document.getElementById('reprotect-words');
+    const method = document.querySelector('input[name="reprotect-method"]:checked')?.value === 'passkey' ? 'passkey' : 'security_key';
+    const base = `api/members/${job.memberId}/keys`;
+    runBtn.disabled = true;
+    let privateKey = null;
+    try {
+      if (!window.PublicKeyCredential || !navigator.credentials?.create) {
+        throw new Error('This browser does not support security keys or passkeys');
+      }
+      statusEl.textContent = 'Checking the recovery words…';
+      const recoveryKek = await PKICrypto.deriveKekFromMnemonic(wordsEl.value).catch((err) => {
+        throw new Error(recoveryWordsProblem(err));
+      });
+      const started = await API.post(`${base}/${job.keyId}/reprotect/start`, {});
+      const recoveryWrap = JSON.parse(started.recovery_wrapped_private_key);
+      try {
+        privateKey = await PKICrypto.unwrapPrivateKey(PKICrypto.fromBase64(recoveryWrap.wrapped_private_key_b64), recoveryKek, true);
+      } catch {
+        throw new Error('These words don\'t unlock this key. Check them against the ones written down for it.');
+      }
+      wordsEl.value = '';
+      const proof = await PKICrypto.answerPossessionCheck(started.possession, privateKey);
+
+      statusEl.textContent = method === 'security_key'
+        ? 'Touch or insert your security key when your browser asks.'
+        : 'Confirm with this device when your browser asks.';
+      const options = await API.post(`${base}/webauthn/options`, { requested_method: method });
+      const credential = await navigator.credentials.create({ publicKey: toPublicKeyCreationOptions(options.options) });
+      if (!credential) throw new Error('The browser prompt was cancelled');
+      const registered = await API.post(`${base}/webauthn/complete`, {
+        registration_response: credentialToJSON(credential),
+        client_authenticator_attachment: credential.authenticatorAttachment || null,
+        transports: typeof credential.response?.getTransports === 'function' ? credential.response.getTransports() : [],
+      });
+
+      statusEl.textContent = 'One more touch, to wrap the key with it.';
+      const assertionOptions = await API.post(`${base}/webauthn/assertion-options`, { credential_id: registered.verification.credential_id });
+      const assertion = await navigator.credentials.get({ publicKey: PKICrypto.toPublicKeyRequestOptions(assertionOptions.options) });
+      if (!assertion) throw new Error('The browser prompt was cancelled');
+      const prfResult = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+      if (!prfResult) throw new Error('This security key or passkey can\'t protect encryption keys (no PRF). Try another one or another browser.');
+      const kek = await PKICrypto.deriveKekFromPrf(prfResult);
+      const wrapped = await PKICrypto.wrapPrivateKey(privateKey, kek);
+
+      // Before replacing anything, prove the new wrap opens to this same key.
+      const reopened = await PKICrypto.unwrapPrivateKey(wrapped, kek);
+      if (await PKICrypto.answerPossessionCheck(started.possession, reopened) !== proof) {
+        throw new Error('The new wrap did not open to this key. Nothing was changed.');
+      }
+
+      statusEl.textContent = 'Saving…';
+      const finished = await API.post(`${base}/${job.keyId}/reprotect/finish`, {
+        possession_proof: proof,
+        assertion_response: credentialToJSON(assertion),
+        encrypted_private_key: JSON.stringify({
+          kind: 'webauthn_prf_v1',
+          prf_salt_b64: assertionOptions.prf_salt,
+          wrapped_private_key_b64: PKICrypto.toBase64(wrapped),
+        }),
+      });
+      if (finished.key?.key_fingerprint !== job.key.key_fingerprint) {
+        throw new Error('The server returned a different key. Check this key with Test Unlock.');
+      }
+      closeModal('reprotect-modal');
+      toast(`${job.key.label || 'Key'} re-registered. Test Unlock now uses the new one.`, 'success');
+      await loadMembersAndKeys();
+      if (state.me.role === 'parent') await loadAudit();
+    } catch (err) {
+      const message = err?.name === 'NotAllowedError'
+        ? 'The browser prompt was cancelled or timed out. Nothing was changed.'
+        : (err.message || 'Re-registering failed. Nothing was changed.');
+      statusEl.textContent = message;
+      toast(message, 'error');
+      runBtn.disabled = false;
+    } finally {
+      privateKey = null;
     }
   }
 
@@ -1299,6 +1433,11 @@
     }
     if (id === 'passphrase-modal') {
       state.passphraseMember = null;
+    }
+    if (id === 'reprotect-modal') {
+      state.reprotect = null;
+      const wordsInput = document.getElementById('reprotect-words');
+      if (wordsInput) wordsInput.value = '';
     }
     if (id === 'test-unlock-modal') {
       state.testUnlock = null;
