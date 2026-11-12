@@ -96,6 +96,7 @@
 
     document.body.dataset.navRole = state.me.role || 'parent';
     document.getElementById('add-member-btn').style.display = state.me.role === 'parent' ? '' : 'none';
+    if (state.me.tailnet) showHouseholdAccount();
 
     if (state.me.role !== 'parent') {
       hideAuditSection();
@@ -107,9 +108,28 @@
     }
   }
 
+  // In tailnet mode the household account from Home Base says who this is: there is nothing to sign out of and no
+  // passphrase to set, and a parent links Home Source's members to household accounts on the link page.
+  function showHouseholdAccount() {
+    const note = document.createElement('p');
+    note.className = 'text-sm text-dim';
+    note.textContent = 'You use Home Source with your household account from Home Base.';
+    const account = document.getElementById('logout-btn');
+    account.replaceWith(note);
+    if (state.me.role === 'parent') {
+      const link = document.createElement('a');
+      link.className = 'btn btn-sm mt-1';
+      link.href = 'link';
+      link.textContent = 'Household accounts';
+      note.after(link);
+    }
+    document.getElementById('new-member-pass').closest('.form-group').classList.add('hidden');
+  }
+
   async function loadMembersAndKeys() {
     try {
-      state.members = await API.get('api/members');
+      // A kid sees only themselves here, and in tailnet mode the household's member list isn't theirs to read.
+      state.members = state.me.tailnet && state.me.role !== 'parent' ? [state.me] : await API.get('api/members');
       renderMembers();
       await loadKeys();
     } catch (err) {
@@ -124,7 +144,7 @@
         ? '<span class="badge badge-info">You</span>'
         : `<span class="text-xs text-muted">${member.role}</span>`;
       const keySummary = summarizeKeys(state.keysByMember.get(member.id) || []);
-      const canChangeOwnPassphrase = member.id === state.me.id;
+      const canChangeOwnPassphrase = member.id === state.me.id && !state.me.tailnet;
       const passphraseAction = canChangeOwnPassphrase
         ? `<button class="btn btn-sm" data-change-passphrase="${member.id}">${member.has_passphrase ? 'Change' : 'Set'} passphrase</button>`
         : '';
@@ -136,7 +156,7 @@
               <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
                 <strong>${esc(member.name)}</strong>
                 ${subtitle}
-                ${member.has_passphrase ? '<span class="text-xs" style="color:var(--good);">🔑 Login passphrase</span>' : '<span class="text-xs text-muted">No login passphrase</span>'}
+                ${state.me.tailnet ? '' : member.has_passphrase ? '<span class="text-xs" style="color:var(--good);">🔑 Login passphrase</span>' : '<span class="text-xs text-muted">No login passphrase</span>'}
               </div>
               <div class="text-xs text-dim" style="margin-top:0.25rem;">${keySummary}</div>
             </div>
@@ -188,7 +208,11 @@
     renderKeys();
   }
 
+  // Key posture covers documents a kid may not see, so in tailnet mode it's for parents only.
+  const postureHidden = () => state.me?.tailnet && state.me.role !== 'parent';
+
   async function loadPkiPosture() {
+    if (postureHidden()) return;
     try {
       state.pkiPosture = await API.get('api/pki/posture');
       state.pkiPostureError = null;
@@ -326,6 +350,10 @@
 
   function renderPkiReadinessPanel() {
     if (!pkiReadinessPanel) return;
+    if (postureHidden()) {
+      pkiReadinessPanel.innerHTML = '';
+      return;
+    }
     if (state.pkiPostureError) {
       pkiReadinessPanel.innerHTML = `
         <div class="card" style="padding:0.85rem; background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.35);">

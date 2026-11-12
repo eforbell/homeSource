@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="source-skin.css">
   <link rel="stylesheet" href="style.css">
   <script src="theme.js"></script>
+  <style>body.tailnet .member-pass-group { display: none; }</style>
 </head>
 <body>
   <div class="page-content" style="max-width:520px; margin:3rem auto; padding:1.5rem;">
@@ -48,7 +49,7 @@
               </select>
             </div>
           </div>
-          <div class="form-group">
+          <div class="form-group member-pass-group">
             <label class="form-label">Passphrase (optional)</label>
             <input type="password" class="form-input member-pass" placeholder="For login protection">
           </div>
@@ -67,6 +68,9 @@
   <script src="api.js"></script>
   <script>
     'use strict';
+
+    // In tailnet mode members use Home Source with their household account from Home Base, so nobody sets a passphrase.
+    API.get('api/bootstrap').then((state) => { if (state.tailnet) document.body.classList.add('tailnet'); }).catch(() => {});
 
     const memberTemplate = document.querySelector('.member-row').outerHTML;
     let memberIdx = 1;
@@ -88,7 +92,7 @@
           name,
           role: row.querySelector('.member-role').value,
           avatar_emoji: row.querySelector('.member-avatar').value,
-          passphrase: row.querySelector('.member-pass').value || undefined
+          passphrase: document.body.classList.contains('tailnet') ? undefined : row.querySelector('.member-pass').value || undefined
         });
       }
 

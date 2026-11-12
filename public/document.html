@@ -2030,9 +2030,12 @@
         renderTags(doc.tags || []);
         document.getElementById('edit-tags-btn').style.display = 'inline-flex';
 
-        // Share links
-        document.getElementById('share-card').style.display = 'block';
-        if (encryptedDoc) {
+        // Share links (a kid in tailnet mode can't see or make them)
+        const sharesHidden = currentMember?.tailnet === true && currentMember.role === 'kid';
+        document.getElementById('share-card').style.display = sharesHidden ? 'none' : 'block';
+        if (sharesHidden) {
+          document.getElementById('shares-list').innerHTML = '';
+        } else if (encryptedDoc) {
           document.getElementById('shares-list').innerHTML = '<span class="text-dim text-sm">Share links are unavailable for encrypted documents in v1.</span>';
           document.getElementById('create-share-btn').style.display = 'none';
         } else {
